@@ -470,6 +470,20 @@ const FAMILIES = [
     variants: [{ id: 'base', authority: 'db-repo', consumers: ['db-dump-xml', 'db-load-git', 'db-load-xml', 'db-update', 'db-cfe-admin'] }],
   },
 
+  // ─── Серверная база: прямое подключение к СУБД для ibcmd ─────────────────
+  // У ibcmd нет адреса кластера (/S server/ref), поэтому серверная база подключается только
+  // прямыми реквизитами СУБД. Реквизиты приходят параметрами навыка или из блока dbms записи
+  // базы, и собираются в аргументы одинаково во всех навыках — иначе одна и та же база встала бы
+  // в одном навыке, а в другом отказала.
+  {
+    name: 'dbms: resolve settings', py: 'resolve_database_settings', ps1: 'Resolve-DatabaseSettings',
+    variants: [{ id: 'base', authority: 'db-cfe-admin', consumers: ['db-dump-cf', 'db-dump-dt', 'db-dump-xml'] }],
+  },
+  {
+    name: 'dbms: ibcmd connection args', py: 'ibcmd_connection_args', ps1: 'Get-IbcmdConnectionArgs',
+    variants: [{ id: 'base', authority: 'db-cfe-admin', consumers: ['db-dump-cf', 'db-dump-dt', 'db-dump-xml'] }],
+  },
+
   // ─── Значения свойств-перечислений ───────────────────────────────────────
   // Сама функция одинакова в обоих портах; СПИСКИ значений, на которые она опирается, держит
   // отдельный гард check-enum-drift.mjs (авторитет тот же — meta-compile).

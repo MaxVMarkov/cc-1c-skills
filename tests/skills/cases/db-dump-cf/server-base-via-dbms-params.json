@@ -1,0 +1,41 @@
+{
+  "name": "ibcmd: выгрузка конфигурации в CF — серверная база по явным реквизитам СУБД, вместо --db-path идут --dbms/--db-server/--db-name",
+  "preRun": [
+    {
+      "writeFile": {
+        "path": "ibcmd.cmd",
+        "content": "@echo off\r\necho ARGS: %*\r\necho stub> {workDir}\\out.cf\r\nexit /b 0\r\n",
+        "executable": true
+      }
+    }
+  ],
+  "args_extra": [
+    "-V8Path",
+    "{workDir}\\ibcmd.cmd",
+    "-InfoBaseServer",
+    "srv01",
+    "-InfoBaseRef",
+    "MyDB",
+    "-Dbms",
+    "MSSQLServer",
+    "-DbServer",
+    "dbhost",
+    "-DbName",
+    "dbname",
+    "-OutputFile",
+    "{workDir}\\out.cf"
+  ],
+  "expect": {
+    "stdoutContains": [
+      "ARGS: infobase config save",
+      "--dbms=MSSQLServer",
+      "--db-server=dbhost",
+      "--db-name=dbname"
+    ],
+    "stdoutNotContains": [
+      "--db-path"
+    ]
+  },
+  "noSnapshot": "проверяется сборка команды ibcmd для серверной базы; файл выгрузки — фикстура кейса",
+  "osOnly": "win32"
+}

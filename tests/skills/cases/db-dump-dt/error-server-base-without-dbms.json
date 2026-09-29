@@ -1,0 +1,35 @@
+{
+  "name": "Серверная база без реквизитов СУБД: ibcmd подключиться не может — отказ с объяснением",
+  "preRun": [
+    {
+      "writeFile": {
+        "path": "ibcmd.cmd",
+        "content": "@echo off\r\necho ARGS: %*\r\nexit /b 0\r\n",
+        "executable": true
+      }
+    }
+  ],
+  "args_extra": [
+    "-V8Path",
+    "{workDir}\\ibcmd.cmd",
+    "-InfoBaseServer",
+    "srv01",
+    "-InfoBaseRef",
+    "MyDB",
+    "-OutputFile",
+    "{workDir}\\out.dt"
+  ],
+  "expectError": true,
+  "expect": {
+    "stdoutContains": [
+      "cannot connect to the server base with ibcmd",
+      "-Dbms, -DbServer, -DbName, -DbUser, -DbPassword"
+    ],
+    "stdoutNotContains": [
+      "file infobases only",
+      "ARGS:"
+    ]
+  },
+  "noSnapshot": "негативный кейс — отказ до запуска платформы, поэтому ARGS: не печатается",
+  "osOnly": "win32"
+}

@@ -1,0 +1,49 @@
+{
+  "name": "ibcmd: серверная база по явным реквизитам СУБД — вместо --db-path идут --dbms/--db-server/--db-name",
+  "preRun": [
+    {
+      "writeFile": {
+        "path": "ibcmd.cmd",
+        "content": "@echo off\r\necho ARGS: %*\r\nexit /b 0\r\n",
+        "executable": true
+      }
+    },
+    {
+      "writeFile": {
+        "path": "out/ConfigDumpInfo.xml",
+        "content": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><ConfigDumpInfo format=\"Hierarchical\" version=\"2.17\"/>"
+      }
+    }
+  ],
+  "args_extra": [
+    "-V8Path",
+    "{workDir}\\ibcmd.cmd",
+    "-InfoBaseServer",
+    "srv01",
+    "-InfoBaseRef",
+    "MyDB",
+    "-Dbms",
+    "MSSQLServer",
+    "-DbServer",
+    "dbhost",
+    "-DbName",
+    "dbname",
+    "-ConfigDir",
+    "{workDir}\\out",
+    "-Mode",
+    "Changes"
+  ],
+  "expect": {
+    "stdoutContains": [
+      "ARGS: infobase config export",
+      "--dbms=MSSQLServer",
+      "--db-server=dbhost",
+      "--db-name=dbname"
+    ],
+    "stdoutNotContains": [
+      "--db-path"
+    ]
+  },
+  "noSnapshot": "проверяется сборка команды ibcmd для серверной базы; выгрузка — фикстура кейса",
+  "osOnly": "win32"
+}

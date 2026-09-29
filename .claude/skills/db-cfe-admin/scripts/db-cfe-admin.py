@@ -93,7 +93,9 @@ IBCMD_OWNED_KEYS = [
     "--db-user", "--db-pwd",
 ]
 V8_SECRET_KEYS = ["/P", "/UC", "/WSP", "/AWSP", "/ConfigurationRepositoryP"]
-IBCMD_SECRET_KEYS = ["--password", "--token", "--db-pwd"]
+# `--db-user` маскируется по ключу, а не заменой литерала: короткое имя вроде «sa»
+# вырезало бы половину печатаемой строки (проверено: config save превращался в config ***ve).
+IBCMD_SECRET_KEYS = ["--password", "--token", "--db-pwd", "--db-user"]
 
 
 # --- Запись базы в .v8-project.json ---
@@ -218,7 +220,7 @@ def resolve_database_settings(args):
 
 def ibcmd_connection_args(args, db):
     """Файловая база - --db-path. Серверная - прямое подключение к СУБД; вход в саму ИБ идёт
-    через --user/--password, которые добавляет invoke_ibcmd. None, если соединение не собрать."""
+    через --user/--password, которые добавляет сборщик команды ibcmd. None, если соединение не собрать."""
     if args.InfoBasePath:
         return ["--db-path=%s" % args.InfoBasePath]
     if not db.get("kind") or not db.get("server") or not db.get("name"):
@@ -876,7 +878,7 @@ def main():
         arguments += ib_extra_args
         print("Running: ibcmd " + _redact(" ".join(format_args_for_display(arguments[1:], "ibcmd")),
                                           args.Password, args.UserName,
-                                          db_settings["password"], db_settings["user"]))
+                                          db_settings["password"]))
         # Вход в ИБ нужен и файловой, и серверной базе, если в ней задан пользователь:
         # ibcmd спрашивает его у консоли, а не у stdin, и пакетный запуск висит.
         r = run_ibcmd(arguments, has_username=bool(args.UserName))

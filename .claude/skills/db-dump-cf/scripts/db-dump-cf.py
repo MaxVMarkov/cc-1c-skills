@@ -135,10 +135,62 @@ V8_BATCH_KEYS = [
 IBCMD_OWNED_KEYS = [
     "--db-path", "--data", "--out", "--file", "--load", "--restore",
     "--import", "--export", "--apply", "--force", "--create-database",
-    "--user", "--password",
+    "--user", "--password", "--dbms", "--db-server", "--db-name",
+    "--db-user", "--db-pwd",
 ]
 V8_SECRET_KEYS = ["/P", "/UC", "/WSP", "/AWSP"]
-IBCMD_SECRET_KEYS = ["--password", "--token", "--db-pwd"]
+# `--db-user` маскируется по ключу, а не заменой литерала: короткое имя вроде «sa»
+# вырезало бы половину печатаемой строки (проверено: config save превращался в config ***ve).
+IBCMD_SECRET_KEYS = ["--password", "--token", "--db-pwd", "--db-user"]
+
+
+# --- Реквизиты СУБД серверной базы (для ibcmd) ---
+DBMS_KINDS = {
+    "mssqlserver": "MSSQLServer",
+    "postgresql": "PostgreSQL",
+    "ibmdb2": "IBMDB2",
+    "oracledatabase": "OracleDatabase",
+}
+
+
+def resolve_database_settings(args):
+    """Возвращает dict kind/server/name/user/password. Явные -Db* всегда сильнее реестра:
+    запись базы ищется теми же параметрами соединения, что и хранилище.
+    Родительский ключ - dbms (имя вида СУБД в терминологии 1С), в нём kind/server/name/user/password."""
+    db_rec = find_project_database(args)
+    rec = (db_rec or {}).get("dbms") or None
+    kind = args.Dbms or ((rec or {}).get("kind") or None)
+    if kind:
+        # Реестр пишут руками, поэтому вид принимаем в любом регистре; неизвестный отсеиваем здесь,
+        # а не показываем позже непостижимый отказ ibcmd.
+        canon = DBMS_KINDS.get(kind.lower())
+        if not canon:
+            print("Error: unknown DBMS kind '%s' (expected: %s)" % (kind, ", ".join(DBMS_KINDS.values())))
+            sys.exit(1)
+        kind = canon
+    return {
+        "kind": kind,
+        "server": args.DbServer or ((rec or {}).get("server") or None),
+        "name": args.DbName or ((rec or {}).get("name") or None),
+        "user": args.DbUser or ((rec or {}).get("user") or None),
+        # Пустой пароль = отсутствующий: ключ отдаём только когда пароль есть.
+        "password": args.DbPassword or ((rec or {}).get("password") or None),
+    }
+
+
+def ibcmd_connection_args(args, db):
+    """Файловая база - --db-path. Серверная - прямое подключение к СУБД; вход в саму ИБ идёт
+    через --user/--password, которые добавляет сборщик команды ibcmd. None, если соединение не собрать."""
+    if args.InfoBasePath:
+        return ["--db-path=%s" % args.InfoBasePath]
+    if not db.get("kind") or not db.get("server") or not db.get("name"):
+        return None
+    a = ["--dbms=%s" % db["kind"], "--db-server=%s" % db["server"], "--db-name=%s" % db["name"]]
+    if db.get("user"):
+        a.append("--db-user=%s" % db["user"])
+    if db.get("password"):
+        a.append("--db-pwd=%s" % db["password"])
+    return a
 
 
 def arg_key_match(token, key):
@@ -478,6 +530,15 @@ def main():
     parser.add_argument("-InfoBaseRef", default="")
     parser.add_argument("-UserName", default="")
     parser.add_argument("-Password", default="")
+    # Реквизиты СУБД серверной базы. У ibcmd нет адреса кластера (/S server/ref), но есть прямое
+    # подключение к СУБД - только так серверной базе доступны операции ibcmd. Явные параметры
+    # сильнее записи базы в .v8-project.json, как у хранилища.
+    parser.add_argument("-Dbms", default="",
+                        choices=["", "MSSQLServer", "PostgreSQL", "IBMDB2", "OracleDatabase"])
+    parser.add_argument("-DbServer", default="")
+    parser.add_argument("-DbName", default="")
+    parser.add_argument("-DbUser", default="")
+    parser.add_argument("-DbPassword", default="")
     parser.add_argument("-OutputFile", required=True)
     parser.add_argument("-Extension", default="")
     parser.add_argument("-AllExtensions", action="store_true")
@@ -506,16 +567,36 @@ def main():
         "--db-path": "-InfoBasePath",
         "--user": "-UserName",
         "--password": "-Password",
+        "--dbms": "-Dbms",
+        "--db-server": "-DbServer",
+        "--db-name": "-DbName",
+        "--db-user": "-DbUser",
+        "--db-pwd": "-DbPassword",
     }
     extra_args = resolve_extra_args(engine, v8_extra, ibcmd_extra, arg_hints)
 
     # --- Validate connection ---
-    if engine == "ibcmd":
-        if not args.InfoBasePath:
-            print("Error: ibcmd supports file infobases only (use -InfoBasePath)")
-            sys.exit(1)
-    elif not args.InfoBasePath and (not args.InfoBaseServer or not args.InfoBaseRef):
+    if not args.InfoBasePath and (not args.InfoBaseServer or not args.InfoBaseRef):
         print("Error: specify -InfoBasePath or -InfoBaseServer + -InfoBaseRef")
+        sys.exit(1)
+    db_settings = resolve_database_settings(args)
+    if args.InfoBasePath and (args.Dbms or args.DbServer or args.DbName or args.DbUser or args.DbPassword):
+        # Файловая база подключается по пути; эти реквизиты при ней были бы молча потеряны.
+        print("Error: -Dbms/-DbServer/-DbName/-DbUser/-DbPassword apply to a server base; "
+              "this connection is a file base (-InfoBasePath)")
+        sys.exit(1)
+    if engine != "ibcmd" and (args.Dbms or args.DbServer or args.DbName or args.DbUser or args.DbPassword):
+        # Конфигуратор серверной базы достигает через /S server/ref; реквизиты СУБД нужны только ibcmd.
+        print("Error: -Dbms/-DbServer/-DbName/-DbUser/-DbPassword are used by ibcmd only; "
+              "the selected engine is 1cv8")
+        sys.exit(1)
+    # У ibcmd нет адреса кластера, поэтому серверная база подключается только прямыми реквизитами
+    # СУБД - из параметров навыка или из блока dbms записи базы.
+    ib_conn = ibcmd_connection_args(args, db_settings) if engine == "ibcmd" else None
+    if engine == "ibcmd" and ib_conn is None:
+        print("Error: cannot connect to the server base with ibcmd - pass DBMS parameters "
+              "(-Dbms, -DbServer, -DbName, -DbUser, -DbPassword) or put them into the dbms "
+              "block of the base record")
         sys.exit(1)
 
     # --- Ensure output directory exists ---
@@ -523,14 +604,17 @@ def main():
     if out_dir and not os.path.isdir(out_dir):
         os.makedirs(out_dir, exist_ok=True)
 
-    # --- ibcmd branch (file infobase only) ---
+    # --- ibcmd branch (config save) ---
     if engine == "ibcmd":
         if args.AllExtensions:
             print("Error: ibcmd config save does not support -AllExtensions (use -Extension)")
             sys.exit(1)
-        arguments = ["infobase", "config", "save", f"--db-path={args.InfoBasePath}"]
+        arguments = ["infobase", "config", "save"]
         if args.Extension:
             arguments.append(f"--extension={args.Extension}")
+        # Файловая база - --db-path, серверная - прямые реквизиты СУБД; путь к файлу CF остаётся
+        # позиционным аргументом.
+        arguments += ib_conn
         arguments.append(args.OutputFile)
         ib_data = tempfile.mkdtemp(prefix="ibcmd_data_")
         atexit.register(shutil.rmtree, ib_data, ignore_errors=True)
@@ -540,7 +624,7 @@ def main():
             arguments.append(f"--password={args.Password}")
         arguments.append(f"--data={ib_data}")
         arguments.extend(extra_args)
-        print(f"Running: ibcmd {_redact(' '.join(format_args_for_display(arguments, engine)), args.Password, args.UserName)}")
+        print(f"Running: ibcmd {_redact(' '.join(format_args_for_display(arguments, engine)), args.Password, args.UserName, db_settings['password'])}")
         result = run_ibcmd([v8path] + arguments, bool(args.UserName))
         exit_code = result.returncode
         out_missing = exit_code == 0 and not output_nonempty(args.OutputFile)
@@ -552,6 +636,7 @@ def main():
             print(f"Error: exit code 0 but no non-empty file at {args.OutputFile} — configuration was not dumped")
         else:
             print(f"Error dumping configuration (code: {exit_code})")
+        print_platform_output(result)
         sys.exit(exit_code)
 
     # --- Temp dir ---

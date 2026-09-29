@@ -1,0 +1,53 @@
+{
+  "name": "ibcmd: реквизиты СУБД из блока dbms записи базы, секреты в печатаемой команде скрыты",
+  "cwd": "workDir",
+  "preRun": [
+    {
+      "writeFile": {
+        "path": ".v8-project.json",
+        "content": "{\n  \"databases\": [\n    {\n      \"id\": \"srv\",\n      \"type\": \"server\",\n      \"server\": \"srv01\",\n      \"ref\": \"MyDB\",\n      \"dbms\": {\n        \"kind\": \"postgresql\",\n        \"server\": \"pgsqlhost\",\n        \"name\": \"mydb\",\n        \"user\": \"srvuser\",\n        \"password\": \"srvpass\"\n      }\n    }\n  ]\n}"
+      }
+    },
+    {
+      "writeFile": {
+        "path": "ibcmd.cmd",
+        "content": "@echo off\r\necho dummy> out\\Dummy.xml\r\nexit /b 0\r\n",
+        "executable": true
+      }
+    },
+    {
+      "writeFile": {
+        "path": "out/ConfigDumpInfo.xml",
+        "content": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><ConfigDumpInfo format=\"Hierarchical\" version=\"2.17\"/>"
+      }
+    }
+  ],
+  "args_extra": [
+    "-V8Path",
+    "{workDir}\\ibcmd.cmd",
+    "-InfoBaseServer",
+    "srv01",
+    "-InfoBaseRef",
+    "MyDB",
+    "-ConfigDir",
+    "{workDir}\\out",
+    "-Mode",
+    "Changes"
+  ],
+  "expect": {
+    "stdoutContains": [
+      "--dbms=PostgreSQL",
+      "--db-server=pgsqlhost",
+      "--db-name=mydb",
+      "--db-user=***",
+      "--db-pwd=***"
+    ],
+    "stdoutNotContains": [
+      "srvuser",
+      "srvpass",
+      "--db-path"
+    ]
+  },
+  "noSnapshot": "проверяется чтение блока dbms и маскирование реквизитов; Changes — чтобы выгрузка шла прямо в ConfigDir, а не во временный каталог",
+  "osOnly": "win32"
+}

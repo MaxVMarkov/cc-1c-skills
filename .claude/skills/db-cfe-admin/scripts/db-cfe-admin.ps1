@@ -263,7 +263,7 @@ function Resolve-DatabaseSettings {
 
 function Get-IbcmdConnectionArgs {
     # Файловая база - --db-path. Серверная - прямое подключение к СУБД; вход в саму ИБ идёт
-    # через --user/--password, которые добавляет Invoke-Ibcmd. $null, если соединение не собрать.
+    # через --user/--password, которые добавляет сборщик команды ibcmd. $null, если соединение не собрать.
     param([hashtable]$Db)
     if ($InfoBasePath) { return @("--db-path=$InfoBasePath") }
     if (-not $Db.Kind -or -not $Db.Server -or -not $Db.Name) { return $null }
@@ -317,7 +317,9 @@ $script:IbcmdOwnedKeys = @(
     '--db-user', '--db-pwd'
 )
 $script:V8SecretKeys = @('/P', '/UC', '/WSP', '/AWSP', '/ConfigurationRepositoryP')
-$script:IbcmdSecretKeys = @('--password', '--token', '--db-pwd')
+# `--db-user` маскируется по ключу, а не заменой литерала: короткое имя вроде «sa»
+# вырезало бы половину печатаемой строки (проверено: config save превращался в config ***ve).
+$script:IbcmdSecretKeys = @('--password', '--token', '--db-pwd', '--db-user')
 
 function Test-ArgKeyMatch {
     # A token matches a key when it equals the key, or starts with it and the next
@@ -791,7 +793,7 @@ function Invoke-Ibcmd {
     if ($UserName) { $arguments += "--user=$UserName" }
     if ($Password) { $arguments += "--password=$Password" }
     $arguments += $ibExtra
-    Write-Host "Running: ibcmd $(Protect-Secrets ((Format-ArgsForDisplay $arguments 'ibcmd') -join ' ') @($Password, $UserName, $script:dbSettings.Password, $script:dbSettings.User))"
+    Write-Host "Running: ibcmd $(Protect-Secrets ((Format-ArgsForDisplay $arguments 'ibcmd') -join ' ') @($Password, $UserName, $script:dbSettings.Password))"
     if (-not $UserName) { Write-Host $script:IbcmdNoUserHint -ForegroundColor Yellow }
     $res = Invoke-PlatformProcess $ibcmdExe $arguments
     return @{ ExitCode = $res.ExitCode; Output = $res.Output }

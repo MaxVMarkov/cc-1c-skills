@@ -59,6 +59,25 @@ param(
     [Parameter(Mandatory=$false)]
     [string]$Password,
 
+    # Реквизиты СУБД серверной базы. У ibcmd нет адреса кластера (/S server/ref), но есть прямое
+    # подключение к СУБД - только так серверной базе доступны операции ibcmd. Явные параметры
+    # сильнее записи базы в .v8-project.json, как у хранилища.
+    [Parameter(Mandatory=$false)]
+    [ValidateSet("", "MSSQLServer", "PostgreSQL", "IBMDB2", "OracleDatabase")]
+    [string]$Dbms,
+
+    [Parameter(Mandatory=$false)]
+    [string]$DbServer,
+
+    [Parameter(Mandatory=$false)]
+    [string]$DbName,
+
+    [Parameter(Mandatory=$false)]
+    [string]$DbUser,
+
+    [Parameter(Mandatory=$false)]
+    [string]$DbPassword,
+
     [Parameter(Mandatory=$true)]
     [string]$OutputFile,
 
@@ -110,10 +129,13 @@ $script:IbcmdNoUserHint = "[ibcmd] No -UserName/-Password given; the infobase ma
 $script:IbcmdOwnedKeys = @(
     '--db-path', '--data', '--out', '--file', '--load', '--restore',
     '--import', '--export', '--apply', '--force', '--create-database',
-    '--user', '--password'
+    '--user', '--password', '--dbms', '--db-server', '--db-name',
+    '--db-user', '--db-pwd'
 )
 $script:V8SecretKeys = @('/P', '/UC', '/WSP', '/AWSP')
-$script:IbcmdSecretKeys = @('--password', '--token', '--db-pwd')
+# `--db-user` маскируется по ключу, а не заменой литерала: короткое имя вроде «sa»
+# вырезало бы половину печатаемой строки (проверено: config save превращался в config ***ve).
+$script:IbcmdSecretKeys = @('--password', '--token', '--db-pwd', '--db-user')
 
 function Test-ArgKeyMatch {
     # A token matches a key when it equals the key, or starts with it and the next
@@ -304,6 +326,53 @@ function Find-ProjectDatabase {
     return $null
 }
 
+# --- Реквизиты СУБД серверной базы (для ibcmd) ---
+$script:DbmsKinds = [ordered]@{
+    'mssqlserver' = 'MSSQLServer'
+    'postgresql' = 'PostgreSQL'
+    'ibmdb2' = 'IBMDB2'
+    'oracledatabase' = 'OracleDatabase'
+}
+
+function Resolve-DatabaseSettings {
+    # Возвращает @{ Kind; Server; Name; User; Password }. Явные -Db* всегда сильнее реестра:
+    # запись базы ищется теми же параметрами соединения, что и хранилище.
+    # Родительский ключ - dbms (имя вида СУБД в терминологии 1С), в нём kind/server/name/user/password.
+    $dbRec = Find-ProjectDatabase
+    $rec = if ($dbRec -and $dbRec.dbms) { $dbRec.dbms } else { $null }
+    $kind = if ($Dbms) { $Dbms } elseif ($rec -and $rec.kind) { [string]$rec.kind } else { $null }
+    if ($kind) {
+        # Реестр пишут руками, поэтому вид принимаем в любом регистре; неизвестный отсеиваем здесь,
+        # а не показываем позже непостижимый отказ ibcmd.
+        $canon = $script:DbmsKinds[$kind.ToLower()]
+        if (-not $canon) {
+            Write-Host "Error: unknown DBMS kind '$kind' (expected: $($script:DbmsKinds.Values -join ', '))" -ForegroundColor Red
+            exit 1
+        }
+        $kind = $canon
+    }
+    return @{
+        Kind     = $kind
+        Server   = if ($DbServer) { $DbServer } elseif ($rec -and $rec.server) { [string]$rec.server } else { $null }
+        Name     = if ($DbName) { $DbName } elseif ($rec -and $rec.name) { [string]$rec.name } else { $null }
+        User     = if ($DbUser) { $DbUser } elseif ($rec -and $rec.user) { [string]$rec.user } else { $null }
+        # Пустой пароль = отсутствующий: ключ отдаём только когда пароль есть.
+        Password = if ($DbPassword) { $DbPassword } elseif ($rec -and $rec.password) { [string]$rec.password } else { $null }
+    }
+}
+
+function Get-IbcmdConnectionArgs {
+    # Файловая база - --db-path. Серверная - прямое подключение к СУБД; вход в саму ИБ идёт
+    # через --user/--password, которые добавляет сборщик команды ibcmd. $null, если соединение не собрать.
+    param([hashtable]$Db)
+    if ($InfoBasePath) { return @("--db-path=$InfoBasePath") }
+    if (-not $Db.Kind -or -not $Db.Server -or -not $Db.Name) { return $null }
+    $a = @("--dbms=$($Db.Kind)", "--db-server=$($Db.Server)", "--db-name=$($Db.Name)")
+    if ($Db.User) { $a += "--db-user=$($Db.User)" }
+    if ($Db.Password) { $a += "--db-pwd=$($Db.Password)" }
+    return $a
+}
+
 # --- Resolve V8Path ---
 function Find-ProjectV8Path {
     # v8path записи базы сильнее корневого: в одном проекте базы живут на разных версиях
@@ -432,17 +501,30 @@ function Test-OutputNonEmpty {
 $engine = if ((Split-Path $V8Path -Leaf) -match '^ibcmd') { "ibcmd" } else { "1cv8" }
 
 # --- Resolve additional arguments for the selected engine ---
-$argHints = @{ '/F' = '-InfoBasePath'; '/S' = '-InfoBaseServer + -InfoBaseRef'; '/N' = '-UserName'; '/P' = '-Password'; '--db-path' = '-InfoBasePath'; '--user' = '-UserName'; '--password' = '-Password' }
+$argHints = @{ '/F' = '-InfoBasePath'; '/S' = '-InfoBaseServer + -InfoBaseRef'; '/N' = '-UserName'; '/P' = '-Password'; '--db-path' = '-InfoBasePath'; '--user' = '-UserName'; '--password' = '-Password'; '--dbms' = '-Dbms'; '--db-server' = '-DbServer'; '--db-name' = '-DbName'; '--db-user' = '-DbUser'; '--db-pwd' = '-DbPassword' }
 $extraArgs = @(Resolve-ExtraArgs $engine $AdditionalV8Arguments $AdditionalIbcmdArguments $argHints)
 
 # --- Validate connection ---
-if ($engine -eq "ibcmd") {
-    if (-not $InfoBasePath) {
-        Write-Host "Error: ibcmd supports file infobases only (use -InfoBasePath)" -ForegroundColor Red
-        exit 1
-    }
-} elseif (-not $InfoBasePath -and (-not $InfoBaseServer -or -not $InfoBaseRef)) {
+if (-not $InfoBasePath -and (-not $InfoBaseServer -or -not $InfoBaseRef)) {
     Write-Host "Error: specify -InfoBasePath or -InfoBaseServer + -InfoBaseRef" -ForegroundColor Red
+    exit 1
+}
+$script:dbSettings = Resolve-DatabaseSettings
+if ($InfoBasePath -and ($Dbms -or $DbServer -or $DbName -or $DbUser -or $DbPassword)) {
+    # Файловая база подключается по пути; эти реквизиты при ней были бы молча потеряны.
+    Write-Host "Error: -Dbms/-DbServer/-DbName/-DbUser/-DbPassword apply to a server base; this connection is a file base (-InfoBasePath)" -ForegroundColor Red
+    exit 1
+}
+if ($engine -ne "ibcmd" -and ($Dbms -or $DbServer -or $DbName -or $DbUser -or $DbPassword)) {
+    # Конфигуратор серверной базы достигает через /S server/ref; реквизиты СУБД нужны только ibcmd.
+    Write-Host "Error: -Dbms/-DbServer/-DbName/-DbUser/-DbPassword are used by ibcmd only; the selected engine is 1cv8" -ForegroundColor Red
+    exit 1
+}
+# У ibcmd нет адреса кластера, поэтому серверная база подключается только прямыми реквизитами
+# СУБД - из параметров навыка или из блока dbms записи базы.
+$script:ibConn = if ($engine -eq "ibcmd") { Get-IbcmdConnectionArgs $script:dbSettings } else { $null }
+if ($engine -eq "ibcmd" -and -not $script:ibConn) {
+    Write-Host "Error: cannot connect to the server base with ibcmd - pass DBMS parameters (-Dbms, -DbServer, -DbName, -DbUser, -DbPassword) or put them into the dbms block of the base record" -ForegroundColor Red
     exit 1
 }
 
@@ -458,8 +540,11 @@ New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 
 try {
     if ($engine -eq "ibcmd") {
-        # --- ibcmd branch (file infobase only) ---
-        $arguments = @("infobase", "dump", "--db-path=$InfoBasePath")
+        # --- ibcmd branch (full infobase dump) ---
+        $arguments = @("infobase", "dump")
+        # Файловая база - --db-path, серверная - прямые реквизиты СУБД; путь к DT остаётся
+        # позиционным аргументом.
+        $arguments += $script:ibConn
         if ($UserName) { $arguments += "--user=$UserName" }
         if ($Password) { $arguments += "--password=$Password" }
         $arguments += "$OutputFile"
@@ -467,7 +552,7 @@ try {
         $arguments += "--data=$tempDir"
 
         $arguments += $extraArgs
-        Write-Host "Running: ibcmd $(Protect-Secrets ((Format-ArgsForDisplay $arguments $engine) -join ' ') @($Password, $UserName))"
+        Write-Host "Running: ibcmd $(Protect-Secrets ((Format-ArgsForDisplay $arguments $engine) -join ' ') @($Password, $UserName, $script:dbSettings.Password))"
         if (-not $UserName) { Write-Host $script:IbcmdNoUserHint -ForegroundColor Yellow }
 
         $__ib = Invoke-PlatformProcess $V8Path $arguments

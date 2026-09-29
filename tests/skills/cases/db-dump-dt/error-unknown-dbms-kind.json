@@ -1,0 +1,52 @@
+{
+  "name": "Неизвестный вид СУБД в блоке dbms — отказ с перечислением допустимых, а не непостижимая ошибка ibcmd",
+  "cwd": "workDir",
+  "preRun": [
+    {
+      "writeFile": {
+        "path": ".v8-project.json",
+        "content": {
+          "databases": [
+            {
+              "id": "srv",
+              "type": "server",
+              "server": "srv01",
+              "ref": "MyDB",
+              "dbms": {
+                "kind": "MySQL",
+                "server": "h",
+                "name": "n"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "writeFile": {
+        "path": "ibcmd.cmd",
+        "content": "@echo off\r\necho ARGS: %*\r\nexit /b 0\r\n",
+        "executable": true
+      }
+    }
+  ],
+  "args_extra": [
+    "-V8Path",
+    "{workDir}\\ibcmd.cmd",
+    "-InfoBaseServer",
+    "srv01",
+    "-InfoBaseRef",
+    "MyDB",
+    "-OutputFile",
+    "{workDir}\\out.dt"
+  ],
+  "expectError": true,
+  "expect": {
+    "stdoutContains": [
+      "unknown DBMS kind 'MySQL'",
+      "MSSQLServer, PostgreSQL, IBMDB2, OracleDatabase"
+    ]
+  },
+  "noSnapshot": "негативный кейс — вид отсеивается на разборе реквизитов",
+  "osOnly": "win32"
+}
