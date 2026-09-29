@@ -52,6 +52,11 @@ powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/epf-dump.ps1" <па
 | `-InfoBaseRef <имя>` | * | Имя базы на сервере |
 | `-UserName <имя>` | нет | Имя пользователя |
 | `-Password <пароль>` | нет | Пароль |
+| `-Dbms <вид>` | нет | Вид СУБД серверной базы: `MSSQLServer` / `PostgreSQL` / `IBMDB2` / `OracleDatabase` |
+| `-DbServer <сервер>` | нет | Сервер СУБД |
+| `-DbName <имя>` | нет | Имя базы в СУБД |
+| `-DbUser <имя>` | нет | Пользователь СУБД |
+| `-DbPassword <пароль>` | нет | Пароль пользователя СУБД |
 | `-InputFile <путь>` | да | Путь к EPF/ERF-файлу |
 | `-OutputDir <путь>` | да | Каталог для выгрузки исходников |
 | `-Format <формат>` | нет | `Hierarchical` (по умолч.) / `Plain` |
@@ -59,6 +64,13 @@ powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/epf-dump.ps1" <па
 | `-AdditionalIbcmdArguments <список>` | нет | Доп. аргументы `ibcmd` через запятую, в форме `--ключ=значение` |
 
 > `*` — обязательно хотя бы одно подключение. Без базы скрипт завершится с ошибкой (dump в пустой базе безвозвратно теряет ссылочные типы)
+
+Реквизиты СУБД (`-Db*`) нужны только `ibcmd`: у него нет адреса кластера, и к серверной базе он
+подключается напрямую к СУБД. Конфигуратор берёт серверную базу из пары `-InfoBaseServer` +
+`-InfoBaseRef`, поэтому при движке `1cv8` и при файловой базе навык на эти параметры отказывает.
+В реестре баз реквизиты лежат в блоке `databases[].dbms` (`kind` / `server` / `name` / `user` /
+`password`) — явные параметры сильнее реестра. `-UserName`/`-Password` — вход в саму ИБ,
+`-DbUser`/`-DbPassword` — вход в СУБД; это разные учётные записи.
 
 ## Примеры
 
@@ -68,4 +80,6 @@ powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/epf-dump.ps1" -Info
 
 # Серверная база
 powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/epf-dump.ps1" -InfoBaseServer "srv01" -InfoBaseRef "MyDB" -UserName "Admin" -Password "secret" -InputFile "build/МояОбработка.epf" -OutputDir "src"
+# То же через ibcmd: адреса кластера у него нет, нужны прямые реквизиты СУБД
+powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/epf-dump.ps1" -V8Path "C:\Program Files\1cv8\8.5.1.1529\bin\ibcmd.exe" -InfoBaseServer "srv01" -InfoBaseRef "MyDB" -UserName "Admin" -Password "secret" -Dbms MSSQLServer -DbServer "db01" -DbName "MyDB" -DbUser sa -DbPassword "…" -InputFile "build/МояОбработка.epf" -OutputDir "src"
 ```

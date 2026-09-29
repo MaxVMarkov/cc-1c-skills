@@ -56,6 +56,11 @@ powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/../epf-build/scripts/epf-bu
 | `-InfoBaseRef <имя>` | * | Имя базы на сервере |
 | `-UserName <имя>` | нет | Имя пользователя |
 | `-Password <пароль>` | нет | Пароль |
+| `-Dbms <вид>` | нет | Вид СУБД серверной базы: `MSSQLServer` / `PostgreSQL` / `IBMDB2` / `OracleDatabase` |
+| `-DbServer <сервер>` | нет | Сервер СУБД |
+| `-DbName <имя>` | нет | Имя базы в СУБД |
+| `-DbUser <имя>` | нет | Пользователь СУБД |
+| `-DbPassword <пароль>` | нет | Пароль пользователя СУБД |
 | `-SourceFile <путь>` | да | Путь к корневому XML-файлу исходников |
 | `-OutputFile <путь>` | да | Путь к выходному ERF-файлу |
 | `-Checks <список>` | нет | Что проверить перед сборкой: `modules`, `handlers`, `unreferenced`, `empty-handlers`, `config`; `off` — не проверять. По умолчанию `modules,handlers` |
@@ -65,6 +70,15 @@ powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/../epf-build/scripts/epf-bu
 | `-AdditionalIbcmdArguments <список>` | нет | Доп. аргументы `ibcmd` через запятую, в форме `--ключ=значение` |
 
 > `*` — опционально. Если не указано — автоматически создаётся временная база со заглушками метаданных
+
+Реквизиты СУБД (`-Db*`) нужны только `ibcmd`: у него нет адреса кластера, и к серверной базе он
+подключается напрямую к СУБД. Конфигуратор берёт серверную базу из пары `-InfoBaseServer` +
+`-InfoBaseRef`, поэтому при движке `1cv8` и при файловой базе навык на эти параметры отказывает.
+В реестре баз реквизиты лежат в блоке `databases[].dbms` (`kind` / `server` / `name` / `user` /
+`password`) — явные параметры сильнее реестра. `-UserName`/`-Password` — вход в саму ИБ,
+`-DbUser`/`-DbPassword` — вход в СУБД; это разные учётные записи.
+ При сборке без указанной базы навык сам создаёт временную файловую базу-заглушку —
+ там `ibcmd` работает через `--db-path`, поэтому `-Db*` при заглушке не нужны (и будут отвергнуты).
 
 ## Проверка перед сборкой
 
@@ -86,4 +100,6 @@ powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/../epf-build/scripts/epf-bu
 
 # Серверная база
 powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/../epf-build/scripts/epf-build.ps1" -InfoBaseServer "srv01" -InfoBaseRef "MyDB" -UserName "Admin" -Password "secret" -SourceFile "src/МойОтчёт.xml" -OutputFile "build/МойОтчёт.erf"
+# То же через ibcmd: адреса кластера у него нет, нужны прямые реквизиты СУБД
+powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/../epf-build/scripts/epf-build.ps1" -V8Path "C:\Program Files\1cv8\8.5.1.1529\bin\ibcmd.exe" -InfoBaseServer "srv01" -InfoBaseRef "MyDB" -UserName "Admin" -Password "secret" -Dbms MSSQLServer -DbServer "db01" -DbName "MyDB" -DbUser sa -DbPassword "…" -SourceFile "src/МойОтчёт.xml" -OutputFile "build/МойОтчёт.erf"
 ```

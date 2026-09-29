@@ -1,0 +1,59 @@
+{
+  "name": "infobase config apply — реквизиты СУБД из блока dbms записи базы, секреты в печатаемой команде скрыты",
+  "cwd": "workDir",
+  "preRun": [
+    {
+      "writeFile": {
+        "path": ".v8-project.json",
+        "content": {
+          "databases": [
+            {
+              "id": "srv",
+              "type": "server",
+              "server": "srv01",
+              "ref": "MyDB",
+              "dbms": {
+                "kind": "postgresql",
+                "server": "pgsqlhost",
+                "name": "mydb",
+                "user": "srvuser",
+                "password": "srvpass"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "writeFile": {
+        "path": "ibcmd.cmd",
+        "content": "@echo off\r\nexit /b 0\r\n",
+        "executable": true
+      }
+    }
+  ],
+  "args_extra": [
+    "-V8Path",
+    "{workDir}/ibcmd.cmd",
+    "-InfoBaseServer",
+    "srv01",
+    "-InfoBaseRef",
+    "MyDB"
+  ],
+  "expect": {
+    "stdoutContains": [
+      "--dbms=PostgreSQL",
+      "--db-server=pgsqlhost",
+      "--db-name=mydb",
+      "--db-user=***",
+      "--db-pwd=***"
+    ],
+    "stdoutNotContains": [
+      "srvuser",
+      "srvpass",
+      "--db-path"
+    ]
+  },
+  "noSnapshot": "проверяется чтение блока dbms и маскирование реквизитов",
+  "osOnly": "win32"
+}

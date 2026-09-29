@@ -1,0 +1,109 @@
+{
+  "name": "infobase config import — реквизиты СУБД из блока dbms записи базы, секреты в печатаемой команде скрыты",
+  "cwd": "workDir",
+  "preRun": [
+    {
+      "writeFile": {
+        "path": ".v8-project.json",
+        "content": {
+          "databases": [
+            {
+              "id": "srv",
+              "type": "server",
+              "server": "srv01",
+              "ref": "MyDB",
+              "dbms": {
+                "kind": "postgresql",
+                "server": "pgsqlhost",
+                "name": "mydb",
+                "user": "srvuser",
+                "password": "srvpass"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "writeFile": {
+        "path": "src/Configuration.xml",
+        "content": "<MetaDataObject>\n\t<Configuration>\n\t\t<ChildObjects>\n\t\t\t<Catalog>Старое</Catalog>\n\t\t</ChildObjects>\n\t</Configuration>\n</MetaDataObject>\n"
+      }
+    },
+    {
+      "writeFile": {
+        "path": "src/Catalogs/Старое.xml",
+        "content": "<MetaDataObject>\n\t<Catalog>\n\t\t<ChildObjects/>\n\t</Catalog>\n</MetaDataObject>\n"
+      }
+    },
+    {
+      "git": [
+        "-C",
+        "src",
+        "init",
+        "-q"
+      ]
+    },
+    {
+      "git": [
+        "-C",
+        "src",
+        "add",
+        "-A"
+      ]
+    },
+    {
+      "git": [
+        "-C",
+        "src",
+        "commit",
+        "-qm",
+        "base"
+      ]
+    },
+    {
+      "git": [
+        "-C",
+        "src",
+        "mv",
+        "Catalogs/Старое.xml",
+        "Catalogs/Новое.xml"
+      ]
+    },
+    {
+      "writeFile": {
+        "path": "ibcmd.cmd",
+        "content": "@echo off\r\nexit /b 0\r\n",
+        "executable": true
+      }
+    }
+  ],
+  "args_extra": [
+    "-V8Path",
+    "{workDir}/ibcmd.cmd",
+    "-InfoBaseServer",
+    "srv01",
+    "-InfoBaseRef",
+    "MyDB",
+    "-ConfigDir",
+    "{workDir}/src",
+    "-Source",
+    "Staged"
+  ],
+  "expect": {
+    "stdoutContains": [
+      "--dbms=PostgreSQL",
+      "--db-server=pgsqlhost",
+      "--db-name=mydb",
+      "--db-user=***",
+      "--db-pwd=***"
+    ],
+    "stdoutNotContains": [
+      "srvuser",
+      "srvpass",
+      "--db-path"
+    ]
+  },
+  "noSnapshot": "проверяется чтение блока dbms и маскирование реквизитов",
+  "osOnly": "win32"
+}

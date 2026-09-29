@@ -50,6 +50,11 @@ powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/db-update.ps1" <п�
 | `-InfoBaseRef <имя>` | * | Имя базы на сервере |
 | `-UserName <имя>` | нет | Имя пользователя |
 | `-Password <пароль>` | нет | Пароль |
+| `-Dbms <вид>` | нет | Вид СУБД серверной базы: `MSSQLServer` / `PostgreSQL` / `IBMDB2` / `OracleDatabase` |
+| `-DbServer <сервер>` | нет | Сервер СУБД |
+| `-DbName <имя>` | нет | Имя базы в СУБД |
+| `-DbUser <имя>` | нет | Пользователь СУБД |
+| `-DbPassword <пароль>` | нет | Пароль пользователя СУБД |
 | `-Extension <имя>` | нет | Обновить расширение |
 | `-AllExtensions` | нет | Обновить все расширения |
 | `-NoApplyCheck` | нет | Не проверять применимость расширения после обновления |
@@ -60,6 +65,12 @@ powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/db-update.ps1" <п�
 | `-AdditionalIbcmdArguments <список>` | нет | Доп. аргументы `ibcmd` через запятую, в форме `--ключ=значение` |
 
 > `*` — нужен либо `-InfoBasePath`, либо пара `-InfoBaseServer` + `-InfoBaseRef`
+
+подключается напрямую к СУБД. Конфигуратор берёт серверную базу из пары `-InfoBaseServer` +
+`-InfoBaseRef`, поэтому при движке `1cv8` и при файловой базе навык на эти параметры отказывает.
+В реестре баз реквизиты лежат в блоке `databases[].dbms` (`kind` / `server` / `name` / `user` /
+`password`) — явные параметры сильнее реестра. `-UserName`/`-Password` — вход в саму ИБ,
+`-DbUser`/`-DbPassword` — вход в СУБД; это разные учётные записи.
 
 ### Фоновое обновление (серверная база)
 
@@ -82,4 +93,6 @@ powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/db-update.ps1" -Inf
 
 # Обновление расширения
 powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/db-update.ps1" -InfoBasePath "C:\Bases\MyDB" -UserName "Admin" -Extension "МоёРасширение"
+# Обновить конфигурацию серверной базы через ibcmd: реквизиты СУБД обязательны
+powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/db-update.ps1" -V8Path "C:\Program Files\1cv8\8.5.1.1529\bin\ibcmd.exe" -InfoBaseServer "srv01" -InfoBaseRef "MyApp_Dev" -UserName "Admin" -Password "secret" -Dbms MSSQLServer -DbServer "db01" -DbName "MyApp_Dev" -DbUser sa -DbPassword "…"
 ```

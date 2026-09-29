@@ -1,0 +1,45 @@
+{
+  "name": "infobase config import — отказ: их читает только ibcmd",
+  "preRun": [
+    {
+      "writeFile": {
+        "path": "src/ext.xml",
+        "content": "<epf/>"
+      }
+    },
+    {
+      "writeFile": {
+        "path": "1cv8.cmd",
+        "content": "@echo off\r\necho ARGS: %*\r\nexit /b 0\r\n",
+        "executable": true
+      }
+    }
+  ],
+  "args_extra": [
+    "-V8Path",
+    "{workDir}/1cv8.cmd",
+    "-InfoBaseServer",
+    "srv01",
+    "-InfoBaseRef",
+    "MyDB",
+    "-Dbms",
+    "MSSQLServer",
+    "-DbServer",
+    "dbhost",
+    "-DbName",
+    "dbname",
+    "-SourceFile",
+    "{workDir}/src/ext.xml",
+    "-OutputFile",
+    "{workDir}/out/ext.epf"
+  ],
+  "expectError": true,
+  "expect": {
+    "stdoutContains": [
+      "used by ibcmd only",
+      "the selected engine is 1cv8"
+    ]
+  },
+  "noSnapshot": "негативный кейс — конфигуратор берёт серверную базу из /S server/ref, реквизиты СУБД ему не нужны",
+  "osOnly": "win32"
+}

@@ -1,0 +1,85 @@
+{
+  "name": "infobase config import — отказ: их читает только ibcmd",
+  "preRun": [
+    {
+      "writeFile": {
+        "path": "src/Configuration.xml",
+        "content": "<MetaDataObject>\n\t<Configuration>\n\t\t<ChildObjects>\n\t\t\t<Catalog>Старое</Catalog>\n\t\t</ChildObjects>\n\t</Configuration>\n</MetaDataObject>\n"
+      }
+    },
+    {
+      "writeFile": {
+        "path": "src/Catalogs/Старое.xml",
+        "content": "<MetaDataObject>\n\t<Catalog>\n\t\t<ChildObjects/>\n\t</Catalog>\n</MetaDataObject>\n"
+      }
+    },
+    {
+      "git": [
+        "-C",
+        "src",
+        "init",
+        "-q"
+      ]
+    },
+    {
+      "git": [
+        "-C",
+        "src",
+        "add",
+        "-A"
+      ]
+    },
+    {
+      "git": [
+        "-C",
+        "src",
+        "commit",
+        "-qm",
+        "base"
+      ]
+    },
+    {
+      "git": [
+        "-C",
+        "src",
+        "mv",
+        "Catalogs/Старое.xml",
+        "Catalogs/Новое.xml"
+      ]
+    },
+    {
+      "writeFile": {
+        "path": "1cv8.cmd",
+        "content": "@echo off\r\necho ARGS: %*\r\nexit /b 0\r\n",
+        "executable": true
+      }
+    }
+  ],
+  "args_extra": [
+    "-V8Path",
+    "{workDir}/1cv8.cmd",
+    "-InfoBaseServer",
+    "srv01",
+    "-InfoBaseRef",
+    "MyDB",
+    "-Dbms",
+    "MSSQLServer",
+    "-DbServer",
+    "dbhost",
+    "-DbName",
+    "dbname",
+    "-ConfigDir",
+    "{workDir}/src",
+    "-Source",
+    "Staged"
+  ],
+  "expectError": true,
+  "expect": {
+    "stdoutContains": [
+      "used by ibcmd only",
+      "the selected engine is 1cv8"
+    ]
+  },
+  "noSnapshot": "негативный кейс — конфигуратор берёт серверную базу из /S server/ref, реквизиты СУБД ему не нужны",
+  "osOnly": "win32"
+}

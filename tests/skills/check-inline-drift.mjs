@@ -400,7 +400,8 @@ const FAMILIES = [
     variants: [
       { id: 'base', authority: 'db-dump-cf',
         consumers: ['db-dump-dt', 'db-dump-xml', 'db-load-cf', 'db-load-dt', 'db-load-git',
-          'db-load-xml', 'db-repo', 'db-run', 'db-update', 'epf-build', 'epf-dump', 'db-cfe-admin'] },
+          'db-load-xml', 'db-repo', 'db-run', 'db-update', 'epf-build', 'epf-dump', 'db-cfe-admin',
+          'db-create'] },
     ],
   },
   {
@@ -477,11 +478,15 @@ const FAMILIES = [
   // в одном навыке, а в другом отказала.
   {
     name: 'dbms: resolve settings', py: 'resolve_database_settings', ps1: 'Resolve-DatabaseSettings',
-    variants: [{ id: 'base', authority: 'db-cfe-admin', consumers: ['db-dump-cf', 'db-dump-dt', 'db-dump-xml'] }],
+    variants: [{ id: 'base', authority: 'db-cfe-admin', consumers: ['db-dump-cf', 'db-dump-dt', 'db-dump-xml',
+      'db-load-cf', 'db-load-dt', 'db-load-git', 'db-load-xml', 'db-update', 'db-create',
+      'epf-build', 'epf-dump'] }],
   },
   {
     name: 'dbms: ibcmd connection args', py: 'ibcmd_connection_args', ps1: 'Get-IbcmdConnectionArgs',
-    variants: [{ id: 'base', authority: 'db-cfe-admin', consumers: ['db-dump-cf', 'db-dump-dt', 'db-dump-xml'] }],
+    variants: [{ id: 'base', authority: 'db-cfe-admin', consumers: ['db-dump-cf', 'db-dump-dt', 'db-dump-xml',
+      'db-load-cf', 'db-load-dt', 'db-load-git', 'db-load-xml', 'db-update', 'db-create',
+      'epf-build', 'epf-dump'] }],
   },
 
   // ─── Значения свойств-перечислений ───────────────────────────────────────

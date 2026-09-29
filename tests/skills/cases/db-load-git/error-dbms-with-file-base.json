@@ -1,0 +1,86 @@
+{
+  "name": "infobase config import — отказ, а не молчаливая потеря",
+  "preRun": [
+    {
+      "writeFile": {
+        "path": "src/Configuration.xml",
+        "content": "<MetaDataObject>\n\t<Configuration>\n\t\t<ChildObjects>\n\t\t\t<Catalog>Старое</Catalog>\n\t\t</ChildObjects>\n\t</Configuration>\n</MetaDataObject>\n"
+      }
+    },
+    {
+      "writeFile": {
+        "path": "src/Catalogs/Старое.xml",
+        "content": "<MetaDataObject>\n\t<Catalog>\n\t\t<ChildObjects/>\n\t</Catalog>\n</MetaDataObject>\n"
+      }
+    },
+    {
+      "git": [
+        "-C",
+        "src",
+        "init",
+        "-q"
+      ]
+    },
+    {
+      "git": [
+        "-C",
+        "src",
+        "add",
+        "-A"
+      ]
+    },
+    {
+      "git": [
+        "-C",
+        "src",
+        "commit",
+        "-qm",
+        "base"
+      ]
+    },
+    {
+      "git": [
+        "-C",
+        "src",
+        "mv",
+        "Catalogs/Старое.xml",
+        "Catalogs/Новое.xml"
+      ]
+    },
+    {
+      "writeFile": {
+        "path": "ibcmd.cmd",
+        "content": "@echo off\r\necho ARGS: %*\r\nexit /b 0\r\n",
+        "executable": true
+      }
+    },
+    {
+      "writeFile": {
+        "path": "ib/1Cv8.1CD",
+        "content": "stub"
+      }
+    }
+  ],
+  "args_extra": [
+    "-V8Path",
+    "{workDir}/ibcmd.cmd",
+    "-InfoBasePath",
+    "{workDir}/ib",
+    "-Dbms",
+    "MSSQLServer",
+    "-DbServer",
+    "dbhost",
+    "-DbName",
+    "dbname",
+    "-ConfigDir",
+    "{workDir}/src",
+    "-Source",
+    "Staged"
+  ],
+  "expectError": true,
+  "expect": {
+    "stdoutContains": "apply to a server base"
+  },
+  "noSnapshot": "негативный кейс — навык отказывает до вызова платформы",
+  "osOnly": "win32"
+}

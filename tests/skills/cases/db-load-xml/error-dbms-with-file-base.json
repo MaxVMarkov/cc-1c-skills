@@ -1,0 +1,44 @@
+{
+  "name": "infobase config import — отказ, а не молчаливая потеря",
+  "preRun": [
+    {
+      "writeFile": {
+        "path": "src/Configuration.xml",
+        "content": "<conf/>"
+      }
+    },
+    {
+      "writeFile": {
+        "path": "ibcmd.cmd",
+        "content": "@echo off\r\necho ARGS: %*\r\nexit /b 0\r\n",
+        "executable": true
+      }
+    },
+    {
+      "writeFile": {
+        "path": "ib/1Cv8.1CD",
+        "content": "stub"
+      }
+    }
+  ],
+  "args_extra": [
+    "-V8Path",
+    "{workDir}/ibcmd.cmd",
+    "-InfoBasePath",
+    "{workDir}/ib",
+    "-Dbms",
+    "MSSQLServer",
+    "-DbServer",
+    "dbhost",
+    "-DbName",
+    "dbname",
+    "-ConfigDir",
+    "{workDir}/src"
+  ],
+  "expectError": true,
+  "expect": {
+    "stdoutContains": "apply to a server base"
+  },
+  "noSnapshot": "негативный кейс — навык отказывает до вызова платформы",
+  "osOnly": "win32"
+}

@@ -1,0 +1,83 @@
+{
+  "name": "infobase config import — отказ с объяснением",
+  "preRun": [
+    {
+      "writeFile": {
+        "path": "src/Configuration.xml",
+        "content": "<MetaDataObject>\n\t<Configuration>\n\t\t<ChildObjects>\n\t\t\t<Catalog>Старое</Catalog>\n\t\t</ChildObjects>\n\t</Configuration>\n</MetaDataObject>\n"
+      }
+    },
+    {
+      "writeFile": {
+        "path": "src/Catalogs/Старое.xml",
+        "content": "<MetaDataObject>\n\t<Catalog>\n\t\t<ChildObjects/>\n\t</Catalog>\n</MetaDataObject>\n"
+      }
+    },
+    {
+      "git": [
+        "-C",
+        "src",
+        "init",
+        "-q"
+      ]
+    },
+    {
+      "git": [
+        "-C",
+        "src",
+        "add",
+        "-A"
+      ]
+    },
+    {
+      "git": [
+        "-C",
+        "src",
+        "commit",
+        "-qm",
+        "base"
+      ]
+    },
+    {
+      "git": [
+        "-C",
+        "src",
+        "mv",
+        "Catalogs/Старое.xml",
+        "Catalogs/Новое.xml"
+      ]
+    },
+    {
+      "writeFile": {
+        "path": "ibcmd.cmd",
+        "content": "@echo off\r\necho ARGS: %*\r\nexit /b 0\r\n",
+        "executable": true
+      }
+    }
+  ],
+  "args_extra": [
+    "-V8Path",
+    "{workDir}/ibcmd.cmd",
+    "-InfoBaseServer",
+    "srv01",
+    "-InfoBaseRef",
+    "MyDB",
+    "-ConfigDir",
+    "{workDir}/src",
+    "-Source",
+    "Staged"
+  ],
+  "expectError": true,
+  "expect": {
+    "stdoutContains": [
+      "cannot connect to the server base with ibcmd",
+      "-Dbms, -DbServer, -DbName, -DbUser, -DbPassword"
+    ],
+    "stdoutNotContains": [
+      "file infobases only",
+      "ARGS:"
+    ]
+  },
+  "noSnapshot": "негативный кейс — отказ до запуска платформы, поэтому ARGS: не печатается",
+  "osOnly": "win32"
+}

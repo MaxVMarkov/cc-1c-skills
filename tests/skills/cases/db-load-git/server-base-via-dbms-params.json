@@ -1,0 +1,89 @@
+{
+  "name": "infobase config import — серверная база по явным реквизитам СУБД, вместо --db-path идут --dbms/--db-server/--db-name",
+  "preRun": [
+    {
+      "writeFile": {
+        "path": "src/Configuration.xml",
+        "content": "<MetaDataObject>\n\t<Configuration>\n\t\t<ChildObjects>\n\t\t\t<Catalog>Старое</Catalog>\n\t\t</ChildObjects>\n\t</Configuration>\n</MetaDataObject>\n"
+      }
+    },
+    {
+      "writeFile": {
+        "path": "src/Catalogs/Старое.xml",
+        "content": "<MetaDataObject>\n\t<Catalog>\n\t\t<ChildObjects/>\n\t</Catalog>\n</MetaDataObject>\n"
+      }
+    },
+    {
+      "git": [
+        "-C",
+        "src",
+        "init",
+        "-q"
+      ]
+    },
+    {
+      "git": [
+        "-C",
+        "src",
+        "add",
+        "-A"
+      ]
+    },
+    {
+      "git": [
+        "-C",
+        "src",
+        "commit",
+        "-qm",
+        "base"
+      ]
+    },
+    {
+      "git": [
+        "-C",
+        "src",
+        "mv",
+        "Catalogs/Старое.xml",
+        "Catalogs/Новое.xml"
+      ]
+    },
+    {
+      "writeFile": {
+        "path": "ibcmd.cmd",
+        "content": "@echo off\r\necho ARGS: %*\r\nexit /b 0\r\n",
+        "executable": true
+      }
+    }
+  ],
+  "args_extra": [
+    "-V8Path",
+    "{workDir}/ibcmd.cmd",
+    "-InfoBaseServer",
+    "srv01",
+    "-InfoBaseRef",
+    "MyDB",
+    "-Dbms",
+    "MSSQLServer",
+    "-DbServer",
+    "dbhost",
+    "-DbName",
+    "dbname",
+    "-ConfigDir",
+    "{workDir}/src",
+    "-Source",
+    "Staged"
+  ],
+  "expect": {
+    "stdoutContains": [
+      "ARGS: infobase config import",
+      "--dbms=MSSQLServer",
+      "--db-server=dbhost",
+      "--db-name=dbname"
+    ],
+    "stdoutNotContains": [
+      "--db-path"
+    ]
+  },
+  "noSnapshot": "проверяется сборка команды ibcmd для серверной базы; файл выгрузки — фикстура кейса",
+  "osOnly": "win32"
+}

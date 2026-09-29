@@ -60,6 +60,25 @@ param(
     [Parameter(Mandatory=$false)]
     [string]$InfoBaseRef,
 
+    # Реквизиты СУБД серверной базы. У ibcmd нет адреса кластера (/S server/ref), но есть прямое
+    # подключение к СУБД - только так серверной базе доступны операции ibcmd. Явные параметры
+    # сильнее записи базы в .v8-project.json, как у хранилища.
+    [Parameter(Mandatory=$false)]
+    [ValidateSet("", "MSSQLServer", "PostgreSQL", "IBMDB2", "OracleDatabase")]
+    [string]$Dbms,
+
+    [Parameter(Mandatory=$false)]
+    [string]$DbServer,
+
+    [Parameter(Mandatory=$false)]
+    [string]$DbName,
+
+    [Parameter(Mandatory=$false)]
+    [string]$DbUser,
+
+    [Parameter(Mandatory=$false)]
+    [string]$DbPassword,
+
     [Parameter(Mandatory=$false)]
     [string]$UseTemplate,
 
@@ -107,10 +126,20 @@ $script:V8BatchKeys = @(
 $script:IbcmdOwnedKeys = @(
     '--db-path', '--data', '--out', '--file', '--load', '--restore',
     '--import', '--export', '--apply', '--force', '--create-database',
-    '--user', '--password'
+    '--user', '--password', '--dbms', '--db-server', '--db-name',
+    '--db-user', '--db-pwd'
 )
 $script:V8SecretKeys = @('/P', '/UC', '/WSP', '/AWSP')
-$script:IbcmdSecretKeys = @('--password', '--token', '--db-pwd')
+# `--db-user` маскируется по ключу, а не заменой литерала: короткое имя вроде «sa»
+# вырезало бы половину печатаемой строки (проверено: config save превращался в config ***ve).
+$script:IbcmdSecretKeys = @('--password', '--token', '--db-pwd', '--db-user')
+
+function Protect-Secrets {
+    # Redact literal secret values from a display string (String.Replace is literal, not regex).
+    param([string]$Text, [string[]]$Secrets)
+    foreach ($s in $Secrets) { if ($s) { $Text = $Text.Replace($s, '***') } }
+    return $Text
+}
 
 function Test-ArgKeyMatch {
     # A token matches a key when it equals the key, or starts with it and the next
@@ -288,6 +317,53 @@ function Find-ProjectDatabase {
     return $null
 }
 
+# --- Реквизиты СУБД серверной базы (для ibcmd) ---
+$script:DbmsKinds = [ordered]@{
+    'mssqlserver' = 'MSSQLServer'
+    'postgresql' = 'PostgreSQL'
+    'ibmdb2' = 'IBMDB2'
+    'oracledatabase' = 'OracleDatabase'
+}
+
+function Resolve-DatabaseSettings {
+    # Возвращает @{ Kind; Server; Name; User; Password }. Явные -Db* всегда сильнее реестра:
+    # запись базы ищется теми же параметрами соединения, что и хранилище.
+    # Родительский ключ - dbms (имя вида СУБД в терминологии 1С), в нём kind/server/name/user/password.
+    $dbRec = Find-ProjectDatabase
+    $rec = if ($dbRec -and $dbRec.dbms) { $dbRec.dbms } else { $null }
+    $kind = if ($Dbms) { $Dbms } elseif ($rec -and $rec.kind) { [string]$rec.kind } else { $null }
+    if ($kind) {
+        # Реестр пишут руками, поэтому вид принимаем в любом регистре; неизвестный отсеиваем здесь,
+        # а не показываем позже непостижимый отказ ibcmd.
+        $canon = $script:DbmsKinds[$kind.ToLower()]
+        if (-not $canon) {
+            Write-Host "Error: unknown DBMS kind '$kind' (expected: $($script:DbmsKinds.Values -join ', '))" -ForegroundColor Red
+            exit 1
+        }
+        $kind = $canon
+    }
+    return @{
+        Kind     = $kind
+        Server   = if ($DbServer) { $DbServer } elseif ($rec -and $rec.server) { [string]$rec.server } else { $null }
+        Name     = if ($DbName) { $DbName } elseif ($rec -and $rec.name) { [string]$rec.name } else { $null }
+        User     = if ($DbUser) { $DbUser } elseif ($rec -and $rec.user) { [string]$rec.user } else { $null }
+        # Пустой пароль = отсутствующий: ключ отдаём только когда пароль есть.
+        Password = if ($DbPassword) { $DbPassword } elseif ($rec -and $rec.password) { [string]$rec.password } else { $null }
+    }
+}
+
+function Get-IbcmdConnectionArgs {
+    # Файловая база - --db-path. Серверная - прямое подключение к СУБД; вход в саму ИБ идёт
+    # через --user/--password, которые добавляет сборщик команды ibcmd. $null, если соединение не собрать.
+    param([hashtable]$Db)
+    if ($InfoBasePath) { return @("--db-path=$InfoBasePath") }
+    if (-not $Db.Kind -or -not $Db.Server -or -not $Db.Name) { return $null }
+    $a = @("--dbms=$($Db.Kind)", "--db-server=$($Db.Server)", "--db-name=$($Db.Name)")
+    if ($Db.User) { $a += "--db-user=$($Db.User)" }
+    if ($Db.Password) { $a += "--db-pwd=$($Db.Password)" }
+    return $a
+}
+
 # --- Resolve V8Path ---
 function Find-ProjectV8Path {
     # v8path записи базы сильнее корневого: в одном проекте базы живут на разных версиях
@@ -417,17 +493,30 @@ function Test-FileIbCreated {
 $engine = if ((Split-Path $V8Path -Leaf) -match '^ibcmd') { "ibcmd" } else { "1cv8" }
 
 # --- Resolve additional arguments for the selected engine ---
-$argHints = @{ '/F' = '-InfoBasePath'; '/S' = '-InfoBaseServer + -InfoBaseRef'; '/UseTemplate' = '-UseTemplate'; '/AddToList' = '-AddToList'; '--db-path' = '-InfoBasePath'; '--load' = '-UseTemplate'; '--restore' = '-UseTemplate' }
+$argHints = @{ '/F' = '-InfoBasePath'; '/S' = '-InfoBaseServer + -InfoBaseRef'; '/UseTemplate' = '-UseTemplate'; '/AddToList' = '-AddToList'; '--db-path' = '-InfoBasePath'; '--load' = '-UseTemplate'; '--restore' = '-UseTemplate'; '--dbms' = '-Dbms'; '--db-server' = '-DbServer'; '--db-name' = '-DbName'; '--db-user' = '-DbUser'; '--db-pwd' = '-DbPassword' }
 $extraArgs = @(Resolve-ExtraArgs $engine $AdditionalV8Arguments $AdditionalIbcmdArguments $argHints)
 
 # --- Validate connection ---
-if ($engine -eq "ibcmd") {
-    if (-not $InfoBasePath) {
-        Write-Host "Error: ibcmd supports file infobases only (use -InfoBasePath)" -ForegroundColor Red
-        exit 1
-    }
-} elseif (-not $InfoBasePath -and (-not $InfoBaseServer -or -not $InfoBaseRef)) {
+if ($engine -ne "ibcmd" -and -not $InfoBasePath -and (-not $InfoBaseServer -or -not $InfoBaseRef)) {
     Write-Host "Error: specify -InfoBasePath or -InfoBaseServer + -InfoBaseRef" -ForegroundColor Red
+    exit 1
+}
+$script:dbSettings = Resolve-DatabaseSettings
+if ($InfoBasePath -and ($Dbms -or $DbServer -or $DbName -or $DbUser -or $DbPassword)) {
+    # Файловая база подключается по пути; эти реквизиты при ней были бы молча потеряны.
+    Write-Host "Error: -Dbms/-DbServer/-DbName/-DbUser/-DbPassword apply to a server base; this connection is a file base (-InfoBasePath)" -ForegroundColor Red
+    exit 1
+}
+if ($engine -ne "ibcmd" -and ($Dbms -or $DbServer -or $DbName -or $DbUser -or $DbPassword)) {
+    # Конфигуратор серверной базы достигает через /S server/ref; реквизиты СУБД нужны только ibcmd.
+    Write-Host "Error: -Dbms/-DbServer/-DbName/-DbUser/-DbPassword are used by ibcmd only; the selected engine is 1cv8" -ForegroundColor Red
+    exit 1
+}
+# У ibcmd нет адреса кластера, поэтому серверная база подключается только прямыми реквизитами
+# СУБД - из параметров навыка или из блока dbms записи базы.
+$script:ibConn = if ($engine -eq "ibcmd") { Get-IbcmdConnectionArgs $script:dbSettings } else { $null }
+if ($engine -eq "ibcmd" -and -not $script:ibConn) {
+    Write-Host "Error: cannot connect to the server base with ibcmd - pass DBMS parameters (-Dbms, -DbServer, -DbName, -DbUser, -DbPassword) or put them into the dbms block of the base record" -ForegroundColor Red
     exit 1
 }
 
@@ -443,8 +532,11 @@ New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 
 try {
     if ($engine -eq "ibcmd") {
-        # --- ibcmd branch (file infobase only) ---
-        $arguments = @("infobase", "create", "--db-path=$InfoBasePath", "--create-database")
+        # --- ibcmd branch (infobase create) ---
+        $arguments = @("infobase", "create")
+        # Файловая база - --db-path, серверная - прямые реквизиты СУБД; у ibcmd нет адреса кластера.
+        $arguments += $script:ibConn
+        $arguments += "--create-database"
         if ($UseTemplate) {
             if ([System.IO.Path]::GetExtension($UseTemplate) -ieq ".dt") {
                 $arguments += "--restore=$UseTemplate"
@@ -454,14 +546,19 @@ try {
         }
         $arguments += "--data=$tempDir"
         $arguments += $extraArgs
-        Write-Host "Running: ibcmd $((Format-ArgsForDisplay $arguments $engine) -join ' ')"
+        Write-Host "Running: ibcmd $(Protect-Secrets ((Format-ArgsForDisplay $arguments $engine) -join ' ') @($script:dbSettings.Password))"
         $__ib = Invoke-PlatformProcess $V8Path $arguments
         $output = $__ib.Output
         $exitCode = $__ib.ExitCode
-        $ibMissing = ($exitCode -eq 0) -and -not (Test-FileIbCreated $InfoBasePath)
+        # Постусловие по файлу 1Cv8.1CD проверяем только у файловой базы: у серверной её нет.
+        $ibMissing = ($exitCode -eq 0) -and $InfoBasePath -and -not (Test-FileIbCreated $InfoBasePath)
         if ($ibMissing) { $exitCode = 1 }
         if ($exitCode -eq 0) {
-            Write-Host "Information base created successfully: $InfoBasePath" -ForegroundColor Green
+            if ($InfoBasePath) {
+                Write-Host "Information base created successfully: $InfoBasePath" -ForegroundColor Green
+            } else {
+                Write-Host "Information base created successfully: $($script:dbSettings.Server)/$($script:dbSettings.Name)" -ForegroundColor Green
+            }
         } elseif ($ibMissing) {
             Write-Host "Error: exit code 0 but 1Cv8.1CD is missing or empty at $InfoBasePath — information base was not created" -ForegroundColor Red
         } else {
