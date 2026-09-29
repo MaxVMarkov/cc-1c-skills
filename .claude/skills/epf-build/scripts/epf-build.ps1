@@ -150,7 +150,9 @@ $script:V8BatchKeys = @(
 )
 
 # Без -UserName ibcmd на Windows читает учётные данные из консоли и зависает; закрытый stdin не помогает.
-$script:IbcmdNoUserHint = "[ibcmd] No -UserName/-Password given; the infobase may require authentication. On Windows ibcmd reads credentials from the console (stdin is ignored), so this call may block instead of failing. If it does not return promptly, abort and re-run with -UserName and -Password."
+$script:IbcmdNoUserTimeoutSec = 10
+$script:IbcmdNoUserHint = "[ibcmd] No -UserName/-Password given; the infobase may require authentication. On Windows ibcmd reads credentials from the console (stdin is ignored), so this call may block instead of failing. Re-run with -UserName and -Password."
+$script:IbcmdAborted = "[ibcmd] Aborted after $script:IbcmdNoUserTimeoutSec s without answering - ibcmd was waiting for the infobase login at the console. Pass -UserName and -Password."
 
 $script:IbcmdOwnedKeys = @(
     '--db-path', '--data', '--out', '--file', '--load', '--restore',
@@ -464,16 +466,16 @@ function ConvertFrom-PlatformBytes {
 }
 
 function Invoke-PlatformProcess {
-    # Run the platform non-interactively and capture its console output. A closed stdin pipe
-    # (EOF) makes an auth prompt fast-fail instead of hanging; capturing keeps the child's
-    # text out of our stream until we print it labelled (and out of the wrong encoding).
-    # Returns @{ Output; ExitCode }.
+    # Run the platform non-interactively and capture its console output. Capturing keeps the
+    # child's text out of our stream until we print it labelled (and out of the wrong encoding).
+    # Returns @{ Output; ExitCode; TimedOut }. A -TimeoutSec run that expires is killed and
+    # reported with ExitCode -1, keeping whatever it had already printed.
     #
     # Quoting differs by engine, so the caller says which it built:
     #   ibcmd    — tokens are bare (--db-path=C:\a b), the whole token gets quoted here;
     #   1cv8     — -PreQuoted: the caller already put quotes inside the token (File="C:\a b"),
     #              which is where 1C's own parser expects them; quoting again breaks the value.
-    param([string]$Exe, [string[]]$ProcArgs, [switch]$PreQuoted)
+    param([string]$Exe, [string[]]$ProcArgs, [switch]$PreQuoted, [int]$TimeoutSec = 0)
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $Exe
     $psi.Arguments = if ($PreQuoted) {
@@ -488,18 +490,38 @@ function Invoke-PlatformProcess {
     $psi.RedirectStandardError = $true
     $p = [System.Diagnostics.Process]::Start($psi)
     $p.StandardInput.Close()
-    # stderr is drained in parallel: reading the streams one after another deadlocks
-    # as soon as the other one fills its pipe buffer.
-    $errMs = New-Object System.IO.MemoryStream
-    $errTask = $p.StandardError.BaseStream.CopyToAsync($errMs)
+    # Both streams are drained in parallel: reading them one after another deadlocks as soon as
+    # the other fills its pipe buffer, and a bounded run has to be able to wait on them by timer.
     $outMs = New-Object System.IO.MemoryStream
-    $p.StandardOutput.BaseStream.CopyTo($outMs)
-    $errTask.Wait()
-    $p.WaitForExit()
+    $errMs = New-Object System.IO.MemoryStream
+    $outTask = $p.StandardOutput.BaseStream.CopyToAsync($outMs)
+    $errTask = $p.StandardError.BaseStream.CopyToAsync($errMs)
+    $drain = @($outTask, $errTask)
+    $timedOut = $false
+    if ($TimeoutSec -gt 0) {
+        # The pipes close only when the child dies, so waiting on the drain tasks is waiting
+        # for the process itself.
+        $deadline = (Get-Date).AddSeconds($TimeoutSec)
+        while (-not [System.Threading.Tasks.Task]::WaitAll($drain, 250) -and (Get-Date) -lt $deadline) { }
+        if (-not [System.Threading.Tasks.Task]::WaitAll($drain, 0)) {
+            $timedOut = $true
+            # Killing the whole tree exists only on .NET Core; Windows PowerShell has the child.
+            try { $p.Kill($true) } catch { try { $p.Kill() } catch { } }
+            [void]$p.WaitForExit(5000)
+            [void][System.Threading.Tasks.Task]::WaitAll($drain, 2000)
+        }
+    } else {
+        [void][System.Threading.Tasks.Task]::WaitAll($drain)
+        $p.WaitForExit()
+    }
     $out = ConvertFrom-PlatformBytes $outMs.ToArray()
     $err = ConvertFrom-PlatformBytes $errMs.ToArray()
     if ($err) { $out += $err }
-    return [pscustomobject]@{ Output = $out; ExitCode = $p.ExitCode }
+    # A bounded run that expired printed the login prompt over and over — that is noise,
+    # and megabytes of it would bury the abort message.
+    if ($timedOut) { $out = '' }
+    $code = if ($timedOut -or -not $p.HasExited) { -1 } else { $p.ExitCode }
+    return [pscustomobject]@{ Output = $out; ExitCode = $code; TimedOut = $timedOut }
 }
 
 function Write-PlatformOutput {
@@ -822,9 +844,11 @@ try {
         $arguments += "--data=$tempDir"
         $arguments += $extraArgs
         Write-Host "Running: ibcmd $(Protect-Secrets ((Format-ArgsForDisplay $arguments $engine) -join ' ') @($Password, $UserName, $script:dbSettings.Password))"
-        if (-not $UserName -and -not $autoCreatedBase) { Write-Host $script:IbcmdNoUserHint -ForegroundColor Yellow }
+        $ibTimeout = if ($UserName -or $autoCreatedBase) { 0 } else { $script:IbcmdNoUserTimeoutSec }
+        if ($ibTimeout) { Write-Host $script:IbcmdNoUserHint -ForegroundColor Yellow }
 
-        $__ib = Invoke-PlatformProcess $V8Path $arguments
+        $__ib = Invoke-PlatformProcess $V8Path $arguments -TimeoutSec $ibTimeout
+        if ($__ib.TimedOut) { Write-Host $script:IbcmdAborted -ForegroundColor Red }
         $output = $__ib.Output
         $exitCode = $__ib.ExitCode
         $outMissing = ($exitCode -eq 0) -and -not (Test-OutputNonEmpty $OutputFile)

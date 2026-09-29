@@ -73,6 +73,8 @@ powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/../epf-dump/scripts/epf-dum
 В реестре баз реквизиты лежат в блоке `databases[].dbms` (`kind` / `server` / `name` / `user` /
 `password`) — явные параметры сильнее реестра. `-UserName`/`-Password` — вход в саму ИБ,
 `-DbUser`/`-DbPassword` — вход в СУБД; это разные учётные записи.
+Без `-UserName` `ibcmd` не выполняет команду, а требует вход в ИБ у консоли (закрытый stdin его
+не останавливает): навык прерывает такой запуск через 10 с.
 
 ## Примеры
 

@@ -365,11 +365,16 @@ def resolve_v8path(v8path, args):
     return v8path
 
 
+IBCMD_NOUSER_TIMEOUT_SEC = 10
+
 IBCMD_NOUSER_HINT = (
     "[ibcmd] No -UserName/-Password given; the infobase may require authentication. "
     "On Windows ibcmd reads credentials from the console (stdin is ignored), so this "
-    "call may block instead of failing. If it does not return promptly, abort and "
-    "re-run with -UserName and -Password.\n"
+    "call may block instead of failing. Re-run with -UserName and -Password.\n"
+)
+IBCMD_ABORTED = (
+    "[ibcmd] Aborted after %d s without answering - ibcmd was waiting for the infobase "
+    "login at the console. Pass -UserName and -Password.\n" % IBCMD_NOUSER_TIMEOUT_SEC
 )
 
 
@@ -475,15 +480,25 @@ def print_platform_output(result):
 def run_ibcmd(cmd, has_username=False, warn_no_user=True):
     """Run an ibcmd command non-interactively.
 
-    input="" closes stdin, but on Windows ibcmd reads the console itself, so a server
-    base without -UserName makes it re-print the login prompt forever — closed stdin does
-    not stop it. IBCMD_NOUSER_HINT warns about that before the call (model-facing).
+    input="" closes stdin, but on Windows ibcmd reads the console itself, so a call without a
+    login re-prints the prompt forever — closed stdin does not stop it (measured on 8.5.1.1529,
+    on both a file and a server base, including a base whose users are not defined at all).
+    Such a run is bounded and killed; a run that was given -UserName is expected to answer, so
+    it is never bounded. IBCMD_NOUSER_HINT warns about it before the call (model-facing).
     """
-    if warn_no_user and os.name == "nt" and not has_username:
+    bounded = warn_no_user and os.name == "nt" and not has_username
+    if bounded:
         sys.stdout.write(IBCMD_NOUSER_HINT)
         # flush нужен: stdout буферизуется при перенаправлении, а зависший запуск убивают
         sys.stdout.flush()
-    r = subprocess.run(cmd, input=b"", capture_output=True)
+    try:
+        r = subprocess.run(cmd, input=b"", capture_output=True,
+                           timeout=IBCMD_NOUSER_TIMEOUT_SEC if bounded else None)
+    except subprocess.TimeoutExpired as exc:
+        # subprocess.run уже убил ребёнка. В исключении лежит напечатанное — это повтор
+        # приглашения входа, мегабайсы шума, которые затопят сообщение о прерывании.
+        print(IBCMD_ABORTED, end="")
+        r = subprocess.CompletedProcess(cmd, -1, b"", b"")
     r.stdout = decode_platform_bytes(r.stdout)
     r.stderr = decode_platform_bytes(r.stderr)
     return r

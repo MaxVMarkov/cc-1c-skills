@@ -1,0 +1,42 @@
+{
+  "name": "list: ibcmd без -UserName не дожидается ответа — запуск прерван, имена взял Конфигуратор",
+  "osOnly": "win32",
+  "fakePlatform": {
+    "log": "﻿Альфа\r\n"
+  },
+  "preRun": [
+    {
+      "writeFile": {
+        "path": "ibcmd.cmd",
+        "content": "@echo off\r\nrem Без учётки ibcmd печатает приглашение входа у консоли по кругу и не завершается.\r\n:loop\r\necho name : HangExtension\r\nping -n 2 127.0.0.1 >nul\r\ngoto loop\r\n",
+        "executable": true
+      }
+    },
+    {
+      "writeFile": {
+        "path": "ibcmd.sh",
+        "content": "#!/bin/sh\nwhile :; do echo 'name : HangExtension'; sleep 2; done\n",
+        "executable": true
+      }
+    }
+  ],
+  "args_extra": [
+    "-V8Path",
+    "{fakePlatform}",
+    "-InfoBasePath",
+    "{workDir}/ib",
+    "-Command",
+    "list"
+  ],
+  "expect": {
+    "stdoutContains": [
+      "No -UserName",
+      "Aborted after 10 s",
+      "Running: 1cv8",
+      "Альфа",
+      "свойства недоступны"
+    ],
+    "stdoutNotContains": "HangExtension"
+  },
+  "noSnapshot": "навык ничего не пишет в рабочий каталог — проверяется прерывание зависшего ibcmd и откат на Конфигуратор"
+}

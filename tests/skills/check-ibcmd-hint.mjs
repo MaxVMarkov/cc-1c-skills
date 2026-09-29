@@ -1,22 +1,31 @@
 #!/usr/bin/env node
-// Инвариант: вызов ibcmd, который подключается к базе, обязательно предупреждает о зависании.
+// Инвариант: вызов ibcmd без учётки предупреждён И ограничен — он не может висеть вечно.
 //
 // Без --user ibcmd спрашивает «Имя пользователя:» у консоли, а не у stdin: закрытый stdin его
 // не останавливает, и пакетный запуск печатает строку по кругу, пока его не убьют (замерено на
-// 8.5.1.1529: 9.7–13 МБ за 25–30 с — одинаково на файловой и на серверной базе). Предупреждение
-// печатают оба порта: IBCMD_NOUSER_HINT в .py, $script:IbcmdNoUserHint в .ps1.
+// 8.5.1.1529: 9.7–13 МБ за 25–30 с; одинаково на файловой базе, на серверной и на базе, где
+// пользователи вообще не заданы). Поэтому порт сам ждёт $ibTimeout секунд, убивает процесс и
+// печатает, чего не хватило: -UserName и -Password.
 //
-// Три правила:
-//   1. Каждый `Write-Host "Running: ibcmd` в .ps1 через не больше трёх строк даёт строку с
-//      `IbcmdNoUserHint -ForegroundColor`, и файл определяет `$script:IbcmdNoUserHint`.
-//   2. Ни один `run_ibcmd(...)` не пишет `warn_no_user=False` без исключения из списка ниже —
-//      молчаливый подавляющий флаг и есть способ потерять предупреждение.
-//   3. `sys.stdout.write(IBCMD_NOUSER_HINT)` флашит stdout, а не stderr: подсказку печатают до
+// Правила для .ps1 (кроме исключений):
+//   1. Каждый `Write-Host "Running: ibcmd` через не больше трёх строк даёт строку с
+//      `IbcmdNoUserHint -ForegroundColor`.
+//   2. В пределах шести строк от него запуск идёт с `-TimeoutSec`, а прерывание печатает
+//      `$script:IbcmdAborted`. Ограничение и сообщение бессмысленны друг без друга.
+//   3. Файл определяет `$script:IbcmdNoUserTimeoutSec`, `$script:IbcmdNoUserHint` и
+//      `$script:IbcmdAborted`.
+//
+// Правила для .py:
+//   4. Ни один `run_ibcmd(...)` не пишет `warn_no_user=False` без исключения — молчаливый
+//      подавляющий флаг и есть способ потерять предупреждение.
+//   5. `sys.stdout.write(IBCMD_NOUSER_HINT)` флашит stdout, а не stderr: подсказку печатают до
 //      запуска, который собираются убить, — flush не того потока её теряет.
+//   6. Тело `def run_ibcmd` ограничивает запуск (`timeout=IBCMD_NOUSER_TIMEOUT_SEC if bounded
+//      else None`), перехватывает `subprocess.TimeoutExpired` и печатает `IBCMD_ABORTED`.
 //
-// Почему гард, а не рантайм-кейсы: зависание неотличимо в снапшоте (его надо убивать по таймеру),
-// а предупреждение живёт в 12 портах — проверять каждый кейсом дороже, чем одним статическим
-// правилом.
+// Зависание теперь проверяется и рантайм-кейсом (cases/db-cfe-admin/list-ibcmd-hang-aborted):
+// висячая заглушка ibcmd убивается по таймауту, и список берётся у Конфигуратора. Гард остаётся:
+// предупреждение и ограничение живут в 12 портах, проверять каждый кейсом дороже одного правила.
 //
 // Запуск: node tests/skills/check-ibcmd-hint.mjs
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
@@ -26,12 +35,14 @@ import { dirname, join } from 'node:path';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SKILLS = join(ROOT, '.claude', 'skills');
 
-// Поднятие базы с нуля: аутентифицироваться там не у кого, предупреждение — шум.
+// Поднятие базы с нуля: аутентифицироваться там не у кого, предупреждение — шум, а таймаут
+// обрезал бы законно долгий create.
 const SUPPRESS_OK = new Set(['db-create.ps1', 'db-create.py', 'stub-db-create.py']);
 const HINT_WINDOW = 3;
+const CALL_WINDOW = 6;
 
 const errors = [];
-let psSites = 0, pyCalls = 0, hintWrites = 0;
+let psSites = 0, pyCalls = 0, hintWrites = 0, boundedBodies = 0;
 
 const strip = (s) => s.replace(/^\uFEFF/, '').split(/\r?\n/);
 
@@ -45,6 +56,8 @@ for (const skill of readdirSync(SKILLS)) {
     if (file.endsWith('.ps1')) {
       const lines = strip(readFileSync(path, 'utf8'));
       const defines = lines.some((l) => /^\$script:IbcmdNoUserHint\s*=/.test(l));
+      const definesTimeout = lines.some((l) => /^\$script:IbcmdNoUserTimeoutSec\s*=/.test(l));
+      const definesAborted = lines.some((l) => /^\$script:IbcmdAborted\s*=/.test(l));
       lines.forEach((l, i) => {
         if (!/Write-Host "Running: ibcmd/.test(l)) return;
         psSites++;
@@ -56,6 +69,21 @@ for (const skill of readdirSync(SKILLS)) {
         }
         if (!defines) {
           errors.push(`${skill}/${file}: используется $script:IbcmdNoUserHint, но он нигде не определён`);
+        }
+        const launch = lines.slice(i + 1, i + 1 + CALL_WINDOW);
+        if (!launch.some((n) => /Invoke-PlatformProcess\b.*-TimeoutSec \$(?:ibTimeout|timeout)\b/.test(n))) {
+          errors.push(`${skill}/${file}:${i + 1}: запуск ibcmd не ограничен по времени — без -UserName он `
+            + 'висит вечно, вызов обязан идти с `-TimeoutSec $ibTimeout`');
+        }
+        if (!launch.some((n) => /Write-Host \$script:IbcmdAborted -ForegroundColor Red/.test(n))) {
+          errors.push(`${skill}/${file}:${i + 1}: прерывание зависшего ibcmd ни о чём не сообщает — нужен `
+            + '`if ($res.TimedOut) { Write-Host $script:IbcmdAborted -ForegroundColor Red }`');
+        }
+        if (!definesTimeout) {
+          errors.push(`${skill}/${file}: $script:IbcmdNoUserTimeoutSec используется, но не определён`);
+        }
+        if (!definesAborted) {
+          errors.push(`${skill}/${file}: $script:IbcmdAborted используется, но не определён`);
         }
       });
       continue;
@@ -85,13 +113,44 @@ for (const skill of readdirSync(SKILLS)) {
           + 'буферизованный stdout не дойдёт до убийства процесса');
       }
     });
+    // Тело run_ibcmd: от def до следующего def верхнего уровня.
+    lines.forEach((l, i) => {
+      if (!/^def run_ibcmd\(/.test(l)) return;
+      let end = lines.length;
+      for (let j = i + 1; j < lines.length; j++) {
+        if (/^def /.test(lines[j])) { end = j; break; }
+      }
+      const body = lines.slice(i, end).join('\n');
+      if (exempt) return;
+      boundedBodies++;
+      if (!/timeout=IBCMD_NOUSER_TIMEOUT_SEC if bounded else None/.test(body)) {
+        errors.push(`${skill}/${file}:${i + 1}: run_ibcmd запускает ibcmd без ограничения — `
+          + 'нужен `timeout=IBCMD_NOUSER_TIMEOUT_SEC if bounded else None`');
+      }
+      if (!/except subprocess\.TimeoutExpired/.test(body)) {
+        errors.push(`${skill}/${file}:${i + 1}: run_ibcmd не перехватывает subprocess.TimeoutExpired — `
+          + 'убитый по таймауту процесс выйдет исключением из навыка');
+      }
+      if (!/print\(IBCMD_ABORTED, end=""\)/.test(body)) {
+        errors.push(`${skill}/${file}:${i + 1}: прерывание зависшего ibcmd ни о чём не сообщает — `
+          + 'нужен `print(IBCMD_ABORTED, end="")`');
+      }
+    });
+    if (!exempt && lines.some((l) => /^def run_ibcmd\(/.test(l))) {
+      if (!lines.some((l) => /^IBCMD_NOUSER_TIMEOUT_SEC = /.test(l))) {
+        errors.push(`${skill}/${file}: IBCMD_NOUSER_TIMEOUT_SEC используется, но не определён`);
+      }
+      if (!lines.some((l) => /^IBCMD_ABORTED = \(/.test(l))) {
+        errors.push(`${skill}/${file}: IBCMD_ABORTED используется, но не определён`);
+      }
+    }
   }
 }
 
 console.log(`Проверено: точек запуска ibcmd в .ps1 — ${psSites}, вызовов run_ibcmd в .py — ${pyCalls}, `
-  + `печатей подсказки в .py — ${hintWrites}`);
+  + `печатей подсказки в .py — ${hintWrites}, ограниченных тел run_ibcmd — ${boundedBodies}`);
 if (errors.length === 0) {
-  console.log('OK — каждый вызов ibcmd предупреждает о зависании, подсказка флашит свой поток.');
+  console.log('OK — каждый вызов ibcmd без учётки предупреждён и ограничен по времени.');
   process.exit(0);
 }
 console.log(`\n${errors.length} НАРУШЕНИЙ:`);
