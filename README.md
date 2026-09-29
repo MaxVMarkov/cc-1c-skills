@@ -10,7 +10,7 @@
 
 > **PS** — версия со скриптами на PowerShell (стандартная, для Windows). **Py** — версия со скриптами на Python (если PowerShell не подходит). Можно начать с **PS** — это основной вариант.
 
-**Claude Code** [PS](https://github.com/Nikolay-Shirokov/cc-1c-skills/tree/main) · [Py](https://github.com/Nikolay-Shirokov/cc-1c-skills/tree/port-claude-code-py) — **Cursor** [PS](https://github.com/Nikolay-Shirokov/cc-1c-skills/tree/port-cursor) · [Py](https://github.com/Nikolay-Shirokov/cc-1c-skills/tree/port-cursor-py) — **Codex** [PS](https://github.com/Nikolay-Shirokov/cc-1c-skills/tree/port-codex) · [Py](https://github.com/Nikolay-Shirokov/cc-1c-skills/tree/port-codex-py) — [Другие платформы →](#поддерживаемые-платформы)
+**Claude Code** [PS](https://github.com/Nikolay-Shirokov/cc-1c-skills/tree/main) · [Py](https://github.com/Nikolay-Shirokov/cc-1c-skills/tree/port-claude-code-py) — **Cursor** [PS](https://github.com/Nikolay-Shirokov/cc-1c-skills/tree/port-cursor) · [Py](https://github.com/Nikolay-Shirokov/cc-1c-skills/tree/port-cursor-py) — **Codex** [PS](https://github.com/Nikolay-Shirokov/cc-1c-skills/tree/port-codex) · [Py](https://github.com/Nikolay-Shirokov/cc-1c-skills/tree/port-codex-py) — **Qoder** [PS](https://github.com/Nikolay-Shirokov/cc-1c-skills/tree/port-qoder) · [Py](https://github.com/Nikolay-Shirokov/cc-1c-skills/tree/port-qoder-py) — [Другие платформы →](#поддерживаемые-платформы)
 
 ## Быстрый старт
 
@@ -106,11 +106,14 @@ python tools/cc-1c-skills/scripts/switch.py
 | Roo Code | `.roo/skills/` | [port-roo](https://github.com/Nikolay-Shirokov/cc-1c-skills/tree/port-roo) | [port-roo-py](https://github.com/Nikolay-Shirokov/cc-1c-skills/tree/port-roo-py) |
 | Windsurf | `.windsurf/skills/` | [port-windsurf](https://github.com/Nikolay-Shirokov/cc-1c-skills/tree/port-windsurf) | [port-windsurf-py](https://github.com/Nikolay-Shirokov/cc-1c-skills/tree/port-windsurf-py) |
 | Yandex Code Assistant | `.codeassistant/skills/` | [port-codeassistant](https://github.com/Nikolay-Shirokov/cc-1c-skills/tree/port-codeassistant) | [port-codeassistant-py](https://github.com/Nikolay-Shirokov/cc-1c-skills/tree/port-codeassistant-py) |
+| Qoder | `.qoder/skills/` | [port-qoder](https://github.com/Nikolay-Shirokov/cc-1c-skills/tree/port-qoder) | [port-qoder-py](https://github.com/Nikolay-Shirokov/cc-1c-skills/tree/port-qoder-py) |
 | Agent Skills | `.agents/skills/` | [port-agents](https://github.com/Nikolay-Shirokov/cc-1c-skills/tree/port-agents) | [port-agents-py](https://github.com/Nikolay-Shirokov/cc-1c-skills/tree/port-agents-py) |
 
 Готовые ветки `port-*` пересобираются автоматически на каждое изменение в навыках. Если нужна свежая сборка прямо сейчас — соберите [локально через `switch.py`](#альтернативный-способ--собрать-локально-через-switchpy).
 
 Некоторые платформы (Augment, Cline, VS Code/Copilot) также сканируют `.claude/skills/` как fallback — для них достаточно `main`.
+
+Qoder, наоборот, `.claude/skills/` не смотрит и требует свой каталог. Кроме проектного `.qoder/skills/` он сканирует пользовательский `~/.qoder/skills/` (Windows: `%USERPROFILE%\.qoder\skills\`) — навыки оттуда доступны во всех проектах сразу; у `switch.py` такой установки нет, он всегда пишет в проект через `--project-dir`.
 
 <a id="альтернативный-способ--собрать-локально-через-switchpy"></a>
 #### Альтернативный способ — собрать локально через `switch.py`

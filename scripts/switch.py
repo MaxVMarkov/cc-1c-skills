@@ -3,7 +3,7 @@
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 """
 Копирует (или создаёт ссылки на) навыки из .claude/skills/ на другие AI-платформы
-(Cursor, Codex, Copilot, Kiro, Gemini CLI, OpenCode, Windsurf, Kilo Code, Cline,
+(Cursor, Codex, Copilot, Kiro, Gemini CLI, OpenCode, Qoder, Windsurf, Kilo Code, Cline,
 Roo Code, Augment и др.) с перезаписью путей, и/или переключает рантайм (PowerShell ↔ Python).
 
 Использование:
@@ -38,6 +38,9 @@ PLATFORMS = {
     'kilo':        '.kilocode/skills',
     'kiro':        '.kiro/skills',
     'opencode':    '.opencode/skills',
+    # Qoder сканирует проектный .qoder/skills/, но ${CLAUDE_SKILL_DIR} не подставляет —
+    # ему нужен развёрнутый путь, как всем платформам кроме claude-code.
+    'qoder':       '.qoder/skills',
     'roo':         '.roo/skills',
     'windsurf':    '.windsurf/skills',
 }
@@ -615,6 +618,7 @@ def interactive_mode():
         ("OpenAI Codex",   ".codex/skills/"),
         ("Gemini CLI",     ".gemini/skills/"),
         ("OpenCode",       ".opencode/skills/"),
+        ("Qoder",          ".qoder/skills/"),
         ("Roo Code",       ".roo/skills/"),
         ("Windsurf",       ".windsurf/skills/"),
         ("Code Assistant", ".codeassistant/skills/"),
@@ -622,7 +626,7 @@ def interactive_mode():
     ]
     platform_keys = [
         'claude-code', 'augment', 'cline', 'cursor', 'copilot', 'kilo',
-        'kiro', 'codex', 'gemini', 'opencode', 'roo', 'windsurf',
+        'kiro', 'codex', 'gemini', 'opencode', 'qoder', 'roo', 'windsurf',
         'codeassistant', 'agents',
     ]
 

@@ -159,6 +159,16 @@ jobs:
             branch: port-agents-py
             label: Agent Skills
             target_dir: .agents/skills
+          - platform: qoder
+            runtime: powershell
+            branch: port-qoder
+            label: Qoder
+            target_dir: .qoder/skills
+          - platform: qoder
+            runtime: python
+            branch: port-qoder-py
+            label: Qoder
+            target_dir: .qoder/skills
 
     steps:
       - name: Checkout main

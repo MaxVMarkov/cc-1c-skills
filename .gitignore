@@ -55,6 +55,7 @@ tests/web-test/_suite-root/prepare-ran.txt
 .kilocode/
 .kiro/
 .opencode/
+.qoder/skills/
 .roo/
 .windsurf/
 debug-templates.txt
