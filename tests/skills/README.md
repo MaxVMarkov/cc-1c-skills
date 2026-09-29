@@ -114,6 +114,7 @@ node tests/skills/check-inline-drift.mjs --list # реестр: семья → �
 | `check-positional-binding.mjs` | read-only навыки (`*-info` / `*-validate` / `cfe-diff`): позиционным остаётся только путь ко входу, лишний позиционный аргумент не перезаписывает указанный файл |
 | `check-agent-portability.mjs` | исходники навыков не привязаны к конкретному AI-агенту: единственная разрешённая форма — плейсхолдер `${CLAUDE_SKILL_DIR}/`, который разворачивает `scripts/switch.py` |
 | `check-error-streams.mjs` | сообщения об ошибках идут в один и тот же поток в обоих портах навыка (соответствие из `docs/python-porting-guide.md`) |
+| `check-ibcmd-hint.mjs` | каждый запуск `ibcmd` против базы предупреждает о зависании без `--user` (подсказка в обоих портах, `flush` своего потока) |
 | `check-nonascii-fs.mjs` | `fsutil`: удаление и копирование держат не-ASCII пути (кириллический `%TEMP%`, кириллические имена объектов 1С), обе копии модуля не разошлись |
 | `check-ps-portability.mjs` | `.ps1` навыков не читают `$env:TEMP`/`$env:TMP`; скрипты `db-*`/`epf-*`, запускающие платформу, держат верхнеуровневый `trap { … exit 1 }` |
 

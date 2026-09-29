@@ -1,0 +1,68 @@
+{
+  "name": "list: серверная база через СУБД — имена и свойства берёт ibcmd, реквизиты скрыты",
+  "fakePlatform": {
+    "log": "﻿Альфа\r\n"
+  },
+  "preRun": [
+    {
+      "writeFile": {
+        "path": "ibcmd.cmd",
+        "content": "@echo off\r\necho name                         : \"Альфа\"\r\necho version                      : \r\necho active                       : yes\r\necho purpose                      : add-on\r\necho safe-mode                    : no\r\necho unsafe-action-protection     : no\r\necho used-in-distributed-infobase : no\r\necho scope                        : infobase\r\necho.\r\necho name                         : \"Бета\"\r\necho version                      : 1.2\r\necho active                       : no\r\necho purpose                      : patch\r\necho safe-mode                    : yes\r\necho unsafe-action-protection     : yes\r\necho used-in-distributed-infobase : yes\r\necho scope                        : data-separation\r\nexit /b 0\r\n",
+        "executable": true
+      }
+    },
+    {
+      "writeFile": {
+        "path": "ibcmd.sh",
+        "content": "#!/bin/sh\ncat <<'EOF'\nname                         : \"Альфа\"\nversion                      : \nactive                       : yes\npurpose                      : add-on\nsafe-mode                    : no\nunsafe-action-protection     : no\nused-in-distributed-infobase : no\nscope                        : infobase\n\nname                         : \"Бета\"\nversion                      : 1.2\nactive                       : no\npurpose                      : patch\nsafe-mode                    : yes\nunsafe-action-protection     : yes\nused-in-distributed-infobase : yes\nscope                        : data-separation\nEOF\nexit 0\n",
+        "executable": true
+      }
+    }
+  ],
+  "args_extra": [
+    "-V8Path",
+    "{fakePlatform}",
+    "-InfoBaseServer",
+    "srv",
+    "-InfoBaseRef",
+    "Test",
+    "-UserName",
+    "Админ",
+    "-Password",
+    "ibpwd",
+    "-Dbms",
+    "MSSQLServer",
+    "-DbServer",
+    "dbhost",
+    "-DbName",
+    "TestDb",
+    "-DbUser",
+    "sqladmin",
+    "-DbPassword",
+    "sqlpwd",
+    "-Command",
+    "list"
+  ],
+  "expect": {
+    "stdoutContains": [
+      "--dbms=MSSQLServer",
+      "--db-server=dbhost",
+      "--db-name=TestDb",
+      "--db-user=***",
+      "--db-pwd=***",
+      "Альфа",
+      "Бета",
+      "Дополнение",
+      "Исправление",
+      "Область данных"
+    ],
+    "stdoutNotContains": [
+      "sqladmin",
+      "sqlpwd",
+      "ibpwd",
+      "свойства недоступны",
+      "Running: 1cv8"
+    ]
+  },
+  "noSnapshot": "навык ничего не пишет в рабочий каталог — проверяется соединение ibcmd к серверной базе"
+}

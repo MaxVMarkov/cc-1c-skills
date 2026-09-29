@@ -1,0 +1,34 @@
+{
+  "name": "Неизвестный вид СУБД в реестре — отказ до вызова ibcmd",
+  "fakePlatform": {
+    "log": ""
+  },
+  "cwd": "workDir",
+  "preRun": [
+    {
+      "writeFile": {
+        "path": ".v8-project.json",
+        "content": "{\n  \"databases\": [\n    {\n      \"id\": \"srv\",\n      \"type\": \"server\",\n      \"server\": \"srv01\",\n      \"ref\": \"MyDB\",\n      \"dbms\": { \"kind\": \"MySQL\", \"server\": \"h\", \"name\": \"n\" }\n    }\n  ]\n}",
+        "executable": false
+      }
+    }
+  ],
+  "args_extra": [
+    "-V8Path",
+    "{fakePlatform}",
+    "-InfoBaseServer",
+    "srv01",
+    "-InfoBaseRef",
+    "MyDB",
+    "-Command",
+    "list"
+  ],
+  "expectError": true,
+  "expect": {
+    "stdoutContains": [
+      "unknown DBMS kind 'MySQL'",
+      "MSSQLServer, PostgreSQL, IBMDB2, OracleDatabase"
+    ]
+  },
+  "noSnapshot": "негативный кейс — навык отказывает до вызова платформы"
+}

@@ -1,0 +1,47 @@
+{
+  "name": "Серверная база без -UserName: предупреждение о зависании ibcmd печатается до запуска",
+  "osOnly": "win32",
+  "fakePlatform": {
+    "log": "﻿Альфа\r\n"
+  },
+  "preRun": [
+    {
+      "writeFile": {
+        "path": "ibcmd.cmd",
+        "content": "@echo off\r\necho name                         : \"Альфа\"\r\necho purpose                      : customization\r\necho active                       : yes\r\necho safe-mode                    : no\r\necho unsafe-action-protection     : no\r\necho used-in-distributed-infobase : no\r\necho scope                        : infobase\r\nexit /b 0\r\n",
+        "executable": true
+      }
+    },
+    {
+      "writeFile": {
+        "path": "ibcmd.sh",
+        "content": "#!/bin/sh\ncat <<'EOF'\nname                         : \"Альфа\"\npurpose                      : customization\nactive                       : yes\nsafe-mode                    : no\nunsafe-action-protection     : no\nused-in-distributed-infobase : no\nscope                        : infobase\nEOF\nexit 0\n",
+        "executable": true
+      }
+    }
+  ],
+  "args_extra": [
+    "-V8Path",
+    "{fakePlatform}",
+    "-InfoBaseServer",
+    "srv",
+    "-InfoBaseRef",
+    "Test",
+    "-Dbms",
+    "MSSQLServer",
+    "-DbServer",
+    "dbhost",
+    "-DbName",
+    "TestDb",
+    "-Command",
+    "list"
+  ],
+  "expect": {
+    "stdoutContains": [
+      "No -UserName",
+      "may block instead of failing",
+      "Альфа"
+    ]
+  },
+  "noSnapshot": "навык ничего не пишет в рабочий каталог — проверяется предупреждение до запуска ibcmd"
+}

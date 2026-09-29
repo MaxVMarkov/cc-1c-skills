@@ -1,0 +1,24 @@
+{
+  "name": "Ключ СУБД в дополнительных аргументах ibcmd — отказ, навык владеет им сам",
+  "fakePlatform": {
+    "log": ""
+  },
+  "args_extra": [
+    "-V8Path",
+    "{fakePlatform}",
+    "-InfoBasePath",
+    "{workDir}/ib",
+    "-Command",
+    "list",
+    "-AdditionalIbcmdArguments",
+    "--dbms=MSSQLServer"
+  ],
+  "expectError": true,
+  "expect": {
+    "stdoutContains": [
+      "--dbms is controlled by the skill",
+      "use -Dbms"
+    ]
+  },
+  "noSnapshot": "негативный кейс — навык отказывает до вызова платформы"
+}

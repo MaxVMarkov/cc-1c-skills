@@ -1,0 +1,56 @@
+{
+  "name": "Реквизиты СУБД из записи базы в реестре",
+  "fakePlatform": {
+    "log": "﻿Альфа\r\n"
+  },
+  "cwd": "workDir",
+  "preRun": [
+    {
+      "writeFile": {
+        "path": ".v8-project.json",
+        "content": "{\n  \"databases\": [\n    {\n      \"id\": \"srv\",\n      \"type\": \"server\",\n      \"server\": \"srv01\",\n      \"ref\": \"MyDB\",\n      \"dbms\": {\n        \"kind\": \"postgresql\",\n        \"server\": \"pgsqlhost\",\n        \"name\": \"mydb\",\n        \"user\": \"srvuser\",\n        \"password\": \"srvpass\"\n      }\n    }\n  ]\n}",
+        "executable": false
+      }
+    },
+    {
+      "writeFile": {
+        "path": "ibcmd.cmd",
+        "content": "@echo off\r\necho name                         : \"Альфа\"\r\necho purpose                      : customization\r\necho active                       : yes\r\necho safe-mode                    : no\r\necho unsafe-action-protection     : no\r\necho used-in-distributed-infobase : no\r\necho scope                        : infobase\r\nexit /b 0\r\n",
+        "executable": true
+      }
+    },
+    {
+      "writeFile": {
+        "path": "ibcmd.sh",
+        "content": "#!/bin/sh\ncat <<'EOF'\nname                         : \"Альфа\"\npurpose                      : customization\nactive                       : yes\nsafe-mode                    : no\nunsafe-action-protection     : no\nused-in-distributed-infobase : no\nscope                        : infobase\nEOF\nexit 0\n",
+        "executable": true
+      }
+    }
+  ],
+  "args_extra": [
+    "-V8Path",
+    "{fakePlatform}",
+    "-InfoBaseServer",
+    "srv01",
+    "-InfoBaseRef",
+    "MyDB",
+    "-Command",
+    "list"
+  ],
+  "expect": {
+    "stdoutContains": [
+      "--dbms=PostgreSQL",
+      "--db-server=pgsqlhost",
+      "--db-name=mydb",
+      "--db-user=***",
+      "--db-pwd=***",
+      "Адаптация"
+    ],
+    "stdoutNotContains": [
+      "srvpass",
+      "srvuser",
+      "свойства недоступны"
+    ]
+  },
+  "noSnapshot": "навык ничего не пишет в рабочий каталог — проверяется чтение блока dbms из реестра баз"
+}

@@ -1,0 +1,43 @@
+{
+  "name": "list: серверная база без реквизитов СУБД — имена берёт Конфигуратор, свойства недоступны и объяснено почему",
+  "fakePlatform": {
+    "log": "﻿Альфа\r\n"
+  },
+  "preRun": [
+    {
+      "writeFile": {
+        "path": "ibcmd.cmd",
+        "content": "@echo off\r\necho name                         : \"НедолжноПоявиться\"\r\nexit /b 0\r\n",
+        "executable": true
+      }
+    },
+    {
+      "writeFile": {
+        "path": "ibcmd.sh",
+        "content": "#!/bin/sh\necho 'name                         : \"НедолжноПоявиться\"'\nexit 0\n",
+        "executable": true
+      }
+    }
+  ],
+  "args_extra": [
+    "-V8Path",
+    "{fakePlatform}",
+    "-InfoBaseServer",
+    "srv",
+    "-InfoBaseRef",
+    "Test",
+    "-Command",
+    "list"
+  ],
+  "expect": {
+    "stdoutContains": [
+      "Альфа",
+      "свойства недоступны: серверная база: ibcmd подключается к ней через СУБД"
+    ],
+    "stdoutNotContains": [
+      "НедолжноПоявиться",
+      "подключается к файловой базе"
+    ]
+  },
+  "noSnapshot": "навык ничего не пишет в рабочий каталог — проверяется отказ от ibcmd без реквизитов СУБД"
+}

@@ -507,13 +507,14 @@ def apply_check_enabled(disabled):
 def run_ibcmd(cmd, has_username=False, warn_no_user=True):
     """Run an ibcmd command non-interactively.
 
-    input="" closes stdin (EOF) so ibcmd's auth prompt fast-fails instead of hanging.
-    On Windows without -UserName ibcmd reads the console directly and may still block —
-    that residual case is flagged via IBCMD_NOUSER_HINT (model-facing).
+    input="" closes stdin, but on Windows ibcmd reads the console itself, so a server
+    base without -UserName makes it re-print the login prompt forever — closed stdin does
+    not stop it. IBCMD_NOUSER_HINT warns about that before the call (model-facing).
     """
     if warn_no_user and os.name == "nt" and not has_username:
         sys.stdout.write(IBCMD_NOUSER_HINT)
-        sys.stderr.flush()
+        # flush нужен: stdout буферизуется при перенаправлении, а зависший запуск убивают
+        sys.stdout.flush()
     r = subprocess.run(cmd, input=b"", capture_output=True)
     r.stdout = decode_platform_bytes(r.stdout)
     r.stderr = decode_platform_bytes(r.stderr)

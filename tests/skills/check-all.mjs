@@ -22,6 +22,7 @@ const GUARDS = [
   ['check-positional-binding.mjs', 'read-only навыки: позиционным остаётся только путь ко входу'],
   ['check-agent-portability.mjs', 'исходники навыков: без привязки к конкретному AI-агенту'],
   ['check-error-streams.mjs', 'сообщения об ошибках: один и тот же поток в обоих портах'],
+  ['check-ibcmd-hint.mjs', 'каждый вызов ibcmd предупреждает о зависании, подсказка флашит свой поток'],
   ['check-nonascii-fs.mjs', 'fsutil: удаление и копирование держат не-ASCII пути, копии не разошлись'],
   ['check-ps-portability.mjs', '.ps1: без $env:TEMP, необработанная ошибка у db-*/epf-* даёт код 1'],
 ];

@@ -49,6 +49,25 @@ param(
     [Parameter(Mandatory=$false)]
     [string]$Password,
 
+    # Реквизиты СУБД серверной базы. У ibcmd нет адреса кластера (/S server/ref), но есть прямое
+    # подключение к СУБД - только так серверной базе доступны свойства расширений. Явные параметры
+    # сильнее записи базы в .v8-project.json, как у хранилища.
+    [Parameter(Mandatory=$false)]
+    [ValidateSet("", "MSSQLServer", "PostgreSQL", "IBMDB2", "OracleDatabase")]
+    [string]$Dbms,
+
+    [Parameter(Mandatory=$false)]
+    [string]$DbServer,
+
+    [Parameter(Mandatory=$false)]
+    [string]$DbName,
+
+    [Parameter(Mandatory=$false)]
+    [string]$DbUser,
+
+    [Parameter(Mandatory=$false)]
+    [string]$DbPassword,
+
     [Parameter(Mandatory=$false)]
     [string]$Name,
 
@@ -207,6 +226,53 @@ function Protect-Secrets {
     return $Text
 }
 
+# --- Реквизиты СУБД серверной базы (для ibcmd) ---
+$script:DbmsKinds = [ordered]@{
+    'mssqlserver' = 'MSSQLServer'
+    'postgresql' = 'PostgreSQL'
+    'ibmdb2' = 'IBMDB2'
+    'oracledatabase' = 'OracleDatabase'
+}
+
+function Resolve-DatabaseSettings {
+    # Возвращает @{ Kind; Server; Name; User; Password }. Явные -Db* всегда сильнее реестра:
+    # запись базы ищется теми же параметрами соединения, что и хранилище.
+    # Родительский ключ - dbms (имя вида СУБД в терминологии 1С), в нём kind/server/name/user/password.
+    $dbRec = Find-ProjectDatabase
+    $rec = if ($dbRec -and $dbRec.dbms) { $dbRec.dbms } else { $null }
+    $kind = if ($Dbms) { $Dbms } elseif ($rec -and $rec.kind) { [string]$rec.kind } else { $null }
+    if ($kind) {
+        # Реестр пишут руками, поэтому вид принимаем в любом регистре; неизвестный отсеиваем здесь,
+        # а не показываем позже непостижимый отказ ibcmd.
+        $canon = $script:DbmsKinds[$kind.ToLower()]
+        if (-not $canon) {
+            Write-Host "Error: unknown DBMS kind '$kind' (expected: $($script:DbmsKinds.Values -join ', '))" -ForegroundColor Red
+            exit 1
+        }
+        $kind = $canon
+    }
+    return @{
+        Kind     = $kind
+        Server   = if ($DbServer) { $DbServer } elseif ($rec -and $rec.server) { [string]$rec.server } else { $null }
+        Name     = if ($DbName) { $DbName } elseif ($rec -and $rec.name) { [string]$rec.name } else { $null }
+        User     = if ($DbUser) { $DbUser } elseif ($rec -and $rec.user) { [string]$rec.user } else { $null }
+        # Пустой пароль = отсутствующий: ключ отдаём только когда пароль есть.
+        Password = if ($DbPassword) { $DbPassword } elseif ($rec -and $rec.password) { [string]$rec.password } else { $null }
+    }
+}
+
+function Get-IbcmdConnectionArgs {
+    # Файловая база - --db-path. Серверная - прямое подключение к СУБД; вход в саму ИБ идёт
+    # через --user/--password, которые добавляет Invoke-Ibcmd. $null, если соединение не собрать.
+    param([hashtable]$Db)
+    if ($InfoBasePath) { return @("--db-path=$InfoBasePath") }
+    if (-not $Db.Kind -or -not $Db.Server -or -not $Db.Name) { return $null }
+    $a = @("--dbms=$($Db.Kind)", "--db-server=$($Db.Server)", "--db-name=$($Db.Name)")
+    if ($Db.User) { $a += "--db-user=$($Db.User)" }
+    if ($Db.Password) { $a += "--db-pwd=$($Db.Password)" }
+    return $a
+}
+
 function Get-ExitAnnotation {
     # Annotate an abnormal process exit code so a crash isn't reported as a bare number.
     # A batch DESIGNER that crashes (e.g. missing license) may leave the infobase locked or
@@ -247,7 +313,8 @@ $script:V8BatchKeys = @(
 $script:IbcmdOwnedKeys = @(
     '--db-path', '--data', '--out', '--file', '--load', '--restore',
     '--import', '--export', '--apply', '--force', '--create-database',
-    '--user', '--password'
+    '--user', '--password', '--dbms', '--db-server', '--db-name',
+    '--db-user', '--db-pwd'
 )
 $script:V8SecretKeys = @('/P', '/UC', '/WSP', '/AWSP', '/ConfigurationRepositoryP')
 $script:IbcmdSecretKeys = @('--password', '--token', '--db-pwd')
@@ -648,9 +715,15 @@ if (-not $InfoBasePath -and (-not $InfoBaseServer -or -not $InfoBaseRef)) {
     Write-Host "Error: specify -InfoBasePath or -InfoBaseServer + -InfoBaseRef" -ForegroundColor Red
     exit 1
 }
+$script:dbSettings = Resolve-DatabaseSettings
+if ($InfoBasePath -and ($Dbms -or $DbServer -or $DbName -or $DbUser -or $DbPassword)) {
+    # Файловая база подключается по пути; эти реквизиты при ней были бы молча потеряны.
+    Write-Host "Error: -Dbms/-DbServer/-DbName/-DbUser/-DbPassword apply to a server base; this connection is a file base (-InfoBasePath)" -ForegroundColor Red
+    exit 1
+}
 
 # --- Дополнительные аргументы: у каждой утилиты свои ---
-$argHints = @{ '/F' = '-InfoBasePath'; '/S' = '-InfoBaseServer + -InfoBaseRef'; '/N' = '-UserName'; '/P' = '-Password'; '--db-path' = '-InfoBasePath'; '--user' = '-UserName'; '--password' = '-Password' }
+$argHints = @{ '/F' = '-InfoBasePath'; '/S' = '-InfoBaseServer + -InfoBaseRef'; '/N' = '-UserName'; '/P' = '-Password'; '--db-path' = '-InfoBasePath'; '--user' = '-UserName'; '--password' = '-Password'; '--dbms' = '-Dbms'; '--db-server' = '-DbServer'; '--db-name' = '-DbName'; '--db-user' = '-DbUser'; '--db-pwd' = '-DbPassword' }
 $v8Extra = @(Resolve-ExtraArgs '1cv8' $AdditionalV8Arguments @() $argHints)
 $ibExtra = @(Resolve-ExtraArgs 'ibcmd' @() $AdditionalIbcmdArguments $argHints)
 if ($AdditionalIbcmdArguments.Count -gt 0 -and @('check', 'delete') -contains $cmd) {
@@ -703,14 +776,23 @@ function Invoke-Designer {
     }
 }
 
+# Без -UserName ibcmd на Windows читает учётные данные из консоли и зависает; закрытый stdin не помогает.
+$script:IbcmdNoUserHint = "[ibcmd] No -UserName/-Password given; the infobase may require authentication. On Windows ibcmd reads credentials from the console (stdin is ignored), so this call may block instead of failing. If it does not return promptly, abort and re-run with -UserName and -Password."
+
 function Invoke-Ibcmd {
     param([string[]]$OpArgs)
+    $conn = Get-IbcmdConnectionArgs $script:dbSettings
+    if (-not $conn) {
+        Write-Host "Error: cannot connect to the server base with ibcmd - pass DBMS parameters (-Dbms, -DbServer, -DbName, -DbUser, -DbPassword) or put them into the dbms block of the base record" -ForegroundColor Red
+        exit 1
+    }
     $arguments = @($OpArgs)
-    $arguments += "--db-path=$InfoBasePath"
+    $arguments += $conn
     if ($UserName) { $arguments += "--user=$UserName" }
     if ($Password) { $arguments += "--password=$Password" }
     $arguments += $ibExtra
-    Write-Host "Running: ibcmd $(Protect-Secrets ((Format-ArgsForDisplay $arguments 'ibcmd') -join ' ') @($Password, $UserName))"
+    Write-Host "Running: ibcmd $(Protect-Secrets ((Format-ArgsForDisplay $arguments 'ibcmd') -join ' ') @($Password, $UserName, $script:dbSettings.Password, $script:dbSettings.User))"
+    if (-not $UserName) { Write-Host $script:IbcmdNoUserHint -ForegroundColor Yellow }
     $res = Invoke-PlatformProcess $ibcmdExe $arguments
     return @{ ExitCode = $res.ExitCode; Output = $res.Output }
 }
@@ -727,10 +809,12 @@ function Write-PlatformFailure {
     Write-PlatformOutput $Result.Output
 }
 
-# --- Свойства расширений: только ibcmd, и только для файловой базы ---
+# --- Свойства расширений: их читает только ibcmd ---
 function Get-PropertiesUnavailableReason {
-    if (-not $InfoBasePath) { return "свойства читает ibcmd, а он подключается к файловой базе (--db-path)" }
     if (-not $hasIbcmd) { return "рядом с 1cv8 нет ibcmd ($ibcmdExe) - эта установка платформы его не содержит" }
+    if (-not (Get-IbcmdConnectionArgs $script:dbSettings)) {
+        return "серверная база: ibcmd подключается к ней через СУБД - передайте -Dbms/-DbServer/-DbName (и -DbUser/-DbPassword) или добавьте блок dbms в запись базы"
+    }
     return $null
 }
 
@@ -754,13 +838,23 @@ function ConvertFrom-IbcmdRecords {
     return $records
 }
 
-function Get-ExtensionProperties {
-    # Хеш «имя расширения» -> запись свойств. Пустой, если ibcmd недоступен.
-    if (Get-PropertiesUnavailableReason) { return @{} }
+function Get-ExtensionRecords {
+    # Список расширений вместе со свойствами - одним запросом ibcmd. Возвращает
+    # @{ Ok; Records } : Ok ложь и когда ibcmd неприменим, и когда он не ответил.
+    # Обёртка нужна, чтобы пустой список (в базе нет расширений) не смешивался с отказом:
+    # пустой массив в PowerShell - ложь, и различить их по значению нельзя.
+    if (Get-PropertiesUnavailableReason) { return @{ Ok = $false; Records = @() } }
     $r = Invoke-Ibcmd @('infobase', 'config', 'extension', 'list')
-    if ($r.ExitCode -ne 0) { return @{} }
+    if ($r.ExitCode -ne 0) { return @{ Ok = $false; Records = @() } }
+    return @{ Ok = $true; Records = @(ConvertFrom-IbcmdRecords $r.Output) }
+}
+
+function Get-ExtensionProperties {
+    # Хеш «имя расширения» -> запись свойств. Пустой, если ibcmd недоступен или не ответил.
     $map = @{}
-    foreach ($rec in (ConvertFrom-IbcmdRecords $r.Output)) {
+    $res = Get-ExtensionRecords
+    if (-not $res.Ok) { return $map }
+    foreach ($rec in $res.Records) {
         if ($rec['name']) { $map[[string]$rec['name']] = $rec }
     }
     return $map
@@ -822,7 +916,23 @@ function Write-Table {
 # ============================================================================
 
 if ($cmd -eq 'list') {
-    $names = @(Get-ExtensionNames)
+    # Имена берёт ibcmd, когда к базе им подключиться можно: он отдаёт имена вместе со свойствами
+    # и не требует монопольного доступа, тогда как Конфигуратор не пускает в открытую базу.
+    $ext = Get-ExtensionRecords
+    $reason = Get-PropertiesUnavailableReason
+    if (-not $reason -and -not $ext.Ok) { $reason = "ibcmd не вернул список расширений" }
+    $props = @{}
+    if ($ext.Ok) {
+        $names = @()
+        foreach ($rec in $ext.Records) {
+            if (-not $rec['name']) { continue }
+            $n = [string]$rec['name']
+            $names += $n
+            $props[$n] = $rec
+        }
+    } else {
+        $names = @(Get-ExtensionNames)
+    }
     if ($hasName) {
         $names = @($names | Where-Object { $_.Equals($Name, [System.StringComparison]::OrdinalIgnoreCase) })
         if ($names.Count -eq 0) {
@@ -836,8 +946,6 @@ if ($cmd -eq 'list') {
         Write-Host "  расширений нет"
         exit 0
     }
-    $props = Get-ExtensionProperties
-    $reason = Get-PropertiesUnavailableReason
     $rows = @()
     foreach ($n in $names) {
         $rec = $props[$n]

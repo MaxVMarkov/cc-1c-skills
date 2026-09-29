@@ -45,6 +45,13 @@
       "ref": "MyApp_Test",
       "user": "Администратор",
       "password": "",
+      "dbms": {
+        "kind": "PostgreSQL",
+        "server": "pg01",
+        "name": "MyApp_Test",
+        "user": "",
+        "password": ""
+      },
       "aliases": [
         "test",
         "тест",

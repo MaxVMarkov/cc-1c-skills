@@ -281,6 +281,9 @@ $script:V8BatchKeys = @(
     '/ManageCfgSupport', '/RollbackCfg', '/ConvertFiles'
 )
 
+# Без -UserName ibcmd на Windows читает учётные данные из консоли и зависает; закрытый stdin не помогает.
+$script:IbcmdNoUserHint = "[ibcmd] No -UserName/-Password given; the infobase may require authentication. On Windows ibcmd reads credentials from the console (stdin is ignored), so this call may block instead of failing. If it does not return promptly, abort and re-run with -UserName and -Password."
+
 $script:IbcmdOwnedKeys = @(
     '--db-path', '--data', '--out', '--file', '--load', '--restore',
     '--import', '--export', '--apply', '--force', '--create-database',
@@ -934,6 +937,8 @@ try {
         $arguments += "--data=$tempDir"
         $arguments += $extraArgs
         Write-Host "Running: ibcmd $(Protect-Secrets ((Format-ArgsForDisplay $arguments $engine) -join ' ') @($Password, $UserName))"
+        if (-not $UserName) { Write-Host $script:IbcmdNoUserHint -ForegroundColor Yellow }
+
         $__ib = Invoke-PlatformProcess $V8Path $arguments
         $output = $__ib.Output
         $exitCode = $__ib.ExitCode
@@ -951,6 +956,8 @@ try {
             $applyArgs += "--data=$tempDir"
             $applyArgs += $extraArgs
             Write-Host "Running: ibcmd $(Protect-Secrets ((Format-ArgsForDisplay $applyArgs $engine) -join ' ') @($Password, $UserName))"
+            if (-not $UserName) { Write-Host $script:IbcmdNoUserHint -ForegroundColor Yellow }
+
             $__ib = Invoke-PlatformProcess $V8Path $applyArgs
             $applyOut = $__ib.Output
             $exitCode = $__ib.ExitCode

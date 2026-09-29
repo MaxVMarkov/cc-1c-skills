@@ -89,7 +89,8 @@ V8_BATCH_KEYS = [
 IBCMD_OWNED_KEYS = [
     "--db-path", "--data", "--out", "--file", "--load", "--restore",
     "--import", "--export", "--apply", "--force", "--create-database",
-    "--user", "--password",
+    "--user", "--password", "--dbms", "--db-server", "--db-name",
+    "--db-user", "--db-pwd",
 ]
 V8_SECRET_KEYS = ["/P", "/UC", "/WSP", "/AWSP", "/ConfigurationRepositoryP"]
 IBCMD_SECRET_KEYS = ["--password", "--token", "--db-pwd"]
@@ -178,6 +179,55 @@ def repository_args(repo):
         a.append('/ConfigurationRepositoryN"%s"' % repo["user"])
     if repo.get("password"):
         a.append('/ConfigurationRepositoryP"%s"' % repo["password"])
+    return a
+
+
+# --- Реквизиты СУБД серверной базы (для ibcmd) ---
+DBMS_KINDS = {
+    "mssqlserver": "MSSQLServer",
+    "postgresql": "PostgreSQL",
+    "ibmdb2": "IBMDB2",
+    "oracledatabase": "OracleDatabase",
+}
+
+
+def resolve_database_settings(args):
+    """Возвращает dict kind/server/name/user/password. Явные -Db* всегда сильнее реестра:
+    запись базы ищется теми же параметрами соединения, что и хранилище.
+    Родительский ключ - dbms (имя вида СУБД в терминологии 1С), в нём kind/server/name/user/password."""
+    db_rec = find_project_database(args)
+    rec = (db_rec or {}).get("dbms") or None
+    kind = args.Dbms or ((rec or {}).get("kind") or None)
+    if kind:
+        # Реестр пишут руками, поэтому вид принимаем в любом регистре; неизвестный отсеиваем здесь,
+        # а не показываем позже непостижимый отказ ibcmd.
+        canon = DBMS_KINDS.get(kind.lower())
+        if not canon:
+            print("Error: unknown DBMS kind '%s' (expected: %s)" % (kind, ", ".join(DBMS_KINDS.values())))
+            sys.exit(1)
+        kind = canon
+    return {
+        "kind": kind,
+        "server": args.DbServer or ((rec or {}).get("server") or None),
+        "name": args.DbName or ((rec or {}).get("name") or None),
+        "user": args.DbUser or ((rec or {}).get("user") or None),
+        # Пустой пароль = отсутствующий: ключ отдаём только когда пароль есть.
+        "password": args.DbPassword or ((rec or {}).get("password") or None),
+    }
+
+
+def ibcmd_connection_args(args, db):
+    """Файловая база - --db-path. Серверная - прямое подключение к СУБД; вход в саму ИБ идёт
+    через --user/--password, которые добавляет invoke_ibcmd. None, если соединение не собрать."""
+    if args.InfoBasePath:
+        return ["--db-path=%s" % args.InfoBasePath]
+    if not db.get("kind") or not db.get("server") or not db.get("name"):
+        return None
+    a = ["--dbms=%s" % db["kind"], "--db-server=%s" % db["server"], "--db-name=%s" % db["name"]]
+    if db.get("user"):
+        a.append("--db-user=%s" % db["user"])
+    if db.get("password"):
+        a.append("--db-pwd=%s" % db["password"])
     return a
 
 
@@ -476,13 +526,14 @@ def print_platform_output(result):
 def run_ibcmd(cmd, has_username=False, warn_no_user=True):
     """Run an ibcmd command non-interactively.
 
-    input="" closes stdin (EOF) so ibcmd's auth prompt fast-fails instead of hanging.
-    On Windows without -UserName ibcmd reads the console directly and may still block —
-    that residual case is flagged via IBCMD_NOUSER_HINT (model-facing).
+    input="" closes stdin, but on Windows ibcmd reads the console itself, so a server
+    base without -UserName makes it re-print the login prompt forever — closed stdin does
+    not stop it. IBCMD_NOUSER_HINT warns about that before the call (model-facing).
     """
     if warn_no_user and os.name == "nt" and not has_username:
         sys.stdout.write(IBCMD_NOUSER_HINT)
-        sys.stderr.flush()
+        # flush нужен: stdout буферизуется при перенаправлении, а зависший запуск убивают
+        sys.stdout.flush()
     r = subprocess.run(cmd, input=b"", capture_output=True)
     r.stdout = decode_platform_bytes(r.stdout)
     r.stderr = decode_platform_bytes(r.stderr)
@@ -598,8 +649,11 @@ def write_table(headers, rows):
 
 
 def main():
-    sys.stdout.reconfigure(encoding="utf-8")
-    sys.stderr.reconfigure(encoding="utf-8")
+    # line_buffering — как Write-Host в PS-порте: без него при перенаправлении в файл весь вывод
+    # лежит в буфере, и зависший запуск (аутентификация серверной базы у ibcmd) не показывает
+    # ничего — ни команды, ни предупреждения, хотя оба были напечатаны до запуска.
+    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
+    sys.stderr.reconfigure(encoding="utf-8", line_buffering=True)
     parser = argparse.ArgumentParser(
         description="Configuration extensions in a 1C infobase",
         allow_abbrev=False,
@@ -614,6 +668,15 @@ def main():
     parser.add_argument("-RepositoryPath", default="")
     parser.add_argument("-RepositoryUser", default="")
     parser.add_argument("-RepositoryPassword", default="")
+    # Реквизиты СУБД серверной базы. У ibcmd нет адреса кластера (/S server/ref), но есть прямое
+    # подключение к СУБД - только так серверной базе доступны свойства расширений. Явные параметры
+    # сильнее записи базы в .v8-project.json, как у хранилища.
+    parser.add_argument("-Dbms", default="",
+                        choices=["", "MSSQLServer", "PostgreSQL", "IBMDB2", "OracleDatabase"])
+    parser.add_argument("-DbServer", default="")
+    parser.add_argument("-DbName", default="")
+    parser.add_argument("-DbUser", default="")
+    parser.add_argument("-DbPassword", default="")
     parser.add_argument("-Name", default=None)
     parser.add_argument("-All", action="store_true")
     parser.add_argument("-Checks", default="")
@@ -731,6 +794,12 @@ def main():
     if not args.InfoBasePath and (not args.InfoBaseServer or not args.InfoBaseRef):
         print("Error: specify -InfoBasePath or -InfoBaseServer + -InfoBaseRef")
         sys.exit(1)
+    db_settings = resolve_database_settings(args)
+    if args.InfoBasePath and (args.Dbms or args.DbServer or args.DbName or args.DbUser or args.DbPassword):
+        # Файловая база подключается по пути; эти реквизиты при ней были бы молча потеряны.
+        print("Error: -Dbms/-DbServer/-DbName/-DbUser/-DbPassword apply to a server base; "
+              "this connection is a file base (-InfoBasePath)")
+        sys.exit(1)
 
     # --- Дополнительные аргументы: у каждой утилиты свои ---
     arg_hints = {
@@ -741,6 +810,11 @@ def main():
         "--db-path": "-InfoBasePath",
         "--user": "-UserName",
         "--password": "-Password",
+        "--dbms": "-Dbms",
+        "--db-server": "-DbServer",
+        "--db-name": "-DbName",
+        "--db-user": "-DbUser",
+        "--db-pwd": "-DbPassword",
     }
     v8_extra_args = resolve_extra_args("1cv8", v8_extra, [], arg_hints)
     ib_extra_args = resolve_extra_args("ibcmd", [], ibcmd_extra, arg_hints)
@@ -788,15 +862,24 @@ def main():
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     def invoke_ibcmd(op_args):
-        arguments = [ibcmd_exe] + list(op_args) + ["--db-path=%s" % args.InfoBasePath]
+        conn = ibcmd_connection_args(args, db_settings)
+        if conn is None:
+            print("Error: cannot connect to the server base with ibcmd - pass DBMS parameters "
+                  "(-Dbms, -DbServer, -DbName, -DbUser, -DbPassword) or put them into the dbms "
+                  "block of the base record")
+            sys.exit(1)
+        arguments = [ibcmd_exe] + list(op_args) + conn
         if args.UserName:
             arguments.append("--user=%s" % args.UserName)
         if args.Password:
             arguments.append("--password=%s" % args.Password)
         arguments += ib_extra_args
         print("Running: ibcmd " + _redact(" ".join(format_args_for_display(arguments[1:], "ibcmd")),
-                                          args.Password, args.UserName))
-        r = run_ibcmd(arguments, has_username=bool(args.UserName), warn_no_user=False)
+                                          args.Password, args.UserName,
+                                          db_settings["password"], db_settings["user"]))
+        # Вход в ИБ нужен и файловой, и серверной базе, если в ней задан пользователь:
+        # ibcmd спрашивает его у консоли, а не у stdin, и пакетный запуск висит.
+        r = run_ibcmd(arguments, has_username=bool(args.UserName))
         return {"exit": r.returncode, "result": r}
 
     def platform_failure(res, what):
@@ -808,21 +891,32 @@ def main():
         print_platform_output(res["result"])
 
     def properties_unavailable_reason():
-        if not args.InfoBasePath:
-            return "свойства читает ibcmd, а он подключается к файловой базе (--db-path)"
+        # Свойства читает только ibcmd; серверную базу он видит через прямое подключение к СУБД.
         if not has_ibcmd:
             return "рядом с 1cv8 нет ibcmd (%s) - эта установка платформы его не содержит" % ibcmd_exe
+        if ibcmd_connection_args(args, db_settings) is None:
+            return ("серверная база: ibcmd подключается к ней через СУБД - передайте "
+                    "-Dbms/-DbServer/-DbName (и -DbUser/-DbPassword) или добавьте блок dbms "
+                    "в запись базы")
         return None
 
-    def get_extension_properties():
-        """Словарь «имя расширения» -> запись свойств. Пустой, если ibcmd недоступен."""
+    def get_extension_records():
+        """Список расширений вместе со свойствами - одним запросом ibcmd. Возвращает
+        (ok, records): ok ложь и когда ibcmd неприменим, и когда он не ответил."""
         if properties_unavailable_reason():
-            return {}
+            return False, []
         r = invoke_ibcmd(["infobase", "config", "extension", "list"])
         if r["exit"] != 0:
+            return False, []
+        return True, parse_ibcmd_records((r["result"].stdout or "") + (r["result"].stderr or ""))
+
+    def get_extension_properties():
+        """Словарь «имя расширения» -> запись свойств. Пустой, если ibcmd недоступен или не ответил."""
+        ok, records = get_extension_records()
+        if not ok:
             return {}
         out = {}
-        for rec in parse_ibcmd_records((r["result"].stdout or "") + (r["result"].stderr or "")):
+        for rec in records:
             if rec.get("name"):
                 out[rec["name"]] = rec
         return out
@@ -847,7 +941,23 @@ def main():
     # ========================================================================
 
     if cmd == "list":
-        names = get_extension_names()
+        # Имена берёт ibcmd, когда к базе им подключиться можно: он отдаёт имена вместе со свойствами
+        # и не требует монопольного доступа, тогда как Конфигуратор не пускает в открытую базу.
+        ok, records = get_extension_records()
+        reason = properties_unavailable_reason()
+        if not reason and not ok:
+            reason = "ibcmd не вернул список расширений"
+        props = {}
+        if ok:
+            names = []
+            for rec in records:
+                n = rec.get("name")
+                if not n:
+                    continue
+                names.append(n)
+                props[n] = rec
+        else:
+            names = get_extension_names()
         if has_name:
             names = [n for n in names if n.lower() == name.lower()]
             if not names:
@@ -858,8 +968,6 @@ def main():
         if not names:
             print("  расширений нет")
             sys.exit(0)
-        props = get_extension_properties()
-        reason = properties_unavailable_reason()
         rows = []
         for n in names:
             rec = props.get(n)
