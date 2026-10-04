@@ -146,3 +146,7 @@ powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/cfe-patch-method.ps
 ```
 /cfe-validate <ExtensionPath> -ConfigPath <ConfigPath>
 ```
+
+## Справочник по синтаксису платформы
+
+Перехватчик обращается к API платформы — имена методов и свойств сверяй в MCP-справочнике (`find_1c_help`, `list_object_members`), а не по памяти. Доступность: `scripts/ref-mcp.ps1` (exit 0 — справочник отвечает). Пустой ответ справочника не доказательство отсутствия метода. Границы применимости — `docs/reference-mcp-guide.md`.
