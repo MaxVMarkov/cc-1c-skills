@@ -1,6 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "1c-skills",
+  "version": "0.1.0",
   "displayName": "1C Skills",
   "description": "[PowerShell] Навыки для разработки на 1С:Предприятие 8.3 — абстракции над XML-форматами и CLI конфигуратора, плюс глаза и руки для тестирования через веб-клиент.",
   "author": {
