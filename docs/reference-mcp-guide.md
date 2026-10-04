@@ -67,9 +67,33 @@ powershell.exe -NoProfile -File scripts/ref-mcp.ps1          # + -Tools, что�
 ### Плагином (рекомендуется)
 
 В комплекте лежит [`.mcp.json`](../.mcp.json) — сервер объявляется вместе с навыками, отдельной
-настройки не нужно. Qoder читает манифест `.qoder-plugin/plugin.json` (`"mcpServers": "./.mcp.json"`),
-Claude Code подхватывает корневой `.mcp.json` сам. Имя сервера в списке инструментов при этом —
-`plugin:<имя плагина>:<1c-syntax-helper>`.
+настройки не нужно. Claude Code подхватывает корневой `.mcp.json` при `/plugin install`. Имя сервера
+в списке инструментов — `plugin:<имя плагина>:<1c-syntax-helper>`, tools —
+`mcp__plugin_1c-skills_1c-syntax-helper__find_1c_help` (дефисы в именах сохраняются).
+
+**Qoder: только установка архивом (проверено 2026-10-04).** Плагин ставится через панель плагинов →
+*Upload Plugin* → ZIP. Требование к архиву жёсткое: манифест лежит **в корне** архива
+(`.qoder-plugin/plugin.json`, затем `.claude-plugin/plugin.json`) — обработчик ищет его там и бросает
+`EXTENSION_PLUGIN_LAYOUT_UNSUPPORTED`, если в корне нет ни манифеста, ни маркеров раскладки
+(`skills/`, `commands/`, `agents/`, `hooks/hooks.json`, `.mcp.json`). Папку-обёртку сверху класть нельзя.
+Минимальный набор: `.qoder-plugin/`, `.claude-plugin/`, `.mcp.json`, `.claude/skills/`, `hooks/`,
+`scripts/`; `tests/` и `.git` не нужны (при копировании установки `.git`, `node_modules`, `.env*`
+отсекаются). Пример:
+
+```powershell
+Compress-Archive -Path .qoder-plugin, .claude-plugin, .mcp.json, .claude, hooks, scripts, docs, README.md, LICENSE -DestinationPath 1c-skills-0.1.0.zip
+```
+
+После установки появляются строка `1c-skills@local` в `~/.qoder/plugins/installed_plugins_v2.json`,
+каталог `~/.qoder/plugins/cache/local/1c-skills/<version>/` и флаг в `enabledPlugins`; сервер
+поднимается в следующей сессии (`[MCP] Server 'plugin:1c-skills:1c-syntax-helper' connected`).
+Копия снапшотная: правки репозитория доходят только через перевыпуск архива и повторную установку.
+
+Не работает маршрут «объявить маркетплейс и включить флаг»: `extraKnownMarketplaces` +
+`enabledPlugins` в `~/.qoder/settings.json` загружают навыки и хуки, но плагин не становится
+установленным — в панели он не виден (исключается из списка доступных как уже «занятый»), а его
+MCP-сервер не стартует. Ошибки при этом нет никакой.
+
 
 ### Вручную
 
@@ -106,5 +130,5 @@ URL в `.mcp.json` жёсткий — так комплект работает �
 
 Префикс зависит от платформы и от способа подключения: `mcp__1c_syntax_helper__find_1c_help` при
 ручной настройке, `mcp__plugin_1c-skills_1c-syntax-helper__find_1c_help` при установке плагином
-(дефисы к тому же превращаются в подчёркивания). В инструкциях, описаниях и комментариях — только
-голые имена (`find_1c_help`, `list_object_members`).
+(дефисы в именах плагина и сервера сохраняются — проверено на установленных плагинах Qoder). В
+инструкциях, описаниях и комментариях — только голые имена (`find_1c_help`, `list_object_members`).
