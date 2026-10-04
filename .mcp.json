@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "1c-syntax-helper": {
+      "type": "http",
+      "url": "http://localhost:8000/mcp"
+    }
+  }
+}
