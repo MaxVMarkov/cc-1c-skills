@@ -260,6 +260,7 @@ powershell.exe -NoProfile -File scripts/ref-mcp.ps1   # поднят ли и п�
 ├── db-load-git/         # Загрузка изменений из Git
 ├── db-repo/             # Хранилище конфигурации
 ├── db-cfe-admin/        # Расширения в базе: состав, проверки, свойства, удаление
+├── db-sql-read/         # Чтение таблиц базы напрямую из MS SQL (без сеанса 1С)
 ├── web-publish/         # Публикация базы через Apache
 ├── web-info/            # Статус Apache и публикаций
 ├── web-stop/            # Остановка Apache
