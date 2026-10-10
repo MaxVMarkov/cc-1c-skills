@@ -228,7 +228,7 @@ ORDER BY t.name
         $c.CommandText = @"
 SELECT t.name FROM sys.tables t
 JOIN sys.columns col ON col.object_id = t.object_id AND col.name = '_IDRRef'
-WHERE t.name NOT LIKE '%VT%' AND t.name NOT LIKE '%X1' ORDER BY t.name
+WHERE t.name NOT LIKE '%VT%' ORDER BY t.name
 "@
         $tables = New-Object System.Collections.Generic.List[string]
         $rd = $c.ExecuteReader(); while ($rd.Read()) { $tables.Add($rd.GetString(0)) }; $rd.Close()
