@@ -126,6 +126,7 @@ function Open-Connection {
 
 function Invoke-Query([string]$Text) {
     $cmd = $script:conn.CreateCommand(); $cmd.CommandText = $Text; $cmd.CommandTimeout = 300
+  try {
     $rd = $cmd.ExecuteReader()
     $cols = @(); for ($i = 0; $i -lt $rd.FieldCount; $i++) { $cols += $rd.GetName($i) }
     Emit ($cols -join "`t")
@@ -141,6 +142,7 @@ function Invoke-Query([string]$Text) {
         Emit ($vals -join "`t"); $rows++
     }
     $rd.Close(); Emit ("(строк: " + $rows + ")")
+  } catch { Fail ("запрос не выполнен: " + $_.Exception.Message.Split([char]10)[0]) }
 }
 
 function Format-Value($v) {
