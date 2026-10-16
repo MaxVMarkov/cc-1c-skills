@@ -52,8 +52,8 @@
 
 [CmdletBinding(PositionalBinding=$false)]
 param(
-    [Parameter(Mandatory=$false)][string]$Command,
-    [Parameter(Mandatory=$false)][string]$InfoBaseRef,
+    [Parameter(Mandatory=$false, Position=0)][string]$Command,
+    [Parameter(Mandatory=$false, Position=1)][string]$InfoBaseRef,
     [Parameter(Mandatory=$false)][string]$Table,
     [Parameter(Mandatory=$false)][string]$Number,
     [Parameter(Mandatory=$false)][string]$Number2,
