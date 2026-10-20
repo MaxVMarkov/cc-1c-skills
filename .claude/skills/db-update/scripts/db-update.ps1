@@ -122,6 +122,11 @@ param(
     [Parameter(Mandatory=$false)]
     [switch]$NoApplyCheck,
 
+    # Понизить жёсткую проверку применимости до предупреждения (по умолчанию неприменимое расширение
+    # валит команду с кодом 1). То же: "extensionApplyCheckStrict": false в .v8-project.json.
+    [Parameter(Mandatory=$false)]
+    [switch]$LenientApplyCheck,
+
     [Parameter(Mandatory=$false)]
     [string]$RepositoryPath,
 
@@ -640,6 +645,9 @@ function Find-SilentRejections {
         'Ни один из документов не является регистратором для регистра',
         'Неверное значение перечисления',
         'не может быть приведен к типу',
+        # Дрейф &ИзменениеИКонтроль: расширение загружается с RC=0 и «загрузка успешна», а платформа
+        # его не применит. Строка появляется и в логе, и в ответе /CheckCanApplyConfigurationExtensions.
+        'не соответствует методу',
         # Режим совместимости выше платформы: объекты в базу не попадают, отказ приходит в рантайме.
         # Обрезано до инвариантной части — конкретная версия в сообщении меняется.
         'Для работы с конфигурацией необходима версия платформы не меньше'
@@ -727,6 +735,23 @@ function Get-ApplyCheckEnabled {
     return $true
 }
 
+# Валить ли команду, если платформа расширение не применит. По умолчанию — да: «загрузка успешна»
+# при дрейфе &ИзменениеИКонтроль ничего не значит, а молча неприменённое расширение ведёт себя как
+# отсутствующее, и пользователь ошибки не видит. Отключение: -LenientApplyCheck или
+# "extensionApplyCheckStrict": false в .v8-project.json.
+function Get-ApplyCheckStrict {
+    param([switch]$Lenient)
+    if ($Lenient) { return $false }
+    $pf = Find-V8Project (Get-Location).Path
+    if ($pf) {
+        try {
+            $proj = Get-Content $pf -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($null -ne $proj.extensionApplyCheckStrict) { return [bool]$proj.extensionApplyCheckStrict }
+        } catch {}
+    }
+    return $true
+}
+
 
 $engine = if ((Split-Path $V8Path -Leaf) -match '^ibcmd') { "ibcmd" } else { "1cv8" }
 
@@ -804,7 +829,11 @@ try {
             }
             if ($UserName) { $acConn += "/N`"$UserName`"" }
             if ($Password) { $acConn += "/P`"$Password`"" }
-            if ((Invoke-ApplyCheckReport $V8Path $acConn $Extension @()) -and $StrictLog) { $exitCode = 1 }
+            $__acStrict = (Get-ApplyCheckStrict -Lenient:$LenientApplyCheck) -or [bool]$StrictLog
+            if ((Invoke-ApplyCheckReport $V8Path $acConn $Extension @()) -and $__acStrict) {
+                Write-Host "Error: extension loaded but the platform will NOT apply it — this update is a failure" -ForegroundColor Red
+                $exitCode = 1
+            }
         }
         Write-PlatformOutput $output
         exit $exitCode
@@ -894,7 +923,11 @@ try {
 
     # Расширение могло загрузиться «успешно» и остаться неприменимым — спрашиваем платформу.
     if ($exitCode -eq 0 -and ($Extension -or $AllExtensions) -and (Get-ApplyCheckEnabled -Disabled:$NoApplyCheck)) {
-        if ((Invoke-ApplyCheckReport $V8Path $connArgs $Extension $extraArgs) -and $StrictLog) { $exitCode = 1 }
+        $__acStrict = (Get-ApplyCheckStrict -Lenient:$LenientApplyCheck) -or [bool]$StrictLog
+        if ((Invoke-ApplyCheckReport $V8Path $connArgs $Extension $extraArgs) -and $__acStrict) {
+            Write-Host "Error: extension loaded but the platform will NOT apply it — this update is a failure" -ForegroundColor Red
+            $exitCode = 1
+        }
     }
 
     exit $exitCode

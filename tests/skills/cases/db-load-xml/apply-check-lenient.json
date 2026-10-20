@@ -1,0 +1,37 @@
+{
+  "name": "То же с -LenientApplyCheck: неприменимость остаётся предупреждением, код возврата 0",
+  "fakePlatform": {
+    "log": "﻿Загрузка конфигурации из файлов.\r\n",
+    "check": {
+      "log": "﻿Проба: Текст метода \"Проба_Расчёт\" не соответствует методу \"Расчёт\".\r\n",
+      "exit": 1
+    }
+  },
+  "args_extra": [
+    "-V8Path",
+    "{fakePlatform}",
+    "-InfoBasePath",
+    "{workDir}/ib",
+    "-ConfigDir",
+    "{workDir}/src",
+    "-Extension",
+    "Проба",
+    "-LenientApplyCheck"
+  ],
+  "expect": {
+    "stdoutContains": [
+      "Load completed successfully",
+      "[warning] the extension is loaded, but the platform will not apply it:"
+    ],
+    "stdoutNotContains": "will NOT apply it"
+  },
+  "noSnapshot": "навык ничего не пишет в рабочий каталог — проверяется постусловие",
+  "preRun": [
+    {
+      "writeFile": {
+        "path": "src/Configuration.xml",
+        "content": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<MetaDataObject/>"
+      }
+    }
+  ]
+}

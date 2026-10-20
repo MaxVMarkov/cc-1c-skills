@@ -1,5 +1,5 @@
 {
-  "name": "Расширение загрузилось, но платформа его не применит — предупреждение, код возврата не меняется",
+  "name": "Расширение загрузилось, но платформа его не применит — жёсткий гейт валит команду",
   "fakePlatform": {
     "log": "﻿Загрузка конфигурации из файлов.\r\n",
     "check": {
@@ -17,11 +17,13 @@
     "-Extension",
     "Проба"
   ],
+  "expectError": true,
   "expect": {
     "stdoutContains": [
       "Load completed successfully",
       "[warning] the extension is loaded, but the platform will not apply it:",
-      "не соответствует методу"
+      "не соответствует методу",
+      "will NOT apply it"
     ]
   },
   "noSnapshot": "навык ничего не пишет в рабочий каталог — проверяется постусловие",

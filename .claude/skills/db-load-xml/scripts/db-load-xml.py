@@ -579,6 +579,9 @@ def find_silent_rejections(log_text):
         "Ни один из документов не является регистратором для регистра",
         "Неверное значение перечисления",
         "не может быть приведен к типу",
+        # Дрейф &ИзменениеИКонтроль: расширение загружается с RC=0 и «загрузка успешна», а платформа
+        # его не применит. Строка появляется и в логе загрузки, и в ответе /CheckCanApplyConfigurationExtensions.
+        "не соответствует методу",
         # Режим совместимости выше платформы: объекты в базу не попадают, отказ приходит в
         # рантайме. Обрезано до инвариантной части — конкретная версия в сообщении меняется.
         "Для работы с конфигурацией необходима версия платформы не меньше",
@@ -658,6 +661,25 @@ def apply_check_enabled(disabled):
                 proj = json.load(f)
             if proj.get("extensionApplyCheck") is not None:
                 return bool(proj.get("extensionApplyCheck"))
+        except Exception:
+            pass
+    return True
+
+
+def apply_check_strict(lenient):
+    """Валить ли команду, если платформа расширение не применит. По умолчанию — да: «загрузка
+    успешна» при дрейфе &ИзменениеИКонтроль ничего не значит, а молча неприменённое расширение
+    ведёт себя как отсутствующее. Отключение: -LenientApplyCheck или
+    "extensionApplyCheckStrict": false в .v8-project.json."""
+    if lenient:
+        return False
+    pf = _sg_find_v8project(os.getcwd())
+    if pf:
+        try:
+            with open(pf, encoding="utf-8-sig") as f:
+                proj = json.load(f)
+            if proj.get("extensionApplyCheckStrict") is not None:
+                return bool(proj.get("extensionApplyCheckStrict"))
         except Exception:
             pass
     return True
@@ -773,6 +795,9 @@ def main():
     )
     # Пропустить проверку применимости расширения после загрузки.
     parser.add_argument("-NoApplyCheck", action="store_true")
+    # Понизить жёсткую проверку применимости до предупреждения (по умолчанию неприменимое
+    # расширение валит команду с кодом 1). То же: "extensionApplyCheckStrict": false в .v8-project.json.
+    parser.add_argument("-LenientApplyCheck", action="store_true")
     parser.add_argument("-AdditionalV8Arguments", nargs="*", default=[],
                         help="Extra 1cv8 arguments, e.g. /UseHwLicenses+")
     parser.add_argument("-AdditionalIbcmdArguments", nargs="*", default=[],
@@ -936,7 +961,9 @@ def main():
                 ac_conn.append(f'/N"{args.UserName}"')
             if args.Password:
                 ac_conn.append(f'/P"{args.Password}"')
-            if apply_check_report(v8path, ac_conn, args.Extension, []) and args.StrictLog:
+            if apply_check_report(v8path, ac_conn, args.Extension, []) and (
+                    apply_check_strict(args.LenientApplyCheck) or args.StrictLog):
+                print("Error: extension loaded but the platform will NOT apply it — this load is a failure")
                 exit_code = 1
 
         sys.exit(exit_code)
@@ -1082,7 +1109,9 @@ def main():
         # Расширение могло загрузиться «успешно» и остаться неприменимым — спрашиваем платформу.
         if (exit_code == 0 and (args.Extension or args.AllExtensions)
                 and apply_check_enabled(args.NoApplyCheck)):
-            if apply_check_report(v8path, conn_args, args.Extension, extra_args) and args.StrictLog:
+            if apply_check_report(v8path, conn_args, args.Extension, extra_args) and (
+                    apply_check_strict(args.LenientApplyCheck) or args.StrictLog):
+                print("Error: extension loaded but the platform will NOT apply it — this load is a failure")
                 exit_code = 1
 
         sys.exit(exit_code)

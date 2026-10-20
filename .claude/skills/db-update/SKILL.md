@@ -58,6 +58,7 @@ powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/db-update.ps1" <п�
 | `-Extension <имя>` | нет | Обновить расширение |
 | `-AllExtensions` | нет | Обновить все расширения |
 | `-NoApplyCheck` | нет | Не проверять применимость расширения после обновления |
+| `-LenientApplyCheck` | нет | Не валить команду при `RC=0`, но проверять и предупреждать |
 | `-Dynamic <on/off>` | нет | `on` — динамическое обновление, без монопольного доступа к базе; `off` — отключить |
 | `-Server` | нет | Обновление на стороне сервера |
 | `-WarningsAsErrors` | нет | Предупреждения считать ошибками |
@@ -83,6 +84,16 @@ powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/db-update.ps1" <п�
 | `-BackgroundCancel` | Отменить |
 | `-BackgroundSuspend` | Приостановить |
 | `-BackgroundResume` | Возобновить |
+
+## Применимость расширения
+
+> ⚠ `Database configuration updated successfully` **не** означает, что расширение применимо. При
+> `-Extension`/`-AllExtensions` навык после обновления спрашивает платформу и, если расширение **не
+> применится**, печатает `Error: extension loaded but the platform will NOT apply it` и выходит с **кодом 1**.
+> Причина — контроль `&ИзменениеИКонтроль`: дрейф копируемого тела (в т.ч. по регистру идентификатора и по
+> добавленному комментарию) платформа считает ошибкой применимости, а синтаксическая проверка модулей при
+> этом говорит «ОК», и пользователь ничего не замечает. Ослабить: `-LenientApplyCheck` или
+> `"extensionApplyCheckStrict": false` в `.v8-project.json`; отключить проверку: `-NoApplyCheck`.
 
 ## Примеры
 
