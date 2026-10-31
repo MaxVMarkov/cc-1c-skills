@@ -51,6 +51,7 @@ param(
     [string]$ProgId,
 
     [switch]$IncludeMarked,
+    [switch]$Exact,
     [string]$OutFile
 )
 
@@ -246,6 +247,9 @@ function Test-Match([string]$value, [string]$pattern) {
 # идентификатор, где Имя = «БазовыеПраваБСП», а Наименование = «Базовые права БСП (Роль)».
 function Test-RoleMatch($row, [string]$pattern) {
     if (-not $pattern) { return $true }
+    if ($Exact) {
+        return ($row.RoleName -eq $pattern) -or ($row.RoleSynonym -eq $pattern)
+    }
     return ((Test-Match $row.RoleName $pattern) -or (Test-Match $row.RoleSynonym $pattern))
 }
 
