@@ -261,6 +261,7 @@ powershell.exe -NoProfile -File scripts/ref-mcp.ps1   # поднят ли и п�
 ├── db-repo/             # Хранилище конфигурации
 ├── db-cfe-admin/        # Расширения в базе: состав, проверки, свойства, удаление
 ├── db-sql-read/         # Чтение таблиц базы напрямую из MS SQL (без сеанса 1С)
+├── access-profiles/     # Профили групп доступа и их роли (данные базы, COM-соединение)
 ├── web-publish/         # Публикация базы через Apache
 ├── web-info/            # Статус Apache и публикаций
 ├── web-stop/            # Остановка Apache
