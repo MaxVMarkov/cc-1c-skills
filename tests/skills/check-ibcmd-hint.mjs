@@ -137,9 +137,11 @@ for (const skill of readdirSync(SKILLS)) {
           + 'нужен `print(IBCMD_ABORTED, end="")`');
       }
     });
-    // Обвязка запуска держит дедлайн: таймаут из run_ibcmd бесполезен, если
-    // run_platform_process ждёт процесс вечно.
-    lines.forEach((l, i) => {
+    // Обвязка запуска держит дедлайн, когда вызов его передаёт: таймаут из run_ibcmd
+    // бесполезен, если run_platform_process ждёт процесс вечно. Файлы без ограниченного
+    // вызова (db-create и его заглушка) проверять нечего — они и не передают timeout.
+    const hasBoundedCall = lines.some((l) => /timeout=IBCMD_NOUSER_TIMEOUT_SEC if bounded else None/.test(l));
+    if (hasBoundedCall) lines.forEach((l, i) => {
       if (!/^def run_platform_process\(/.test(l)) return;
       let end = lines.length;
       for (let j = i + 1; j < lines.length; j++) {

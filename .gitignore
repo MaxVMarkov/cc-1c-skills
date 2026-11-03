@@ -6,6 +6,8 @@ build/
 base/
 *.epf
 *.log
+# Исключение: собранный Ассемблер — рабочий ресурс навыка, а не артефакт
+!.claude/skills/module-deobfuscate/assets/*.epf
 
 # Временные файлы тестов
 test-tmp/
