@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# stub-db-create v1.14 — Create temp 1C infobase with metadata stubs for EPF/ERF build
+# stub-db-create v1.17 — Create temp 1C infobase with metadata stubs for EPF/ERF build
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 
 import argparse
@@ -11,6 +11,8 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import uuid
 
 
@@ -19,6 +21,51 @@ IBCMD_NOUSER_HINT = (
     "On Windows ibcmd reads credentials from the console (stdin is ignored), so this "
     "call may block instead of failing. Re-run with -UserName and -Password.\n"
 )
+
+
+def run_platform_process(cmd):
+    """Run the platform with stdin closed (EOF) and capture its output.
+
+    Waits for the process, not for EOF on its pipes: a process the platform leaves behind
+    (crashpad_handler on 8.5) inherits them and keeps them open. By the time the platform
+    exits, what it wrote is already buffered; the reader threads get a second to drain it."""
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    p.stdin.close()
+    chunks = {p.stdout: [], p.stderr: []}
+
+    def drain(stream):
+        # Chunked reads: read() returns only at EOF, and a held pipe never gives one
+        while True:
+            data = os.read(stream.fileno(), 65536)
+            if not data:
+                break
+            chunks[stream].append(data)
+
+    readers = [threading.Thread(target=drain, args=(s,), daemon=True) for s in (p.stdout, p.stderr)]
+    for t in readers:
+        t.start()
+    try:
+        while True:
+            try:
+                returncode = p.wait(timeout=0.5)
+                break
+            except subprocess.TimeoutExpired:
+                pass   # short waits: on Windows an endless one doesn't see Ctrl+C until the child exits
+    except BaseException:
+        # Like subprocess.run: an interrupt must not leave the platform running, holding the
+        # infobase lock and the license
+        p.kill()
+        p.wait()
+        raise
+    deadline = time.monotonic() + 1
+    for t in readers:
+        t.join(max(0, deadline - time.monotonic()))
+    result = subprocess.CompletedProcess(cmd, returncode, b"".join(chunks[p.stdout]), b"".join(chunks[p.stderr]))
+    # A pipe still held by a leftover process stays with its blocked reader
+    for t, stream in zip(readers, (p.stdout, p.stderr)):
+        if not t.is_alive():
+            stream.close()
+    return result
 
 
 def decode_platform_bytes(data):
@@ -43,10 +90,17 @@ def clean_path(value, param=""):
     v = value.strip()
     if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
         v = v[1:-1].strip()
+    # «C:x» — от текущего каталога диска C, своего у каждого процесса: смысл не угадать, почти
+    # всегда это опечатка в «C:\x». Отказ с подсказкой, а не путь «где-то» у платформы.
+    if os.name == "nt" and re.match(r"^[A-Za-z]:(?![\\/])", v):
+        drive = v[:2]
+        print(f"Error: {param or 'path'} is relative to the current directory of drive {drive} ({value})"
+              f" - use {drive}\\{v[2:]} or a path without a drive")
+        sys.exit(1)
     if len(v) > 3 and v[-1] in "\\/":
         v = v[:-1]
     if '"' in v:
-        print(f"Error: {param or 'path'} contains a quote character: {value}", file=sys.stderr)
+        print(f"Error: {param or 'path'} contains a quote character: {value}")
         sys.exit(1)
     return v
 
@@ -90,7 +144,7 @@ def run_v8(v8path, arguments):
                                                      # часть синтаксиса строки соединения,
                                                      # и с ними на POSIX всё работает
         cmd = [v8path] + [strip_framing_quotes(a) for a in arguments]
-    r = subprocess.run(cmd, input=b"", capture_output=True)
+    r = run_platform_process(cmd)
     r.stdout = decode_platform_bytes(r.stdout)
     r.stderr = decode_platform_bytes(r.stderr)
     return r
@@ -113,14 +167,14 @@ def print_platform_output(result):
 def run_ibcmd(cmd, has_username=False, warn_no_user=True):
     """Run an ibcmd command non-interactively.
 
-    input="" closes stdin (EOF) so ibcmd's auth prompt fast-fails instead of hanging.
+    The closed stdin (EOF) makes ibcmd's auth prompt fast-fail instead of hanging.
     On Windows without -UserName ibcmd reads the console directly and may still block —
     that residual case is flagged via IBCMD_NOUSER_HINT (model-facing).
     """
     if warn_no_user and os.name == "nt" and not has_username:
         sys.stderr.write(IBCMD_NOUSER_HINT)
         sys.stderr.flush()
-    r = subprocess.run(cmd, input=b"", capture_output=True)
+    r = run_platform_process(cmd)
     r.stdout = decode_platform_bytes(r.stdout)
     r.stderr = decode_platform_bytes(r.stderr)
     return r

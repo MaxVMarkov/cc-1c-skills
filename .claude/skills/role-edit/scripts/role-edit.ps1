@@ -1,4 +1,4 @@
-﻿# role-edit v1.7 — Edit existing 1C role rights in place
+﻿# role-edit v1.11 — Edit existing 1C role rights in place
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 [CmdletBinding(PositionalBinding=$false)]
 param(
@@ -19,7 +19,15 @@ function ConvertFrom-JsonInput([string]$text, [string]$source, [string]$expected
 		# PS 5.1 на пустой строке отдаёт $null, а не ошибку — навык уходил дальше с $null,
 		# тогда как py-порт падал. Проверяем сами, чтобы порты вели себя одинаково.
 		if ([string]::IsNullOrWhiteSpace($text)) { throw 'input is empty' }
-		$parsed = $text | ConvertFrom-Json
+		# pwsh 7+ сам разворачивает массив верхнего уровня ([x] → x, [] → $null). Ключ -NoEnumerate
+		# появился там же: в 5.1 и pwsh 6 его нет, поэтому спрашиваем командлет, а не версию.
+		$cfj = @{}
+		$cfjKeys = (Get-Command ConvertFrom-Json).Parameters
+		if ($cfjKeys.ContainsKey('NoEnumerate')) { $cfj.NoEnumerate = $true }
+		# pwsh 7.5+ без -DateKind String превращает ISO-строки дат в DateTime, и в XML уходит формат
+		# локали; в 5.1 и pwsh до 7.5 ключа нет (5.1 даты и так не трогает).
+		if ($cfjKeys.ContainsKey('DateKind')) { $cfj.DateKind = 'String' }
+		$parsed = $text | ConvertFrom-Json @cfj
 	} catch {
 		$what = if ($expected) { "$source expects $expected" } else { "Invalid JSON in $source" }
 		if ($Inline) {
@@ -32,7 +40,7 @@ function ConvertFrom-JsonInput([string]$text, [string]$source, [string]$expected
 		[Console]::Error.WriteLine("[ERROR] ${what} ($($_.Exception.Message))")
 		exit 1
 	}
-	Write-Output -NoEnumerate $parsed
+	return ,$parsed
 }
 
 # --- Чтение входного JSON-файла ---
@@ -109,16 +117,20 @@ function Find-V8Project([string]$startDir) {
 }
 function Get-EditMode([string]$cfgDir) {
 	try {
-		$pj = Find-V8Project (Get-Location).Path
-		if (-not $pj) { $pj = Find-V8Project $cfgDir }
+		$pj = Find-V8Project (Get-Location).ProviderPath
+		if (-not $pj) { $pj = Find-V8Project ([System.IO.Path]::GetFullPath($cfgDir)) }
 		if (-not $pj) { return 'deny' }
-		$proj = Get-Content -Raw $pj | ConvertFrom-Json
+		# UTF-8 явно: PS 5.1 читает файл без BOM как ANSI, и configSrc с кириллицей не совпал бы
+		$proj = Get-Content -Raw -Encoding UTF8 $pj | ConvertFrom-Json
+		# configSrc — от каталога .v8-project.json, а не от рабочего каталога: иначе из подкаталога
+		# проекта база не сопоставляется и берётся правило проекта.
+		$projDir = [System.IO.Path]::GetDirectoryName($pj)
 		$cfgFull = [System.IO.Path]::GetFullPath($cfgDir).TrimEnd('\', '/')
 		if ($proj.databases) {
 			foreach ($db in $proj.databases) {
 				if ($db.configSrc) {
-					$src = [System.IO.Path]::GetFullPath($db.configSrc).TrimEnd('\', '/')
-					if ($cfgFull -eq $src -or $cfgFull.StartsWith($src + [System.IO.Path]::DirectorySeparatorChar)) {
+					$src = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($projDir, $db.configSrc)).TrimEnd('\', '/')
+					if ($cfgFull -eq $src -or $cfgFull.StartsWith($src + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
 						if ($db.editingAllowedCheck) { return $db.editingAllowedCheck }
 					}
 				}
@@ -131,7 +143,7 @@ function Get-EditMode([string]$cfgDir) {
 function Assert-EditAllowed([string]$targetPath, [string]$require) {
 	try {
 		$rp = $targetPath
-		try { $rp = (Resolve-Path $targetPath -ErrorAction Stop).Path } catch {}
+		try { $rp = (Resolve-Path $targetPath -ErrorAction Stop).ProviderPath } catch {}
 		# Autonomous external object (EPF/ERF): never part of a config on support (issue #39).
 		if (Test-ExternalObjectRoot $rp) { return }
 		$elemUuid = Get-RootUuid $rp
@@ -1103,7 +1115,7 @@ function Resolve-TextFromFile {
 	} else {
 		$candidates = @(
 			(Join-Path $baseDir $filePath),
-			(Join-Path (Get-Location).Path $filePath)
+			(Join-Path (Get-Location).ProviderPath $filePath)
 		)
 	}
 	foreach ($c in $candidates) {
@@ -1456,7 +1468,7 @@ function Resolve-RolePaths([string]$inputPath) {
 		[Console]::Error.WriteLine("[role-edit] Путь не найден: $inputPath")
 		exit 1
 	}
-	$full = (Resolve-Path -LiteralPath $inputPath).Path
+	$full = (Resolve-Path -LiteralPath $inputPath).ProviderPath
 	$rightsPath = $null
 	if (Test-Path -LiteralPath $full -PathType Leaf) {
 		$leaf = [System.IO.Path]::GetFileName($full)
@@ -1477,7 +1489,7 @@ function Resolve-RolePaths([string]$inputPath) {
 		[Console]::Error.WriteLine("  Ожидается каталог роли, Roles/Имя.xml или Roles/Имя/Ext/Rights.xml.")
 		exit 1
 	}
-	$rightsPath = (Resolve-Path -LiteralPath $rightsPath).Path
+	$rightsPath = (Resolve-Path -LiteralPath $rightsPath).ProviderPath
 	# Rights.xml лежит в <Roles>/<Имя>/Ext/, метаданные — в <Roles>/<Имя>.xml
 	$roleDir = [System.IO.Path]::GetDirectoryName([System.IO.Path]::GetDirectoryName($rightsPath))
 	$roleName = [System.IO.Path]::GetFileName($roleDir)
@@ -1506,7 +1518,7 @@ if (-not $DefinitionFile -and -not $Operation) {
 
 # База относительного пути @файла: каталог списка операций, иначе каталог самой роли.
 # Текущий каталог функция проверяет вторым кандидатом в любом случае.
-$script:textBaseDir = if ($DefinitionFile) { [System.IO.Path]::GetDirectoryName((Resolve-Path $DefinitionFile).Path) }
+$script:textBaseDir = if ($DefinitionFile) { [System.IO.Path]::GetDirectoryName((Resolve-Path $DefinitionFile).ProviderPath) }
                       else { [System.IO.Path]::GetDirectoryName($script:paths.RightsPath) }
 
 $targetForGuard = if (Test-Path -LiteralPath $script:roleXmlPath) { $script:roleXmlPath } else { $script:rightsPath }

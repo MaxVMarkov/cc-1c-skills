@@ -21,7 +21,8 @@
 //   5. `sys.stdout.write(IBCMD_NOUSER_HINT)` флашит stdout, а не stderr: подсказку печатают до
 //      запуска, который собираются убить, — flush не того потока её теряет.
 //   6. Тело `def run_ibcmd` ограничивает запуск (`timeout=IBCMD_NOUSER_TIMEOUT_SEC if bounded
-//      else None`), перехватывает `subprocess.TimeoutExpired` и печатает `IBCMD_ABORTED`.
+//      else None`) и по признаку `r.timed_out` печатает `IBCMD_ABORTED`; дедлайн держит
+//      `run_platform_process` — он перехватывает `subprocess.TimeoutExpired` и убивает процесс.
 //
 // Зависание теперь проверяется и рантайм-кейсом (cases/db-cfe-admin/list-ibcmd-hang-aborted):
 // висячая заглушка ibcmd убивается по таймауту, и список берётся у Конфигуратора. Гард остаётся:
@@ -127,13 +128,27 @@ for (const skill of readdirSync(SKILLS)) {
         errors.push(`${skill}/${file}:${i + 1}: run_ibcmd запускает ibcmd без ограничения — `
           + 'нужен `timeout=IBCMD_NOUSER_TIMEOUT_SEC if bounded else None`');
       }
-      if (!/except subprocess\.TimeoutExpired/.test(body)) {
-        errors.push(`${skill}/${file}:${i + 1}: run_ibcmd не перехватывает subprocess.TimeoutExpired — `
-          + 'убитый по таймауту процесс выйдет исключением из навыка');
+      if (!/r\.timed_out/.test(body)) {
+        errors.push(`${skill}/${file}:${i + 1}: run_ibcmd не отличает запуск, убитый по таймауту — `
+          + 'нужен признак `r.timed_out`, иначе аборт пройдёт молча');
       }
       if (!/print\(IBCMD_ABORTED, end=""\)/.test(body)) {
         errors.push(`${skill}/${file}:${i + 1}: прерывание зависшего ibcmd ни о чём не сообщает — `
           + 'нужен `print(IBCMD_ABORTED, end="")`');
+      }
+    });
+    // Обвязка запуска держит дедлайн: таймаут из run_ibcmd бесполезен, если
+    // run_platform_process ждёт процесс вечно.
+    lines.forEach((l, i) => {
+      if (!/^def run_platform_process\(/.test(l)) return;
+      let end = lines.length;
+      for (let j = i + 1; j < lines.length; j++) {
+        if (/^def /.test(lines[j])) { end = j; break; }
+      }
+      const body = lines.slice(i, end).join('\n');
+      if (!/except subprocess\.TimeoutExpired/.test(body) || !/p\.kill\(\)/.test(body) || !/timed_out/.test(body)) {
+        errors.push(`${skill}/${file}:${i + 1}: run_platform_process не убивает процесс по дедлайну — `
+          + 'нужны `subprocess.TimeoutExpired`, `p.kill()` и признак `timed_out`');
       }
     });
     if (!exempt && lines.some((l) => /^def run_ibcmd\(/.test(l))) {

@@ -17,14 +17,16 @@ import { existsSync, mkdirSync, mkdtempSync, unlinkSync, readFileSync, writeFile
          readdirSync, statSync, copyFileSync, chmodSync } from 'fs';
 import { join, resolve, dirname, basename } from 'path';
 import { tmpdir } from 'os';
+import { fileURLToPath } from 'url';
 // fs.rmSync/fs.cpSync напрямую не зовём: на Windows они молча ничего не делают, когда в пути
 // есть не-ASCII символы. Подробности и таблица сборок — в самом модуле.
 import { removePathSync, copyTreeSync } from '../common/fsutil.mjs';
 import { runGitStep } from '../common/git-step.mjs';
+import { runFileStep } from '../common/file-step.mjs';
 
 // ─── Paths ──────────────────────────────────────────────────────────────────
 
-const ROOT      = resolve(dirname(new URL(import.meta.url).pathname).replace(/^\/([A-Z]:)/i, '$1'));
+const ROOT      = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(ROOT, '../..');
 const SKILLS    = resolve(REPO_ROOT, '.claude/skills');
 const CASES     = resolve(ROOT, 'cases');
@@ -653,8 +655,14 @@ function runPreSteps(preRun, workDir, runtime, log) {
       log(`preRun: git ${step.git.join(' ')}`, true);
       continue;
     }
+    // editFile / movePath — как в runner.mjs
+    const fileStep = runFileStep(workDir, step);
+    if (fileStep) {
+      log(`preRun: ${fileStep}`, true);
+      continue;
+    }
     if (!step.script) {
-      throw new Error(`preRun: шаг без script/writeFile/deletePath/git — ${JSON.stringify(step).slice(0, 120)}`);
+      throw new Error(`preRun: шаг без script/writeFile/deletePath/git/editFile/movePath — ${JSON.stringify(step).slice(0, 120)}`);
     }
     const preArgs = [];
     for (const [flag, value] of Object.entries(step.args || {})) {
@@ -831,6 +839,7 @@ const EMPTY_CONFIG_ARGS = {
   'empty-config-220': ['-FormatVersion', '2.20', '-CompatibilityMode', 'Version8_3_27'],
   'empty-config-220-compat24': ['-FormatVersion', '2.20', '-CompatibilityMode', 'Version8_3_24'],
   'empty-config-221': ['-FormatVersion', '2.21', '-CompatibilityMode', 'Version8_3_27'],
+  'empty-config-compat17': ['-CompatibilityMode', 'Version8_3_17'],
 };
 
 // CFE skills — two-stage load: base config → extension
@@ -1094,7 +1103,9 @@ async function verifyCase(skillName, caseName, skillConfig, caseData, opts) {
     } catch (e) {
       const detail = errDetail(e);
       if (caseData.expectError) {
-        if (typeof caseData.expectError === 'string' && !detail.includes(caseData.expectError)) {
+        // Без переводов строк — как в runner.mjs: PS 5.1 переносит Write-Error по ширине буфера.
+        if (typeof caseData.expectError === 'string'
+            && !detail.replace(/\r?\n/g, '').includes(caseData.expectError.replace(/\r?\n/g, ''))) {
           log(skillName, false, `expected "${caseData.expectError}" in stderr, got: ${detail.substring(0, 200)}`);
           result.errors.push(`${skillName}: stderr does not contain "${caseData.expectError}"`);
           return result;

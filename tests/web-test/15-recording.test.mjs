@@ -130,4 +130,98 @@ export default async function({
     assert.ok(!after.includes('__web_test_highlight'), 'highlight overlay удалён');
     await closeForm();
   });
+
+  // Длительность самого видео (ffprobe), а не stopRecording().duration: та считается по часам
+  // и замедления видео не видит.
+  const { resolveFfmpeg, getAudioDuration } = await import(
+    new URL('../../.claude/skills/web-test/scripts/engine/recording/tts.mjs', import.meta.url));
+  const videoSeconds = (file) => getAudioDuration(file, resolveFfmpeg());
+
+  // Кадр нечетного размера (развернутое окно дает, например, 1920x945) гоним через тот же
+  // конвейер ffmpeg без браузера: размер кадра screencast зависит от масштаба экрана, и
+  // эмуляция окна на 125% дает четный кадр — такой шаг ничего бы не проверял.
+  await step('odd frame: кадр нечетного размера кодируется, ffmpeg не падает', async () => {
+    const { execFileSync, spawnSync } = await import('child_process');
+    const { ffmpegEncodeArgs } = await import(
+      new URL('../../.claude/skills/web-test/scripts/engine/recording/capture.mjs', import.meta.url));
+    const ffmpegPath = resolveFfmpeg();
+    const oddPath = path.resolve(dir, 'odd.mp4');
+    try { fs.unlinkSync(oddPath); } catch {}
+    // testsrc, а не однотонный color: крошечный однотонный JPEG image2pipe не распознает как mjpeg
+    const jpeg = execFileSync(ffmpegPath, ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc=size=101x51',
+      '-frames:v', '1', '-f', 'image2pipe', '-c:v', 'mjpeg', '-']);
+    const enc = spawnSync(ffmpegPath, ffmpegEncodeArgs(10, oddPath),
+      { input: Buffer.concat(Array(20).fill(jpeg)), timeout: 30000 });
+    const stderr = (enc.stderr?.toString() || '').split(/\r?\n/);
+    const why = stderr.find(l => /divisible/i.test(l)) || stderr.filter(Boolean).slice(-3).join(' | ');
+    assert.equal(enc.status, 0, `ffmpeg на кадре 101x51: ${why}`);
+    const size = execFileSync(ffmpegPath.replace(/ffmpeg(\.exe)?$/i, 'ffprobe$1'), ['-v', 'error',
+      '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', oddPath],
+      { encoding: 'utf8' }).trim();
+    log(`odd frame: ${size}, video=${videoSeconds(oddPath)}s`);
+    assert.equal(size, '100,50', 'кадр обрезан до четного размера');
+  });
+
+  await step('frame grid: на странице с анимацией видео не длиннее реального времени', async () => {
+    const p = await getPage();
+    const animPath = path.join(dir, 'animated.mp4');
+    try { fs.unlinkSync(animPath); } catch {}
+    try {
+      // Элемент перекрашивается на каждом кадре браузера: screencast шлет кадры чаще fps.
+      await p.evaluate(() => {
+        const d = document.createElement('div');
+        d.id = '__web_test_anim_probe';
+        d.style.cssText = 'position:fixed;left:0;top:0;width:40px;height:40px;z-index:999999';
+        document.body.appendChild(d);
+        let i = 0;
+        const tick = () => {
+          if (!d.isConnected) return;
+          d.style.background = i++ % 2 ? '#f00' : '#00f';
+          requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      });
+      // wall — от вызова startRecording до вызова stopRecording: финализация mp4 в видео не попадает,
+      // а поиск ffmpeg и его запуск — попадают в wall, но не в видео (отсюда нижний допуск)
+      const t0 = Date.now();
+      await startRecording(animPath, { fps: 10 });
+      await p.waitForTimeout(6000);
+      const wall = (Date.now() - t0) / 1000;
+      const result = await stopRecording();
+      const video = videoSeconds(result.file);
+      log(`animated: video=${video}s wall=${wall.toFixed(1)}s duration=${result.duration}s`);
+      assert.ok(video <= wall + 0.5, `видео не длиннее реального времени (video ${video}s, wall ${wall.toFixed(1)}s)`);
+      assert.ok(video >= wall - 1, `видео не короче реального времени (video ${video}s, wall ${wall.toFixed(1)}s)`);
+      assert.ok(Math.abs(result.duration - video) < 0.2, `duration = длина видео (${result.duration}s vs ${video}s)`);
+    } finally {
+      await p.evaluate(() => document.getElementById('__web_test_anim_probe')?.remove()).catch(() => {});
+    }
+  });
+
+  // Ключа OpenAI в стенде нет: fetch подменяется, проверяется тело запроса, а mp3-ответ —
+  // секунда тишины, чтобы addNarration довел склейку до конца.
+  await step('openai instructions: addNarration передает instructions в тело запроса OpenAI', async () => {
+    const { execFileSync } = await import('child_process');
+    const mp3 = execFileSync(resolveFfmpeg(), ['-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=24000:cl=mono',
+      '-t', '1', '-c:a', 'libmp3lame', '-f', 'mp3', '-']);
+    const bodies = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => { bodies.push(JSON.parse(init.body)); return new Response(mp3); };
+    try {
+      const narrate = (extra) => addNarration(videoPath, {
+        provider: 'openai', apiKey: 'test', model: 'gpt-4o-mini-tts', ...extra,
+        captions: [{ text: 'a', speech: 'Проверка', time: 0 }],
+        outputPath: path.join(dir, 'openai-narrated.mp4'),
+      });
+      const withInstr = await narrate({ instructions: 'Говори по-русски без акцента' });
+      assert.ok(!withInstr.warnings?.length, `озвучка без предупреждений: ${withInstr.warnings}`);
+      assert.equal(bodies.length, 1, 'один запрос на одну подпись');
+      assert.equal(bodies[0].instructions, 'Говори по-русски без акцента', 'instructions в теле запроса');
+      assert.equal(bodies[0].model, 'gpt-4o-mini-tts', 'model в теле запроса');
+      await narrate({});
+      assert.ok(!('instructions' in bodies[1]), 'без opts.instructions поля в запросе нет');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
 }

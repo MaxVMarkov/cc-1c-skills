@@ -558,7 +558,7 @@ Ext/                               # Расширение конфигураци
 |---|---|---|
 | `name` | атрибут | Имя стандартного реквизита |
 | `LinkByType` | элемент | Связь по типу (обычно пустой) |
-| `FillChecking` | enum | `DontCheck` \| `ShowWarning` \| `ShowError` |
+| `FillChecking` | enum | `DontCheck` \| `ShowError` |
 | `MultiLine` | boolean | Многострочное поле |
 | `FillFromFillingValue` | boolean | Заполнять из значения заполнения |
 | `CreateOnInput` | enum | `Auto` \| `Use` \| `DontUse` |
@@ -667,6 +667,45 @@ Ext/                               # Расширение конфигураци
 ---
 
 ## 6. Дочерние объекты (ChildObjects)
+
+#### Порядок групп в ChildObjects объекта
+
+Дочерние элементы идут группами по виду, порядок групп **зависит от вида объекта** — единого порядка нет
+(у документа форма стоит ДО табличных частей, у справочника — после). Загрузка принимает любой порядок,
+выгрузка ставит группы в канон, поэтому вставка не на место даёт дифф при следующей выгрузке. Порядок
+элементов внутри группы платформа не меняет.
+
+Канон — `xs:sequence` типа `<Вид>ChildObjects` из `v8.1c.ru-8.3-MDClasses.xsd` (одинаков в версиях
+формата 2.10–2.21), сверен раундтрипом через базу на 8.3.24 и 8.3.27, в том числе для заимствованных
+объектов расширения. Виды с пометкой «XSD» стендом не проверены.
+
+| Вид | Порядок групп |
+|-----|---------------|
+| `Catalog` | `Attribute TabularSection Form Template Command` |
+| `Document` | `Attribute Form TabularSection Template Command` |
+| `ExchangePlan` | `Attribute TabularSection Form Template Command` |
+| `ChartOfCharacteristicTypes` | `Attribute TabularSection Form Template Command` |
+| `ChartOfAccounts` | `Attribute TabularSection AccountingFlag ExtDimensionAccountingFlag Form Template Command` |
+| `ChartOfCalculationTypes` | `Attribute TabularSection Form Template Command` |
+| `BusinessProcess` | `Attribute TabularSection Form Template Command` |
+| `Task` | `Attribute TabularSection Form Template AddressingAttribute Command` |
+| `DataProcessor` | `Attribute TabularSection Form Template Command` |
+| `Report` | `Attribute TabularSection Form Template Command` |
+| `ExternalDataProcessor` | `Attribute TabularSection Form Template` |
+| `ExternalReport` | `Attribute TabularSection Form Template` |
+| `Enum` | `EnumValue Form Template Command` |
+| `InformationRegister` | `Resource Attribute Dimension Form Template Command` |
+| `AccumulationRegister` | `Resource Attribute Dimension Form Template Command` |
+| `AccountingRegister` | `Dimension Resource Attribute Form Template Command` |
+| `CalculationRegister` | `Resource Attribute Dimension Recalculation Form Template Command` (Recalculation — XSD) |
+| `DocumentJournal` | `Column Form Template Command` |
+| `Table` (внешнего источника) | `Field Form Command Template` |
+| `ExternalDataSource` | `Table Cube Function` (XSD) |
+| `Cube` | `DimensionTable Dimension Resource Form Command Template` (XSD) |
+| `DimensionTable` | `Field Form Command Template` (XSD) |
+| `FilterCriterion` | `Form Command` (XSD) |
+| `SettingsStorage` | `Form Template` (XSD) |
+| `TabularSection` | `Attribute` |
 
 ### 6.1. Реквизит (Attribute)
 
@@ -808,7 +847,7 @@ Ext/                               # Расширение конфигураци
         </CommandParameterType>
         <ParameterUseMode>Multiple</ParameterUseMode>  <!-- Multiple -->
         <ModifiesData>true</ModifiesData>
-        <Representation>Auto</Representation>    <!-- Auto | TextPicture | Text | Picture -->
+        <Representation>Auto</Representation>    <!-- Auto | Text | Picture | PictureAndText (у команды формы — TextPicture) -->
         <ToolTip>...</ToolTip>
         <Picture>
             <xr:Ref>CommonPicture.Создать</xr:Ref>
@@ -848,7 +887,7 @@ XML-элемент: `<Catalog>`. Категория InternalInfo: CatalogObject,
 <DescriptionLength>150</DescriptionLength>
 <CheckUnique>true</CheckUnique>
 <Autonumbering>true</Autonumbering>
-<DefaultPresentation>AsDescription</DefaultPresentation>  <!-- AsDescription | AsCode -->
+<DefaultPresentation>AsDescription</DefaultPresentation>  <!-- AsDescription | AsCode; у задачи AsDescription | AsNumber -->
 ```
 
 **Владелец:**
@@ -924,7 +963,7 @@ XML-элемент: `<Document>`. Категория InternalInfo: DocumentObjec
     <xr:Item xsi:type="xr:MDObjectRef">AccountingRegister.Хозрасчетный</xr:Item>
 </RegisterRecords>
 <RegisterRecordsDeletion>AutoDeleteOnUnpost</RegisterRecordsDeletion>   <!-- AutoDeleteOnUnpost | AutoDeleteOff -->
-<RegisterRecordsWritingOnPost>WriteSelected</RegisterRecordsWritingOnPost>  <!-- WriteSelected | WriteAll -->
+<RegisterRecordsWritingOnPost>WriteSelected</RegisterRecordsWritingOnPost>  <!-- WriteSelected | WriteModified -->
 <SequenceFilling>AutoFill</SequenceFilling>                              <!-- AutoFill | AutoFillOff -->
 ```
 

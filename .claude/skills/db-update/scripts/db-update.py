@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# db-update v1.23 — Update 1C database configuration
+# db-update v1.28 — Update 1C database configuration
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 
 import argparse
@@ -13,6 +13,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 
 # Регистронезависимый ввод — паритет с PS1: в PowerShell имена параметров и [ValidateSet]
 # регистр не различают, в argparse совпадение точное.
@@ -124,6 +126,37 @@ def same_path(a, b):
         return False
 
 
+def resolve_infobase_path(path):
+    """Относительный путь к базе — от корня проекта (каталог .v8-project.json, вверх от рабочего
+    каталога), как configSrc; без файла проекта — от рабочего каталога. Платформе уходит только
+    абсолютный: ibcmd считает относительный --db-path от каталога --data, а он у навыков временный."""
+    if not path:
+        return path
+    # Абсолютный на Windows — только с диском и разделителем или UNC, как в PS-порте; «\\x» берёт
+    # диск базового каталога (os.path.join); «C:x» отклоняет ещё clean_path. На POSIX — os.path.isabs.
+    absolute = re.match(r"^([A-Za-z]:[\\/]|[\\/]{2})", path) if os.name == "nt" else os.path.isabs(path)
+    if not absolute:
+        cwd = os.getcwd()
+        base = cwd
+        d = cwd
+        for _ in range(20):
+            if not d:
+                break
+            if os.path.isfile(os.path.join(d, ".v8-project.json")):
+                base = d
+                break
+            parent = os.path.dirname(d)
+            if parent == d:
+                break
+            d = parent
+        path = os.path.abspath(os.path.join(base, path))
+    # Хвостовые разделители срезаются, но корень («C:\\», на POSIX «/») остаётся корнем
+    seps, keep = ("\\/", 3) if os.name == "nt" else ("/", 1)
+    while len(path) > keep and path[-1] in seps:
+        path = path[:-1]
+    return path
+
+
 def find_project_database(args):
     """Запись базы в реестре, соответствующая переданному соединению. None, если не найдена."""
     pf = _sg_find_v8project(os.getcwd())
@@ -135,7 +168,7 @@ def find_project_database(args):
     except Exception:
         return None
     for db in proj.get("databases") or []:
-        if args.InfoBasePath and db.get("path") and same_path(db["path"], args.InfoBasePath):
+        if args.InfoBasePath and db.get("path") and same_path(os.path.join(os.path.dirname(pf), db["path"]), args.InfoBasePath):
             return db
         if args.InfoBaseServer and args.InfoBaseRef and db.get("server") and db.get("ref"):
             if (db["server"].lower() == args.InfoBaseServer.lower()
@@ -430,6 +463,65 @@ IBCMD_ABORTED = (
 )
 
 
+def run_platform_process(cmd, timeout=None):
+    """Run the platform with stdin closed (EOF) and capture its output.
+
+    Waits for the process, not for EOF on its pipes: a process the platform leaves behind
+    (crashpad_handler on 8.5) inherits them and keeps them open. By the time the platform
+    exits, what it wrote is already buffered; the reader threads get a second to drain it.
+    timeout bounds the wait: an expired run is killed and reported with code -1 and no
+    output — a run stuck at the login prompt prints it forever, and its megabytes of noise
+    would bury the abort message."""
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    p.stdin.close()
+    chunks = {p.stdout: [], p.stderr: []}
+
+    def drain(stream):
+        # Chunked reads: read() returns only at EOF, and a held pipe never gives one
+        while True:
+            data = os.read(stream.fileno(), 65536)
+            if not data:
+                break
+            chunks[stream].append(data)
+
+    readers = [threading.Thread(target=drain, args=(s,), daemon=True) for s in (p.stdout, p.stderr)]
+    for t in readers:
+        t.start()
+    deadline = None if timeout is None else time.monotonic() + timeout
+    timed_out = False
+    try:
+        while True:
+            try:
+                returncode = p.wait(timeout=0.5)
+                break
+            except subprocess.TimeoutExpired:
+                # short waits: on Windows an endless one doesn't see Ctrl+C until the child exits
+                if deadline is not None and time.monotonic() >= deadline:
+                    timed_out = True
+                    p.kill()
+                    p.wait()
+                    returncode = -1
+                    break
+    except BaseException:
+        # Like subprocess.run: an interrupt must not leave the platform running, holding the
+        # infobase lock and the license
+        p.kill()
+        p.wait()
+        raise
+    drain_deadline = time.monotonic() + 1
+    for t in readers:
+        t.join(max(0, drain_deadline - time.monotonic()))
+    out = b"" if timed_out else b"".join(chunks[p.stdout])
+    err = b"" if timed_out else b"".join(chunks[p.stderr])
+    result = subprocess.CompletedProcess(cmd, returncode, out, err)
+    result.timed_out = timed_out
+    # A pipe still held by a leftover process stays with its blocked reader
+    for t, stream in zip(readers, (p.stdout, p.stderr)):
+        if not t.is_alive():
+            stream.close()
+    return result
+
+
 def decode_platform_bytes(data):
     """ibcmd writes UTF-8 (checked on 8.3.24, 8.3.27, 8.5), a crashing 1cv8 may still emit
     OEM text. Decode strictly as UTF-8 and fall back to cp866 on invalid bytes — the locale
@@ -462,6 +554,13 @@ def clean_path(value, param=""):
     v = value.strip()
     if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
         v = v[1:-1].strip()
+    # «C:x» — от текущего каталога диска C, своего у каждого процесса: смысл не угадать, почти
+    # всегда это опечатка в «C:\x». Отказ с подсказкой, а не путь «где-то» у платформы.
+    if os.name == "nt" and re.match(r"^[A-Za-z]:(?![\\/])", v):
+        drive = v[:2]
+        print(f"Error: {param or 'path'} is relative to the current directory of drive {drive} ({value})"
+              f" - use {drive}\\{v[2:]} or a path without a drive")
+        sys.exit(1)
     if len(v) > 3 and v[-1] in "\\/":
         v = v[:-1]
     if '"' in v:
@@ -509,7 +608,7 @@ def run_v8(v8path, arguments):
                                                      # часть синтаксиса строки соединения,
                                                      # и с ними на POSIX всё работает
         cmd = [v8path] + [strip_framing_quotes(a) for a in arguments]
-    r = subprocess.run(cmd, input=b"", capture_output=True)
+    r = run_platform_process(cmd)
     r.stdout = decode_platform_bytes(r.stdout)
     r.stderr = decode_platform_bytes(r.stderr)
     return r
@@ -656,25 +755,20 @@ def apply_check_strict(lenient):
 def run_ibcmd(cmd, has_username=False, warn_no_user=True):
     """Run an ibcmd command non-interactively.
 
-    input="" closes stdin, but on Windows ibcmd reads the console itself, so a call without a
-    login re-prints the prompt forever — closed stdin does not stop it (measured on 8.5.1.1529,
-    on both a file and a server base, including a base whose users are not defined at all).
-    Such a run is bounded and killed; a run that was given -UserName is expected to answer, so
-    it is never bounded. IBCMD_NOUSER_HINT warns about it before the call (model-facing).
+    On Windows without a login ibcmd re-prints the login prompt forever — closed stdin does
+    not stop it (measured on 8.5.1.1529, on both a file and a server base, including a base
+    whose users are not defined at all). Such a run is bounded and killed; a run that was
+    given -UserName is expected to answer, so it is never bounded. IBCMD_NOUSER_HINT warns
+    about it before the call (model-facing).
     """
     bounded = warn_no_user and os.name == "nt" and not has_username
     if bounded:
         sys.stdout.write(IBCMD_NOUSER_HINT)
         # flush нужен: stdout буферизуется при перенаправлении, а зависший запуск убивают
         sys.stdout.flush()
-    try:
-        r = subprocess.run(cmd, input=b"", capture_output=True,
-                           timeout=IBCMD_NOUSER_TIMEOUT_SEC if bounded else None)
-    except subprocess.TimeoutExpired as exc:
-        # subprocess.run уже убил ребёнка. В исключении лежит напечатанное — это повтор
-        # приглашения входа, мегабайсы шума, которые затопят сообщение о прерывании.
+    r = run_platform_process(cmd, timeout=IBCMD_NOUSER_TIMEOUT_SEC if bounded else None)
+    if bounded and r.timed_out:
         print(IBCMD_ABORTED, end="")
-        r = subprocess.CompletedProcess(cmd, -1, b"", b"")
     r.stdout = decode_platform_bytes(r.stdout)
     r.stderr = decode_platform_bytes(r.stderr)
     return r
@@ -767,6 +861,7 @@ def main():
 
     args.V8Path = clean_path(args.V8Path, "-V8Path")
     args.InfoBasePath = clean_path(args.InfoBasePath, "-InfoBasePath")
+    args.InfoBasePath = resolve_infobase_path(args.InfoBasePath)
     assert_infobase_exists(args.InfoBasePath)
 
     v8path = resolve_v8path(args.V8Path, args)

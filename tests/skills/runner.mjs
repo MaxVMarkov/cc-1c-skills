@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// skill-test-runner v0.6 — Snapshot-based regression tests for 1C skill scripts
+// skill-test-runner v0.7 — Snapshot-based regression tests for 1C skill scripts
 // Usage: node tests/skills/runner.mjs [filter] [--update-snapshots] [--runtime python] [--json report.json] [--concurrency N] [--with-validation]
 
 import { execFileSync, execFile } from 'child_process';
@@ -8,15 +8,17 @@ import { existsSync, mkdirSync, mkdtempSync, unlinkSync, readFileSync, writeFile
 import { createHash } from 'crypto';
 import { join, resolve, dirname, relative, basename, extname } from 'path';
 import { tmpdir, cpus } from 'os';
+import { fileURLToPath, pathToFileURL } from 'url';
 // fs.rmSync/fs.cpSync напрямую не зовём: на Windows они молча ничего не делают, когда в пути
 // есть не-ASCII символы — кириллическое имя пользователя в %TEMP%, кириллическое имя объекта 1С
 // в deletePath. Подробности и таблица сборок — в самом модуле.
 import { removePathSync, copyTreeSync } from '../common/fsutil.mjs';
 import { runGitStep } from '../common/git-step.mjs';
+import { runFileStep } from '../common/file-step.mjs';
 
 // ─── Paths ──────────────────────────────────────────────────────────────────
 
-const ROOT      = resolve(dirname(new URL(import.meta.url).pathname).replace(/^\/([A-Z]:)/i, '$1'));
+const ROOT      = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(ROOT, '../..');
 const SKILLS    = resolve(REPO_ROOT, '.claude/skills');
 const CASES     = resolve(ROOT, 'cases');
@@ -151,6 +153,8 @@ function ensureSetup(setupName, runtime, skillCasesDir) {
     'empty-config-220-compat24': ['-FormatVersion', '2.20', '-CompatibilityMode', 'Version8_3_24'],
     // 2.21 (8.5) — в шапках MetaDataObject и Form появляется xmlns:pal.
     'empty-config-221': ['-FormatVersion', '2.21', '-CompatibilityMode', 'Version8_3_27'],
+    // Режим ниже 8.3.19: в шапке формы xmlns:dcssch только при использовании.
+    'empty-config-compat17': ['-CompatibilityMode', 'Version8_3_17'],
   };
   if (EMPTY_CONFIGS[setupName]) {
     const cached = join(CACHE, setupName);
@@ -198,6 +202,18 @@ function resolveScript(scriptRelPath, runtime) {
   return full;
 }
 
+// Рабочий каталог запуска навыка: 'workDir' — каталог кейса, 'workDir/<sub>' — его подкаталог
+// (создаётся); иначе — корень репозитория.
+function resolveExecCwd(cwd, workDir) {
+  if (cwd === 'workDir') return workDir;
+  if (typeof cwd === 'string' && cwd.startsWith('workDir/')) {
+    const dir = join(workDir, cwd.slice('workDir/'.length));
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+  return undefined;
+}
+
 function execSkillRaw(runtime, scriptPath, args, cwd) {
   const execCwd = cwd || REPO_ROOT;
   if (runtime === 'python') {
@@ -209,7 +225,7 @@ function execSkillRaw(runtime, scriptPath, args, cwd) {
     });
   }
   // PowerShell
-  return execFileSync('powershell.exe', [
+  return execFileSync(process.env.POWERSHELL || 'powershell.exe', [
     '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
     '-File', scriptPath, ...args
   ], {
@@ -225,7 +241,7 @@ function execSkillAsync(runtime, scriptPath, args, cwd) {
     const execCwd = cwd || REPO_ROOT;
     const cmd = runtime === 'python'
       ? [process.env.PYTHON || 'python', [scriptPath, ...args]]
-      : ['powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...args]];
+      : [process.env.POWERSHELL || 'powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...args]];
 
     const child = execFile(cmd[0], cmd[1], {
       encoding: 'utf8',
@@ -282,7 +298,7 @@ function cleanupWorkspace(ws) {
 // выбор платформы пришлось бы писать двумя копиями под osOnly.
 function substPlaceholders(s, workDir) {
   const fakePath = join(workDir, process.platform === 'win32' ? 'fake.cmd' : 'fake.sh');
-  return s.replaceAll('{workDir}', workDir).replaceAll('{fakePlatform}', fakePath);
+  return s.replaceAll('{workDir}', workDir).replaceAll('{fakePlatform}', fakePath).replaceAll('{repoRoot}', REPO_ROOT);
 }
 
 function substDeep(value, workDir) {
@@ -391,8 +407,8 @@ function buildArgs(skillConfig, caseData, workDir, inputFilePath, runtime) {
 // Второй ответ — на проверку применимости расширения: навык запускает её ОТДЕЛЬНЫМ процессом
 // (в одной командной строке платформа выполнила бы только последнюю команду), поэтому фейк
 // отличает проверку по составу аргументов, а не по номеру вызова.
-const FAKE_PLATFORM_CMD = "@echo off\r\nrem SELF запоминаем ДО цикла: shift сдвигает и %0, после него %~dp0 указывает не на скрипт\r\nset SELF=%~dp0\r\nset KIND=main\r\n:loop\r\nif \"%~1\"==\"\" goto done\r\nif /i \"%~1\"==\"/Out\" set OUT=%~2\r\nif /i \"%~1\"==\"/CheckCanApplyConfigurationExtensions\" set KIND=check\r\nif /i \"%~1\"==\"/CheckConfig\" set KIND=check\r\nshift\r\ngoto loop\r\n:done\r\nif \"%KIND%\"==\"check\" if exist \"%SELF%log_check.txt\" (copy /y \"%SELF%log_check.txt\" \"%OUT%\" >nul & exit /b CHECKCODE)\r\ncopy /y \"%SELF%log.txt\" \"%OUT%\" >nul\r\nexit /b EXITCODE\r\n";
-const FAKE_PLATFORM_SH = "#!/bin/sh\n# Фейк платформы для *nix: вычитывает путь из /Out и кладёт туда готовый лог.\n# Значение /Out несёт кавычки ВНУТРИ токена (соглашение 1С, см. run_v8) — в batch их\n# снимает %~2, в sh их надо снять руками, иначе cp целится в имя с кавычками.\nSELF=$(dirname \"$0\")\nOUT=\"\"\nKIND=main\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = \"/CheckCanApplyConfigurationExtensions\" ] || [ \"$1\" = \"/CheckConfig\" ]; then\n    KIND=check\n  fi\n  if [ \"$1\" = \"/Out\" ]; then\n    OUT=\"$2\"\n    OUT=\"${OUT#\\\"}\"\n    OUT=\"${OUT%\\\"}\"\n  fi\n  shift\ndone\nif [ \"$KIND\" = check ] && [ -f \"$SELF/log_check.txt\" ]; then\n  cp \"$SELF/log_check.txt\" \"$OUT\"\n  exit CHECKCODE\nfi\ncp \"$SELF/log.txt\" \"$OUT\"\nexit EXITCODE\n";
+const FAKE_PLATFORM_CMD = "@echo off\r\nrem SELF запоминаем ДО цикла: shift сдвигает и %0, после него %~dp0 указывает не на скрипт\r\nset SELF=%~dp0\r\nset KIND=main\r\n:loop\r\nif \"%~1\"==\"\" goto done\r\nif /i \"%~1\"==\"/Out\" set OUT=%~2\r\nif /i \"%~1\"==\"/CheckCanApplyConfigurationExtensions\" set KIND=check\r\nif /i \"%~1\"==\"/CheckConfig\" set KIND=check\r\nshift\r\ngoto loop\r\n:done\r\nLINGERif \"%KIND%\"==\"check\" if exist \"%SELF%log_check.txt\" (copy /y \"%SELF%log_check.txt\" \"%OUT%\" >nul & exit /b CHECKCODE)\r\ncopy /y \"%SELF%log.txt\" \"%OUT%\" >nul\r\nexit /b EXITCODE\r\n";
+const FAKE_PLATFORM_SH = "#!/bin/sh\n# Фейк платформы для *nix: вычитывает путь из /Out и кладёт туда готовый лог.\n# Значение /Out несёт кавычки ВНУТРИ токена (соглашение 1С, см. run_v8) — в batch их\n# снимает %~2, в sh их надо снять руками, иначе cp целится в имя с кавычками.\nSELF=$(dirname \"$0\")\nOUT=\"\"\nKIND=main\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = \"/CheckCanApplyConfigurationExtensions\" ] || [ \"$1\" = \"/CheckConfig\" ]; then\n    KIND=check\n  fi\n  if [ \"$1\" = \"/Out\" ]; then\n    OUT=\"$2\"\n    OUT=\"${OUT#\\\"}\"\n    OUT=\"${OUT%\\\"}\"\n  fi\n  shift\ndone\nLINGERif [ \"$KIND\" = check ] && [ -f \"$SELF/log_check.txt\" ]; then\n  cp \"$SELF/log_check.txt\" \"$OUT\"\n  exit CHECKCODE\nfi\ncp \"$SELF/log.txt\" \"$OUT\"\nexit EXITCODE\n";
 
 function writeFakePlatform(workDir, spec) {
   const isWin = process.platform === 'win32';
@@ -400,7 +416,15 @@ function writeFakePlatform(workDir, spec) {
   // spec.check — ответ платформы на отдельный запуск проверки
   // (/CheckCanApplyConfigurationExtensions у расширений, /CheckConfig у внешних обработок)
   const checkCode = spec.check && Number.isInteger(spec.check.exit) ? spec.check.exit : 0;
+  // spec.linger — фейк оставляет после себя живой фоновый процесс на N секунд, унаследовавший
+  // каналы вывода: так ведёт себя crashpad_handler платформы 8.5 (#128). Навык обязан ждать
+  // выхода платформы, а не закрытия канала.
+  const linger = Number.isInteger(spec.linger) ? spec.linger : 0;
+  const lingerLine = !linger ? ''
+    : isWin ? `start "" /b ping -n ${linger + 1} 127.0.0.1 >nul\r\n`
+    : `sleep ${linger} &\n`;
   const body = (isWin ? FAKE_PLATFORM_CMD : FAKE_PLATFORM_SH)
+    .replaceAll('LINGER', lingerLine)
     .replaceAll('EXITCODE', String(code))
     .replaceAll('CHECKCODE', String(checkCode));
   const exe = join(workDir, isWin ? 'fake.cmd' : 'fake.sh');
@@ -501,14 +525,30 @@ function checkFileContains(workDir, spec, expectPresent) {
 // который молча ничего не проверяет (так уже было с 9 кейсами meta-edit) —
 // поэтому он ошибка, а не игнор.
 const KNOWN_EXPECT_KEYS = new Set([
-  'files', 'filesAbsent', 'stdoutContains', 'stdoutNotContains', 'stderrContains', 'preserves',
-  'fileContains', 'fileNotContains', 'filesEqual',
+  'files', 'filesAbsent', 'stdoutContains', 'stdoutNotContains', 'stderrContains', 'stderrNotContains', 'preserves',
+  'fileContains', 'fileNotContains', 'filesEqual', 'maxDurationMs',
 ]);
+
+// Сверка stderr (expectError, stderrContains/NotContains) без переводов строк: PS 5.1 режет
+// запись Write-Error по ширине буфера (120), а в начале записи стоит полный путь к скрипту —
+// место разрыва зависит от пути к клону и попадало внутрь проверяемой фразы («…уже существуе⏎т»).
+function stderrIncludes(stderr, expected) {
+  const flat = (s) => s.replace(/\r?\n/g, '');
+  return flat(stderr).includes(flat(expected));
+}
 
 function checkExpectKeys(caseData) {
   if (!caseData.expect) return [];
   const unknown = Object.keys(caseData.expect).filter(k => !KNOWN_EXPECT_KEYS.has(k));
   return unknown.map(k => `expect.${k}: раннер такого ключа не знает — кейс ничего не проверяет`);
+}
+
+// expect.maxDurationMs — потолок времени работы скрипта. Нужен кейсам про зависание: без него
+// зависший навык «проходит», просто дождавшись, пока фоновый процесс фейка (linger) умрёт сам.
+function checkMaxDuration(caseData, execMs) {
+  const max = caseData.expect?.maxDurationMs;
+  if (max === undefined || execMs <= max) return [];
+  return [`script ran ${Math.round(execMs)} ms, expected at most ${max} ms`];
 }
 
 // ─── Побайтовое равенство двух файлов ───────────────────────────────────────
@@ -835,6 +875,13 @@ async function runCaseAsync(testCase, opts) {
     return { id: testCase.id, skill: testCase.skillDir, name: testCase.name, passed: true, skipped: true, errors: [], elapsed: '0.0s' };
   }
 
+  // requires: кейс опирается на локальные данные, которые в репозиторий не входят (XSD-схемы 1С
+  // в .v8-xsd — их правообладатель 1С). Пути от корня репозитория; нет хотя бы одного — skipped.
+  // Не external: тот отдаёт каталог на месте только для чтения, а кейсу нужно разложить свои файлы.
+  if (caseData.requires && ![].concat(caseData.requires).every(p => existsSync(resolve(REPO_ROOT, p)))) {
+    return { id: testCase.id, skill: testCase.skillDir, name: testCase.name, passed: true, skipped: true, errors: [], elapsed: '0.0s' };
+  }
+
   try {
     const skillCasesDir = join(CASES, testCase.skillDir);
     const fixturePath = ensureSetup(setupName, opts.runtime, skillCasesDir);
@@ -853,7 +900,9 @@ async function runCaseAsync(testCase, opts) {
     const extRel = caseData.params?.extensionPath || caseData.params?.outputDir;
     if (typeof extRel === 'string' && extRel && extRel !== '.' && !extRel.includes('/') && !extRel.includes('\\')) {
       const clash = readdirSync(workDir).find(e => e.toLowerCase() === extRel.toLowerCase());
-      if (clash) {
+      // Фикстура, которая сама несёт расширение (каталог с Configuration.xml), — не коллизия:
+      // слипается только с платформенным Ext/ конфигурации
+      if (clash && !existsSync(join(workDir, clash, 'Configuration.xml'))) {
         throw new Error(
           `Каталог расширения "${extRel}" совпадает с "${clash}" из фикстуры конфигурации.\n`
           + `  На регистронезависимой ФС это один каталог — эталон зафиксирует слипшееся дерево.\n`
@@ -878,7 +927,8 @@ async function runCaseAsync(testCase, opts) {
             ? substPlaceholders(step.writeFile.content, workDir)
             : JSON.stringify(substDeep(step.writeFile.content, workDir), null, 2);
           mkdirSync(dirname(wfPath), { recursive: true });
-          writeFileSync(wfPath, wfContent, 'utf8');
+          // encoding — для кейсов про файлы не в UTF-8 (те же кодировки, что у inputEncoding)
+          writeFileSync(wfPath, step.writeFile.encoding ? encodeInput(wfContent, step.writeFile.encoding) : wfContent, step.writeFile.encoding ? undefined : 'utf8');
           // Бит исполнения: на *nix навык запускает платформу через exec, и фейк без +x
           // не стартует вовсе. На Windows chmod — no-op.
           if (step.writeFile.executable) chmodSync(wfPath, 0o755);
@@ -896,6 +946,8 @@ async function runCaseAsync(testCase, opts) {
           runGitStep(workDir, step.git);
           continue;
         }
+        // editFile / movePath — правка и переименование в workDir (tests/common/file-step.mjs)
+        if (runFileStep(workDir, step)) continue;
         const preScript = resolveScript(step.script, opts.runtime);
         const preArgs = [];
         for (const [flag, value] of Object.entries(step.args || {})) {
@@ -935,23 +987,26 @@ async function runCaseAsync(testCase, opts) {
     // Execute
     const { scriptPath, args } = buildArgs(skillConfig, caseData, workDir, inputFile, opts.runtime);
     let stdout = '', stderr = '', exitCode = 0;
+    const execT0 = performance.now();
     try {
-      const execCwd = (caseData.cwd || skillConfig.cwd) === 'workDir' ? workDir : undefined;
+      const execCwd = resolveExecCwd(caseData.cwd || skillConfig.cwd, workDir);
       ({ stdout, stderr } = await execSkillAsync(opts.runtime, scriptPath, args, execCwd));
     } catch (e) {
       exitCode = e.status ?? 1;
       stdout = e.stdout || '';
       stderr = e.stderr || '';
     }
+    const execMs = performance.now() - execT0;
 
     if (inputFile && existsSync(inputFile)) unlinkSync(inputFile);
 
     // Assertions
     const errors = [];
     errors.push(...checkExpectKeys(caseData));
+    errors.push(...checkMaxDuration(caseData, execMs));
     if (caseData.expectError) {
       if (exitCode === 0) errors.push('Expected error (non-zero exit) but got exitCode=0');
-      if (typeof caseData.expectError === 'string' && !stderr.includes(caseData.expectError)) {
+      if (typeof caseData.expectError === 'string' && !stderrIncludes(stderr, caseData.expectError)) {
         errors.push(`Expected stderr to contain "${caseData.expectError}", got: ${stderr.substring(0, 200)}`);
       }
     } else {
@@ -971,14 +1026,14 @@ async function runCaseAsync(testCase, opts) {
         const needles = Array.isArray(caseData.expect.stdoutContains)
           ? caseData.expect.stdoutContains : [caseData.expect.stdoutContains];
         for (const needle of needles) {
-          if (!stdout.includes(needle)) errors.push(`stdout does not contain "${needle}"`);
+          if (!stdout.includes(substPlaceholders(needle, workDir))) errors.push(`stdout does not contain "${needle}"`);
         }
       }
       if (caseData.expect?.stdoutNotContains) {
         const needles = Array.isArray(caseData.expect.stdoutNotContains)
           ? caseData.expect.stdoutNotContains : [caseData.expect.stdoutNotContains];
         for (const needle of needles) {
-          if (stdout.includes(needle)) errors.push(`stdout unexpectedly contains "${needle}"`);
+          if (stdout.includes(substPlaceholders(needle, workDir))) errors.push(`stdout unexpectedly contains "${needle}"`);
         }
       }
       // Предупреждение — не отказ: навык печатает его в stderr и продолжает работу. Без
@@ -987,7 +1042,15 @@ async function runCaseAsync(testCase, opts) {
         const needles = Array.isArray(caseData.expect.stderrContains)
           ? caseData.expect.stderrContains : [caseData.expect.stderrContains];
         for (const needle of needles) {
-          if (!stderr.includes(needle)) errors.push(`stderr does not contain "${needle}"`);
+          if (!stderrIncludes(stderr, needle)) errors.push(`stderr does not contain "${needle}"`);
+        }
+      }
+      // Отсутствие текста в stderr — для «лишних» предупреждений: навык отработал, но пожаловался зря.
+      if (caseData.expect?.stderrNotContains) {
+        const needles = Array.isArray(caseData.expect.stderrNotContains)
+          ? caseData.expect.stderrNotContains : [caseData.expect.stderrNotContains];
+        for (const needle of needles) {
+          if (stderrIncludes(stderr, needle)) errors.push(`stderr unexpectedly contains "${needle}"`);
         }
       }
       // Отсутствие файла — тоже утверждение, и нужно оно чаще всего НЕГАТИВНОМУ кейсу:
@@ -1042,7 +1105,7 @@ async function runCaseAsync(testCase, opts) {
       if (errors.length === 0 && caseData.idempotent && !workspace.readOnly) {
         const before = snapshotWorkDirBytes(workDir);
         try {
-          const execCwd = (caseData.cwd || skillConfig.cwd) === 'workDir' ? workDir : undefined;
+          const execCwd = resolveExecCwd(caseData.cwd || skillConfig.cwd, workDir);
           await execSkillAsync(opts.runtime, scriptPath, args, execCwd);
         } catch (e) {
           errors.push(`Idempotency rerun failed: exitCode=${e.status}\nstderr: ${(e.stderr || '').substring(0, 300)}`);
@@ -1166,14 +1229,16 @@ function runCase(testCase, opts) {
     const { scriptPath, args } = buildArgs(skillConfig, caseData, workDir, inputFile, opts.runtime);
     let stdout = '', stderr = '', exitCode = 0;
 
+    const execT0 = performance.now();
     try {
-      const execCwd = (caseData.cwd || skillConfig.cwd) === 'workDir' ? workDir : undefined;
+      const execCwd = resolveExecCwd(caseData.cwd || skillConfig.cwd, workDir);
       stdout = execSkillRaw(opts.runtime, scriptPath, args, execCwd);
     } catch (e) {
       exitCode = e.status ?? 1;
       stdout = e.stdout || '';
       stderr = e.stderr || '';
     }
+    const execMs = performance.now() - execT0;
 
     // Remove temp input file from workDir before snapshot comparison
     if (inputFile && existsSync(inputFile)) unlinkSync(inputFile);
@@ -1181,13 +1246,14 @@ function runCase(testCase, opts) {
     // 4. Assertions
     const errors = [];
     errors.push(...checkExpectKeys(caseData));
+    errors.push(...checkMaxDuration(caseData, execMs));
 
     if (caseData.expectError) {
       // Negative case — expect failure
       if (exitCode === 0) {
         errors.push('Expected error (non-zero exit) but got exitCode=0');
       }
-      if (typeof caseData.expectError === 'string' && !stderr.includes(caseData.expectError)) {
+      if (typeof caseData.expectError === 'string' && !stderrIncludes(stderr, caseData.expectError)) {
         errors.push(`Expected stderr to contain "${caseData.expectError}", got: ${stderr.substring(0, 200)}`);
       }
     } else {
@@ -1214,14 +1280,14 @@ function runCase(testCase, opts) {
         const needles = Array.isArray(caseData.expect.stdoutContains)
           ? caseData.expect.stdoutContains : [caseData.expect.stdoutContains];
         for (const needle of needles) {
-          if (!stdout.includes(needle)) errors.push(`stdout does not contain "${needle}"`);
+          if (!stdout.includes(substPlaceholders(needle, workDir))) errors.push(`stdout does not contain "${needle}"`);
         }
       }
       if (caseData.expect?.stdoutNotContains) {
         const needles = Array.isArray(caseData.expect.stdoutNotContains)
           ? caseData.expect.stdoutNotContains : [caseData.expect.stdoutNotContains];
         for (const needle of needles) {
-          if (stdout.includes(needle)) errors.push(`stdout unexpectedly contains "${needle}"`);
+          if (stdout.includes(substPlaceholders(needle, workDir))) errors.push(`stdout unexpectedly contains "${needle}"`);
         }
       }
       // Предупреждение — не отказ: навык печатает его в stderr и продолжает работу. Без
@@ -1230,7 +1296,15 @@ function runCase(testCase, opts) {
         const needles = Array.isArray(caseData.expect.stderrContains)
           ? caseData.expect.stderrContains : [caseData.expect.stderrContains];
         for (const needle of needles) {
-          if (!stderr.includes(needle)) errors.push(`stderr does not contain "${needle}"`);
+          if (!stderrIncludes(stderr, needle)) errors.push(`stderr does not contain "${needle}"`);
+        }
+      }
+      // Отсутствие текста в stderr — для «лишних» предупреждений: навык отработал, но пожаловался зря.
+      if (caseData.expect?.stderrNotContains) {
+        const needles = Array.isArray(caseData.expect.stderrNotContains)
+          ? caseData.expect.stderrNotContains : [caseData.expect.stderrNotContains];
+        for (const needle of needles) {
+          if (stderrIncludes(stderr, needle)) errors.push(`stderr unexpectedly contains "${needle}"`);
         }
       }
       // Отсутствие файла — тоже утверждение, и нужно оно чаще всего НЕГАТИВНОМУ кейсу:
@@ -1287,7 +1361,7 @@ function runCase(testCase, opts) {
       if (errors.length === 0 && caseData.idempotent && !workspace.readOnly) {
         const before = snapshotWorkDirBytes(workDir);
         try {
-          const execCwd = (caseData.cwd || skillConfig.cwd) === 'workDir' ? workDir : undefined;
+          const execCwd = resolveExecCwd(caseData.cwd || skillConfig.cwd, workDir);
           execSkillRaw(opts.runtime, scriptPath, args, execCwd);
         } catch (e) {
           errors.push(`Idempotency rerun failed: exitCode=${e.status}\nstderr: ${(e.stderr || '').substring(0, 300)}`);
@@ -1483,10 +1557,15 @@ async function discoverIntegration(filter) {
     const testName = file.replace(/\.test\.mjs$/, '');
     const id = `integration/${testName}`;
     if (filter && !id.startsWith(filter) && !id.includes(filter)) continue;
-    const mod = await import(`file://${join(INTEGRATION, file).replace(/\\/g, '/')}`);
+    // pathToFileURL, а не `file://` + путь: `#`, `%`, `?` в пути к клону ломают самодельный URL (#137).
+    const mod = await import(pathToFileURL(join(INTEGRATION, file)).href);
     const engines = Array.isArray(mod.engines) && mod.engines.length ? mod.engines : ['1cv8'];
     results.push({ id, name: mod.name || testName, steps: mod.steps || [], file, cache: mod.cache, setup: mod.setup || 'empty-config', requiresPlatform: !!mod.requiresPlatform, engines });
   }
+  // Тесты, снимающие фикстуру в кэш (`cache`), — первыми: их потребитель (`setup: 'base-config'`
+  // у build-cfe) стоит по алфавиту раньше и на пустом кэше падал в первом же прогоне.
+  // sort стабилен — внутри групп остаётся алфавитный порядок readdirSync.
+  results.sort((a, b) => (b.cache ? 1 : 0) - (a.cache ? 1 : 0));
   return results;
 }
 
@@ -1686,6 +1765,12 @@ function printIntegrationReport(results, opts) {
         }
       }
     }
+    // Ошибки уровня теста (фикстура, импорт модуля) шагом не являются: без этой печати тест
+    // падал голым «✗ (0.0s)» без причины.
+    const stepErrors = new Set(r.steps.map(s => s.error));
+    for (const err of (r.errors || []).filter(e => !stepErrors.has(e))) {
+      for (const line of err.split('\n')) console.log(`    ${line}`);
+    }
   }
   const passed = results.filter(r => r.passed).length;
   const failed = results.filter(r => !r.passed).length;
@@ -1719,6 +1804,9 @@ async function main() {
         integrationResults.push(...await runIntegrationTest(test, opts));
       }
       integrationOk = printIntegrationReport(integrationResults, opts);
+    } else if (isIntegrationFilter) {
+      console.error(`No integration tests found in ${INTEGRATION} (filter: "${opts.filter}")`);
+      integrationOk = false;
     }
   }
 
@@ -1752,8 +1840,12 @@ async function main() {
       }
       const wallTime = ((performance.now() - wallStart) / 1000).toFixed(1);
       casesOk = printReport(results, opts, wallTime);
-    } else if (opts.filter && !isIntegrationFilter) {
-      console.log('No test cases found.' + (opts.filter ? ` Filter: "${opts.filter}"` : ''));
+    } else {
+      // Пустая выборка — ошибка, а не зелёный прогон: так проявляются опечатка в фильтре
+      // и неверный корень кейсов (#137 — путь с кириллицей или «~» давал 0 кейсов и exit 0).
+      console.error(`No test cases found in ${CASES}` + (opts.filter ? ` (filter: "${opts.filter}")` : ''));
+      if (opts.filter) console.error('Integration tests are selected by the "integration/" prefix.');
+      casesOk = false;
     }
   }
 

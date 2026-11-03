@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# switch.py v1.7 — Переключение навыков 1С между AI-платформами и рантаймами
+# switch.py v1.8 — Переключение навыков 1С между AI-платформами и рантаймами
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 """
 Копирует (или создаёт ссылки на) навыки из .claude/skills/ на другие AI-платформы
@@ -12,14 +12,17 @@ Roo Code, Augment и др.) с перезаписью путей, и/или пе
   python scripts/switch.py cursor --runtime python               # скопировать + Python
   python scripts/switch.py claude-code --project-dir /my/proj    # установить в проект
   python scripts/switch.py claude-code --project-dir /my/proj --link  # ссылки вместо копий
-  python scripts/switch.py --undo cursor                         # удалить копию
+  python scripts/switch.py --undo cursor                         # удалить навыки набора
   python scripts/switch.py --runtime python                      # сменить runtime in-place
 """
 import argparse
 import glob
+import json
 import os
 import re
 import shutil
+import stat
+import subprocess
 import sys
 
 # ---------------------------------------------------------------------------
@@ -46,6 +49,18 @@ PLATFORMS = {
 }
 
 SOURCE_PREFIX = '.claude/skills'
+
+SOURCE_URL = 'https://github.com/Nikolay-Shirokov/cc-1c-skills'
+
+# Манифест установки в целевом каталоге навыков: по нему отличаем свои навыки
+# от сторонних, которые лежат в том же каталоге и трогать их нельзя.
+MANIFEST_NAME = '.cc-1c-skills.json'
+# Допустимое имя навыка в манифесте: без разделителей, дисков (C:), скрытых
+# каталогов и точки в конце (Windows её отбрасывает: «x.» = «x») — испорченный
+# манифест не должен дотягиваться до чужих путей
+RX_SKILL_NAME = re.compile(r'[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?')
+# Имена устройств Windows, в том числе с расширением (nul.txt)
+RX_WIN_RESERVED = re.compile(r'(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\..*)?')
 
 # ${CLAUDE_SKILL_DIR}/../<other>/<rest>  — cross-skill reference (more specific, match first)
 RX_SKILL_DIR_CROSS = re.compile(r'\$\{CLAUDE_SKILL_DIR\}/\.\./([a-z][a-z0-9-]+)/')
@@ -106,6 +121,14 @@ def is_junction(path):
         return True
     if hasattr(os.path, 'isjunction'):
         return os.path.isjunction(path)
+    # Python < 3.12 на Windows: islink() не видит junction. Смотрим именно тег
+    # mount point — reparse point бывает и у обычных каталогов (OneDrive)
+    if sys.platform == 'win32':
+        try:
+            tag = getattr(os.lstat(path), 'st_reparse_tag', 0)
+        except OSError:
+            return False
+        return tag == stat.IO_REPARSE_TAG_MOUNT_POINT
     return False
 
 
@@ -126,21 +149,210 @@ def create_junction(src, dst):
         os.symlink(src, dst, target_is_directory=True)
 
 
-def safe_rmtree(path):
-    """Remove directory tree, handling junctions/symlinks safely.
+def is_plain_name(name):
+    """True for a skill-like directory name (no separators, drives, dot-dirs)."""
+    return (isinstance(name, str) and RX_SKILL_NAME.fullmatch(name) is not None
+            and RX_WIN_RESERVED.fullmatch(name) is None)
 
-    Unlike shutil.rmtree, this does not follow junctions/symlinks —
-    it removes the link itself without touching the target.
+
+_manifest_warned = set()
+
+
+def read_manifest(target_dir):
+    """Return installation manifest dict, or None if absent or unreadable."""
+    path = os.path.join(target_dir, MANIFEST_NAME)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        if path not in _manifest_warned:
+            _manifest_warned.add(path)
+            print(f"Предупреждение: манифест {path} не прочитан ({e}) — "
+                  f"своими считаются только навыки текущей версии.",
+                  file=sys.stderr)
+        return None
+    if not isinstance(data, dict):
+        return None
+    skills = data.get('skills')
+    data['skills'] = [n for n in skills if is_plain_name(n)] \
+        if isinstance(skills, list) else []
+    return data
+
+
+def owned_names(target_dir, src_skills):
+    """Skill names this set owns in target_dir: manifest list + current source."""
+    names = set(src_skills)
+    manifest = read_manifest(target_dir)
+    if manifest:
+        names.update(manifest['skills'])
+    return names
+
+
+def present_owned(target_dir, names):
+    """Owned names that actually exist in target_dir (dirs or links)."""
+    return sorted(n for n in names
+                  if os.path.lexists(os.path.join(target_dir, n)))
+
+
+def remove_owned(target_dir, names):
+    """Remove owned skill dirs/links, leaving everything else in place.
+
+    Links are removed as links, without touching their target.
     """
-    for entry in os.listdir(path):
-        entry_path = os.path.join(path, entry)
-        if is_junction(entry_path):
-            remove_junction(entry_path)
-        elif os.path.isdir(entry_path):
-            shutil.rmtree(entry_path)
+    removed = []
+    for name in sorted(names):
+        path = os.path.join(target_dir, name)
+        if is_junction(path):
+            try:
+                remove_junction(path)
+            except OSError:
+                os.unlink(path)  # ссылка на файл на Windows
+        elif os.path.isdir(path):
+            shutil.rmtree(path)
+        elif os.path.lexists(path):
+            # Файл или битая ссылка на месте навыка — иначе copytree упадёт
+            os.unlink(path)
         else:
-            os.unlink(entry_path)
-    os.rmdir(path)
+            continue
+        removed.append(name)
+    return removed
+
+
+def source_skill_names():
+    """Skills of the current source version; empty if the source dir is gone."""
+    src_dir = source_skills_dir()
+    return scan_skills(src_dir) if os.path.isdir(src_dir) else []
+
+
+def is_source_target(target_dir):
+    """True (with an error message) if target_dir is the source skills dir."""
+    if is_different_dir(target_dir, source_skills_dir()):
+        return False
+    print("Ошибка: целевой каталог совпадает с исходными навыками.",
+          file=sys.stderr)
+    return True
+
+
+def prepare_target(target_dir, target_prefix, skills):
+    """Clear owned skills from target_dir before install; False if unsafe."""
+    if is_source_target(target_dir):
+        return False
+    if os.path.isdir(target_dir):
+        manifest = read_manifest(target_dir)
+        if manifest:
+            # Каталог с именем нашего навыка, которого прошлая установка не ставила
+            for name in skills:
+                if name not in manifest['skills'] and \
+                        os.path.lexists(os.path.join(target_dir, name)):
+                    print(f"Предупреждение: {target_prefix}/{name} не из "
+                          f"прошлой установки — перезаписан навыком набора.",
+                          file=sys.stderr)
+        existing = present_owned(target_dir, owned_names(target_dir, skills))
+        if existing:
+            print(f"В {target_prefix}/ уже есть {len(existing)} навыков. "
+                  f"Обновляю...")
+            remove_owned(target_dir, existing)
+    os.makedirs(target_dir, exist_ok=True)
+    copy_root_files(source_skills_dir(), target_dir)
+    return True
+
+
+def source_commit():
+    """Commit of the cc-1c-skills checkout switch.py runs from, or None.
+
+    None when git is missing or the source is not its own repository
+    (e.g. a downloaded archive unpacked inside a user's git project).
+    """
+    root = repo_root()
+    try:
+        r = subprocess.run(
+            ['git', '-C', root, 'rev-parse', '--show-toplevel', 'HEAD'],
+            capture_output=True, encoding='utf-8', errors='replace',
+            timeout=10)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    out = r.stdout.split('\n') if r.returncode == 0 else []
+    out = [ln.strip() for ln in out if ln.strip()]
+    if len(out) != 2:
+        return None
+    toplevel, commit = out
+
+    def norm(p):
+        return os.path.normcase(os.path.realpath(p))
+    if norm(toplevel) != norm(root):
+        return None
+    return commit
+
+
+def save_manifest(target_dir, data):
+    path = os.path.join(target_dir, MANIFEST_NAME)
+    with open(path, 'w', encoding='utf-8', newline='\n') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.write('\n')
+
+
+def write_manifest(target_dir, platform, runtime, mode, skills):
+    data = {'source': SOURCE_URL}
+    commit = source_commit()
+    if commit:
+        data['commit'] = commit
+    data['platform'] = platform
+    if runtime:
+        data['runtime'] = runtime
+    data['mode'] = mode
+    data['skills'] = sorted(skills)
+    save_manifest(target_dir, data)
+
+
+def read_bytes(path):
+    with open(path, 'rb') as f:
+        return f.read()
+
+
+def merge_gitignore(src, dst):
+    """Copy .gitignore, or append only missing lines to an existing one.
+
+    Works on bytes: the user's file may be in any encoding.
+    """
+    if not os.path.exists(dst):
+        shutil.copy2(src, dst)
+        return
+    content = read_bytes(dst)
+    have = {ln.strip() for ln in content.splitlines()}
+    missing = [ln for ln in read_bytes(src).splitlines()
+               if ln.strip() and ln.strip() not in have]
+    if not missing:
+        return
+    eol = b'\r\n' if b'\r\n' in content else b'\n'
+    if content and not content.endswith(b'\n'):
+        content += eol
+    content += eol.join(missing) + eol
+    with open(dst, 'wb') as f:
+        f.write(content)
+
+
+def copy_root_files(src_dir, target_dir):
+    """Copy root-level files of the source skills dir (.gitignore etc.)."""
+    for name in os.listdir(src_dir):
+        src_path = os.path.join(src_dir, name)
+        if not os.path.isfile(src_path):
+            continue
+        dst_path = os.path.join(target_dir, name)
+        if name == '.gitignore':
+            merge_gitignore(src_path, dst_path)
+        else:
+            shutil.copy2(src_path, dst_path)
+
+
+def is_own_gitignore(path, src_dir):
+    """True if every line of path is present in the source .gitignore."""
+    src = os.path.join(src_dir, '.gitignore')
+    if not os.path.isfile(src):
+        return False
+    ours = {ln.strip() for ln in read_bytes(src).splitlines()}
+    return all(ln.strip() in ours for ln in read_bytes(path).splitlines())
 
 
 def repo_root():
@@ -344,19 +556,8 @@ def cmd_install(platform, runtime, project_dir):
         print(f"Ошибка: навыки не найдены в {src_dir}", file=sys.stderr)
         return 1
 
-    if os.path.isdir(target_dir):
-        existing = scan_skills(target_dir)
-        if existing:
-            print(f"В {target_prefix}/ уже есть {len(existing)} навыков. Обновляю...")
-            safe_rmtree(target_dir)
-
-    os.makedirs(target_dir, exist_ok=True)
-
-    # Copy root-level files from source skills dir (.gitignore, etc.)
-    for name in os.listdir(src_dir):
-        src_path = os.path.join(src_dir, name)
-        if os.path.isfile(src_path):
-            shutil.copy2(src_path, os.path.join(target_dir, name))
+    if not prepare_target(target_dir, target_prefix, skills):
+        return 1
 
     installed = 0
     all_info = []
@@ -412,6 +613,8 @@ def cmd_install(platform, runtime, project_dir):
         print(f"  [OK] {skill_name}")
         installed += 1
 
+    write_manifest(target_dir, platform, runtime, 'copy', skills)
+
     print(f"\nГотово! {installed} навыков установлено в {target_prefix}/")
 
     print_runtime_messages(all_info, all_warnings)
@@ -435,29 +638,13 @@ def cmd_link(platform, project_dir):
     target_prefix = PLATFORMS[platform]
     target_dir = os.path.join(project_dir, target_prefix.replace('/', os.sep))
 
-    if not is_different_dir(target_dir, src_dir):
-        print("Ошибка: нельзя создать ссылки на самого себя.", file=sys.stderr)
-        return 1
-
     skills = scan_skills(src_dir)
     if not skills:
         print(f"Ошибка: навыки не найдены в {src_dir}", file=sys.stderr)
         return 1
 
-    if os.path.isdir(target_dir):
-        existing = scan_skills(target_dir)
-        if existing:
-            print(f"В {target_prefix}/ уже есть {len(existing)} навыков. "
-                  f"Обновляю...")
-            safe_rmtree(target_dir)
-
-    os.makedirs(target_dir, exist_ok=True)
-
-    # Copy root-level files (.gitignore etc.)
-    for name in os.listdir(src_dir):
-        src_path = os.path.join(src_dir, name)
-        if os.path.isfile(src_path):
-            shutil.copy2(src_path, os.path.join(target_dir, name))
+    if not prepare_target(target_dir, target_prefix, skills):
+        return 1
 
     linked = 0
     link_type = "junction" if sys.platform == 'win32' else "symlink"
@@ -470,6 +657,8 @@ def cmd_link(platform, project_dir):
         create_junction(src_skill, dst_skill)
         print(f"  [OK] {skill_name}")
         linked += 1
+
+    write_manifest(target_dir, platform, None, 'link', skills)
 
     print(f"\nГотово! {linked} навыков подключено через {link_type} "
           f"в {target_prefix}/")
@@ -491,35 +680,72 @@ def cmd_undo(platform, project_dir):
         print(f"Директория {target_prefix}/ не найдена — нечего удалять.")
         return 0
 
-    skills = scan_skills(target_dir)
-    safe_rmtree(target_dir)
+    if is_source_target(target_dir):
+        return 1
+    src_dir = source_skills_dir()
+    removed = remove_owned(
+        target_dir, owned_names(target_dir, source_skill_names()))
+    manifest_path = os.path.join(target_dir, MANIFEST_NAME)
+    if os.path.isfile(manifest_path):
+        os.unlink(manifest_path)
 
-    # Clean up empty parent directories
+    # .gitignore we created ourselves goes too; one with user lines stays
+    gitignore = os.path.join(target_dir, '.gitignore')
+    if os.listdir(target_dir) == ['.gitignore'] \
+            and is_own_gitignore(gitignore, src_dir):
+        os.unlink(gitignore)
+
+    print(f"Удалено из {target_prefix}/: {len(removed)} навыков")
+
+    left = sorted(os.listdir(target_dir))
+    if left:
+        print(f"Оставлено нетронутым: {', '.join(left)}")
+        return 0
+
+    # Clean up empty directories
+    os.rmdir(target_dir)
     parent = os.path.dirname(target_dir)
     if os.path.isdir(parent) and not os.listdir(parent):
         os.rmdir(parent)
-
-    print(f"Удалено: {target_prefix}/ ({len(skills)} навыков)")
     return 0
 
 
 def cmd_switch_runtime(runtime, project_dir):
     """Switch runtime in-place for skills in the current project."""
-    # Find skills directory: try all known platform dirs
-    skills_dir = None
-    platform_name = None
+    # Find skills directory: try all known platform dirs. In the source repo
+    # that is .claude/skills; in other projects a dir installed by this set
+    # (with manifest) goes first, ahead of the user's own skills
+    src_names = source_skill_names()
+    candidates = []
     for name, prefix in PLATFORMS.items():
         candidate = os.path.join(project_dir, prefix.replace('/', os.sep))
-        if os.path.isdir(candidate) and scan_skills(candidate):
-            skills_dir = candidate
-            platform_name = name
-            break
+        if not os.path.isdir(candidate):
+            continue
+        # Сторонние навыки рядом с нашими не переписываем; каталог без наших
+        # навыков (только свои навыки пользователя) не кандидат
+        owned = owned_names(candidate, src_names)
+        skills = [s for s in scan_skills(candidate) if s in owned]
+        if not skills:
+            continue
+        manifest = read_manifest(candidate)
+        # Через ссылку правка ушла бы в источник и во все подключённые проекты
+        linked = bool(manifest and manifest.get('mode') == 'link') or any(
+            is_junction(os.path.join(candidate, s)) for s in skills)
+        candidates.append((name, candidate, skills, manifest, linked))
+    if is_different_dir(project_dir, repo_root()):
+        # Установки с манифестом первыми, из них копии раньше ссылок
+        candidates.sort(key=lambda c: (c[3] is None, c[4]))
 
-    if not skills_dir:
+    if not candidates:
         print("Ошибка: не найдена директория навыков в текущем каталоге.", file=sys.stderr)
         return 1
 
-    skills = scan_skills(skills_dir)
+    platform_name, skills_dir, skills, manifest, linked = candidates[0]
+    if linked:
+        print(f"Ошибка: навыки в {PLATFORMS[platform_name]}/ подключены "
+              f"ссылками — рантайм берётся из источника. Переключите его "
+              f"в репозитории навыков.", file=sys.stderr)
+        return 1
     switched = 0
     all_info = []
     all_warnings = []
@@ -560,6 +786,11 @@ def cmd_switch_runtime(runtime, project_dir):
                 md_name = os.path.basename(md_path)
                 print(f"  [OK] {skill_name}/{md_name}")
                 switched += 1
+
+    # Версию установки не трогаем: меняется только рантайм
+    if manifest:
+        manifest['runtime'] = runtime
+        save_manifest(skills_dir, manifest)
 
     print(f"\nПереключено {switched} файлов на {runtime}.")
     print_runtime_messages(all_info, all_warnings)
@@ -659,11 +890,13 @@ def interactive_mode():
     target_dir = os.path.join(project_dir, target_prefix.replace('/', os.sep))
 
     if install_mode and os.path.isdir(target_dir):
-        existing = scan_skills(target_dir)
+        existing = present_owned(
+            target_dir, owned_names(target_dir, source_skill_names()))
         if existing:
             action_options = [
-                ("Обновить", f"перезаписать {len(existing)} навыков"),
-                ("Удалить",  f"удалить {target_prefix}/"),
+                ("Обновить", f"перезаписать {len(existing)} навыков cc-1c-skills"),
+                ("Удалить",  f"удалить навыки cc-1c-skills ({len(existing)}), "
+                             f"остальное не трогать"),
                 ("Отмена",   "ничего не делать"),
             ]
             action = ask_choice(

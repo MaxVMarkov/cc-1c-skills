@@ -1,0 +1,92 @@
+{
+  "name": "Ошибка: неверный путь через компоновщик настроек отчёта — свойство компоновщика, колонка или коллекция настроек",
+  "preRun": [
+    {
+      "script": "cfe-init/scripts/cfe-init",
+      "args": {
+        "-Name": "Тест",
+        "-NamePrefix": "Тест_",
+        "-OutputDir": "{workDir}/cfe"
+      }
+    },
+    {
+      "script": "meta-compile/scripts/meta-compile",
+      "input": [
+        {
+          "type": "Report",
+          "name": "Тест_Отчет"
+        }
+      ],
+      "args": {
+        "-JsonPath": "{inputFile}",
+        "-OutputDir": "{workDir}/cfe"
+      }
+    },
+    {
+      "script": "form-add/scripts/form-add",
+      "args": {
+        "-ObjectPath": "{workDir}/cfe/Reports/Тест_Отчет.xml",
+        "-FormName": "Тест_ФормаОтчета"
+      }
+    },
+    {
+      "script": "form-compile/scripts/form-compile",
+      "input": {
+        "title": "Отчет",
+        "elements": [
+          {
+            "table": "Тест_Отбор",
+            "path": "Отчет.SettingsComposer.Settings.Filter"
+          },
+          {
+            "table": "Тест_Опечатка",
+            "path": "Отчет.SettingsComposerX.UserSettings"
+          },
+          {
+            "table": "Тест_НетСвойства",
+            "path": "Отчет.SettingsComposer.НетТакого"
+          },
+          {
+            "table": "Тест_НетСвойстваРус",
+            "path": "Отчет.КомпоновщикНастроек.Настройкии"
+          },
+          {
+            "table": "Тест_Структура",
+            "path": "Отчет.SettingsComposer.Settings.Structure"
+          },
+          {
+            "table": "Тест_Элементы",
+            "path": "Отчет.КомпоновщикНастроек.ПользовательскиеНастройки.Элементы"
+          }
+        ],
+        "attributes": [
+          {
+            "name": "Отчет",
+            "type": "ReportObject.Тест_Отчет",
+            "main": true
+          }
+        ]
+      },
+      "args": {
+        "-JsonPath": "{inputFile}",
+        "-OutputPath": "{workDir}/cfe/Reports/Тест_Отчет/Forms/Тест_ФормаОтчета/Ext/Form.xml"
+      }
+    }
+  ],
+  "params": {
+    "extensionPath": "cfe"
+  },
+  "expectError": true,
+  "expect": {
+    "stdoutContains": [
+      "path 'Отчет.SettingsComposerX'",
+      "path 'Отчет.SettingsComposer.НетТакого' — the settings composer has no such property (available to forms: Settings, UserSettings, FixedSettings)",
+      "path 'Отчет.КомпоновщикНастроек.Настройкии' — the settings composer has no such property (available to forms: Настройки, ПользовательскиеНастройки, ФиксированныеНастройки)",
+      "path 'Отчет.SettingsComposer.Settings.Structure' — Settings has no such column or settings collection",
+      "path 'Отчет.КомпоновщикНастроек.ПользовательскиеНастройки.Элементы'"
+    ],
+    "stdoutNotContains": [
+      "path 'Отчет.SettingsComposer.Settings.Filter'"
+    ]
+  }
+}

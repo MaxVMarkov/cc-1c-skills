@@ -1,4 +1,4 @@
-﻿# mxl-compile v1.56 — Compile 1C spreadsheet from JSON
+﻿# mxl-compile v1.62 — Compile 1C spreadsheet from JSON
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 [CmdletBinding(PositionalBinding=$false)]
 param(
@@ -16,14 +16,23 @@ $ErrorActionPreference = "Stop"
 # идёт чинить скрипт, а не свой вызов. $source — файл или параметр. $expected заполняем только
 # для полиморфного входа: у файла подсказка была бы наполнителем. -Inline печатает ещё и то,
 # что доехало: у файла такого вопроса нет — путь назван, позицию дал парсер, файл на диске.
-# Возврат через -NoEnumerate: без него одноэлементный
-# JSON-массив разворачивался бы в скаляр вторым анруллингом.
+# Возврат через запятую: без неё одноэлементный JSON-массив разворачивался бы в скаляр
+# вторым анруллингом. Не Write-Output -NoEnumerate: pwsh 7.6 заворачивает им в List
+# и одиночный объект (issue #136).
 function ConvertFrom-JsonInput([string]$text, [string]$source, [string]$expected, [switch]$Inline) {
 	try {
 		# PS 5.1 на пустой строке отдаёт $null, а не ошибку — навык уходил дальше с $null,
 		# тогда как py-порт падал. Проверяем сами, чтобы порты вели себя одинаково.
 		if ([string]::IsNullOrWhiteSpace($text)) { throw 'input is empty' }
-		$parsed = $text | ConvertFrom-Json
+		# pwsh 7+ сам разворачивает массив верхнего уровня ([x] → x, [] → $null). Ключ -NoEnumerate
+		# появился там же: в 5.1 и pwsh 6 его нет, поэтому спрашиваем командлет, а не версию.
+		$cfj = @{}
+		$cfjKeys = (Get-Command ConvertFrom-Json).Parameters
+		if ($cfjKeys.ContainsKey('NoEnumerate')) { $cfj.NoEnumerate = $true }
+		# pwsh 7.5+ без -DateKind String превращает ISO-строки дат в DateTime, и в XML уходит формат
+		# локали; в 5.1 и pwsh до 7.5 ключа нет (5.1 даты и так не трогает).
+		if ($cfjKeys.ContainsKey('DateKind')) { $cfj.DateKind = 'String' }
+		$parsed = $text | ConvertFrom-Json @cfj
 	} catch {
 		$what = if ($expected) { "$source expects $expected" } else { "Invalid JSON in $source" }
 		if ($Inline) {
@@ -36,7 +45,7 @@ function ConvertFrom-JsonInput([string]$text, [string]$source, [string]$expected
 		[Console]::Error.WriteLine("[ERROR] ${what} ($($_.Exception.Message))")
 		exit 1
 	}
-	Write-Output -NoEnumerate $parsed
+	return ,$parsed
 }
 
 # --- Чтение входного JSON-файла ---
@@ -114,16 +123,20 @@ function Find-V8Project([string]$startDir) {
 }
 function Get-EditMode([string]$cfgDir) {
 	try {
-		$pj = Find-V8Project (Get-Location).Path
-		if (-not $pj) { $pj = Find-V8Project $cfgDir }
+		$pj = Find-V8Project (Get-Location).ProviderPath
+		if (-not $pj) { $pj = Find-V8Project ([System.IO.Path]::GetFullPath($cfgDir)) }
 		if (-not $pj) { return 'deny' }
-		$proj = Get-Content -Raw $pj | ConvertFrom-Json
+		# UTF-8 явно: PS 5.1 читает файл без BOM как ANSI, и configSrc с кириллицей не совпал бы
+		$proj = Get-Content -Raw -Encoding UTF8 $pj | ConvertFrom-Json
+		# configSrc — от каталога .v8-project.json, а не от рабочего каталога: иначе из подкаталога
+		# проекта база не сопоставляется и берётся правило проекта.
+		$projDir = [System.IO.Path]::GetDirectoryName($pj)
 		$cfgFull = [System.IO.Path]::GetFullPath($cfgDir).TrimEnd('\', '/')
 		if ($proj.databases) {
 			foreach ($db in $proj.databases) {
 				if ($db.configSrc) {
-					$src = [System.IO.Path]::GetFullPath($db.configSrc).TrimEnd('\', '/')
-					if ($cfgFull -eq $src -or $cfgFull.StartsWith($src + [System.IO.Path]::DirectorySeparatorChar)) {
+					$src = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($projDir, $db.configSrc)).TrimEnd('\', '/')
+					if ($cfgFull -eq $src -or $cfgFull.StartsWith($src + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
 						if ($db.editingAllowedCheck) { return $db.editingAllowedCheck }
 					}
 				}
@@ -136,7 +149,7 @@ function Get-EditMode([string]$cfgDir) {
 function Assert-EditAllowed([string]$targetPath, [string]$require) {
 	try {
 		$rp = $targetPath
-		try { $rp = (Resolve-Path $targetPath -ErrorAction Stop).Path } catch {}
+		try { $rp = (Resolve-Path $targetPath -ErrorAction Stop).ProviderPath } catch {}
 		# Autonomous external object (EPF/ERF): never part of a config on support (issue #39).
 		if (Test-ExternalObjectRoot $rp) { return }
 		$elemUuid = Get-RootUuid $rp
@@ -244,7 +257,7 @@ function Get-FormatRank([string]$ver) {
 	return 0
 }
 
-$script:outPathResolved = if ([System.IO.Path]::IsPathRooted($OutputPath)) { $OutputPath } else { Join-Path (Get-Location) $OutputPath }
+$script:outPathResolved = if ([System.IO.Path]::IsPathRooted($OutputPath)) { $OutputPath } else { Join-Path (Get-Location).ProviderPath $OutputPath }
 $script:formatVersion = Detect-FormatVersion ([System.IO.Path]::GetDirectoryName($script:outPathResolved))
 
 # --- 1. Load and validate JSON ---
@@ -814,6 +827,61 @@ function Resolve-TypeStr {
 # палитра распухнет на дубли и все ссылки <f> уедут.
 # Умолчания здесь ПЛАТФОРМЕННЫЕ, а не как у реквизита метаданных: голая строка — безлимитная
 # (Length 0), голое число — 0,0 (проверено на макетах, собранных Конфигуратором).
+# Разбор примитивного типа DSL: Number / String / Date / DateTime / Time — с синонимами
+# (decimal, numeric, Число, Строка, Дата …), в любом регистре, с пробелами в скобках.
+# Тело общее у всех навыков-компиляторов (семья в check-inline-drift); умолчание для голого типа
+# зависит от места (хранимый реквизит — 10,0 и 10, СКД — без ограничения) и приходит аргументами.
+# Возврат: $null — не примитив (ссылки, Boolean, …); @{ Error } — база примитива узнана, а
+# параметры нет (вызывающий сообщает ошибку своим способом); иначе описание квалификаторов.
+function Parse-PrimitiveType {
+	param([string]$typeStr, [int]$defDigits, [int]$defFraction, [int]$defLength)
+	if ($typeStr -notmatch '^\s*([^\s(]+)\s*(\(.*)?$') { return $null }
+	$rest = if ($Matches.ContainsKey(2)) { $Matches[2] } else { '' }
+	$kind = switch -exact ($Matches[1].ToLowerInvariant()) {
+		'number' { 'Number' } 'decimal' { 'Number' } 'numeric' { 'Number' } 'число' { 'Number' }
+		'string' { 'String' } 'строка' { 'String' }
+		'date' { 'Date' } 'дата' { 'Date' } 'datetime' { 'DateTime' } 'датавремя' { 'DateTime' }
+		'time' { 'Time' } 'время' { 'Time' }
+		default { $null }
+	}
+	if (-not $kind) { return $null }
+	$bad = @{ Error = ("Invalid type '$typeStr'. Expected Number, Number(D), Number(D,F), Number(D,F,nonneg), " +
+		"String, String(N), String(N,fixed), Date, DateTime, Time") }
+	$parts = @()
+	if ($rest) {
+		if ($rest -notmatch '^\((.*)\)\s*$') { return $bad }
+		$parts = @($Matches[1] -split ',' | ForEach-Object { $_.Trim().ToLowerInvariant() })
+	}
+	if ($kind -eq 'Number') {
+		$sign = 'Any'
+		if ($parts.Count -gt 0 -and ($parts[-1] -eq 'nonneg' -or $parts[-1] -eq 'any')) {
+			if ($parts[-1] -eq 'nonneg') { $sign = 'Nonnegative' }
+			$parts = @(if ($parts.Count -gt 1) { $parts[0..($parts.Count - 2)] })
+		}
+		if ($parts.Count -gt 2) { return $bad }
+		foreach ($p in $parts) { if ($p -notmatch '^[0-9]{1,9}$') { return $bad } }
+		$d = if ($parts.Count -ge 1) { [int]$parts[0] } else { $defDigits }
+		$f = if ($parts.Count -ge 2) { [int]$parts[1] } elseif ($parts.Count -eq 1) { 0 } else { $defFraction }
+		# Дробная часть у числа без ограничения (0,F) платформа молча обнуляет — это ошибка ввода
+		if ($d -gt 38 -or $f -gt $d) { return $bad }
+		return @{ Kind = 'Number'; Digits = $d; Fraction = $f; Sign = $sign }
+	}
+	if ($kind -eq 'String') {
+		$allowed = 'Variable'
+		if ($parts.Count -eq 2) {
+			if ($parts[1] -eq 'fixed' -or $parts[1] -eq 'fix') { $allowed = 'Fixed' }
+			elseif ($parts[1] -ne 'variable') { return $bad }
+		}
+		if ($parts.Count -gt 2 -or ($parts.Count -ge 1 -and $parts[0] -notmatch '^[0-9]{1,9}$')) { return $bad }
+		$len = if ($parts.Count -ge 1) { [int]$parts[0] } else { $defLength }
+		# Фиксированную длину у неограниченной строки платформа молча снимает — это ошибка ввода
+		if ($allowed -eq 'Fixed' -and $len -eq 0) { return $bad }
+		return @{ Kind = 'String'; Length = $len; Allowed = $allowed }
+	}
+	if ($parts.Count -gt 0) { return $bad }
+	return @{ Kind = 'Date'; Fractions = $kind }
+}
+
 function Get-CanonValueType {
 	param([string]$typeStr, [string]$where)
 	$parts = @()
@@ -823,19 +891,24 @@ function Get-CanonValueType {
 		if (-not $p) { continue }
 		$canon = $null
 		$kind = $null
+		$prim = Parse-PrimitiveType $p 0 0 0
 		if ($p -ceq 'Boolean') {
 			$canon = 'Boolean'; $kind = 'Boolean'
-		} elseif ($p -match '^String(\((\d+)(\s*,\s*(fixed|variable))?\))?$') {
-			$len = if ($Matches[2]) { $Matches[2] } else { '0' }
-			$al = if ($Matches[4] -and $Matches[4].ToLowerInvariant() -eq 'fixed') { 'fixed' } else { 'variable' }
-			$canon = "String($len,$al)"; $kind = 'String'
-		} elseif ($p -match '^Number(\((\d+)(\s*,\s*(\d+))?(\s*,\s*(nonneg|any))?\))?$') {
-			$digits = if ($Matches[2]) { $Matches[2] } else { '0' }
-			$fraction = if ($Matches[4]) { $Matches[4] } else { '0' }
-			$sign = if ($Matches[6] -and $Matches[6].ToLowerInvariant() -eq 'nonneg') { 'nonneg' } else { 'any' }
-			$canon = "Number($digits,$fraction,$sign)"; $kind = 'Number'
-		} elseif ($p -ceq 'Date' -or $p -ceq 'DateTime' -or $p -ceq 'Time') {
-			$canon = $p; $kind = 'Date'
+		} elseif ($prim) {
+			# Примитивы: голый тип ячейки — без ограничения (Number 0,0, String 0).
+			if ($prim.Error) {
+				[Console]::Error.WriteLine("$($prim.Error) ($where)")
+				exit 1
+			}
+			if ($prim.Kind -eq 'String') {
+				$al = if ($prim.Allowed -eq 'Fixed') { 'fixed' } else { 'variable' }
+				$canon = "String($($prim.Length),$al)"; $kind = 'String'
+			} elseif ($prim.Kind -eq 'Number') {
+				$sign = if ($prim.Sign -eq 'Nonnegative') { 'nonneg' } else { 'any' }
+				$canon = "Number($($prim.Digits),$($prim.Fraction),$sign)"; $kind = 'Number'
+			} else {
+				$canon = $prim.Fractions; $kind = 'Date'
+			}
 		} elseif ($p -match '^(DefinedType|Characteristic)\.(.+)$') {
 			$canon = $p; $kind = "set:$p"
 		} elseif ($p.Contains('.')) {
@@ -2168,7 +2241,7 @@ foreach ($area in $def.areas) {
 			X "`t`t`t`t`t<f>$($cellInfo.FormatIdx)</f>"
 
 			if ($cellInfo.Param) {
-				X "`t`t`t`t`t<parameter>$($cellInfo.Param)</parameter>"
+				X "`t`t`t`t`t<parameter>$(Esc-XmlText $cellInfo.Param)</parameter>"
 			}
 
 			# Проверяем НАЛИЧИЕ ключа, а не истинность: пустая строка — это текст, платформа
@@ -2198,7 +2271,7 @@ foreach ($area in $def.areas) {
 			# Пока она стояла внутри ветки параметра, две трети расшифровок терялись молча.
 			# Порядок тегов ячейки снят с корпуса: parameter · текст · detailParameter.
 			if ($cellInfo.Detail) {
-				X "`t`t`t`t`t<detailParameter>$($cellInfo.Detail)</detailParameter>"
+				X "`t`t`t`t`t<detailParameter>$(Esc-XmlText $cellInfo.Detail)</detailParameter>"
 			}
 
 			# Третий параметр ячейки — имя параметра, которым подставляют картинку. Сама
@@ -2372,7 +2445,7 @@ foreach ($dr in $drawings) {
 	X "`t`t<drawingType>$($dr.Type)</drawingType>"
 	X "`t`t<id>$($dr.Id)</id>"
 	X "`t`t<formatIndex>$($dr.FormatIdx)</formatIndex>"
-	if ($dr.Detail) { X "`t`t<detailParameter>$($dr.Detail)</detailParameter>" }
+	if ($dr.Detail) { X "`t`t<detailParameter>$(Esc-XmlText $dr.Detail)</detailParameter>" }
 	if ($null -ne $dr.Text) {
 		$pairs = @()
 		if ($dr.Text -is [System.Management.Automation.PSCustomObject]) {
@@ -2572,7 +2645,7 @@ $sortedNamedItems = @($namedItems | Sort-Object -Property @{ Expression = { Get-
 foreach ($ni in $sortedNamedItems) {
 	if ($ni.DrawingId) {
 		X "`t<namedItem xsi:type=`"NamedItemDrawing`">"
-		X "`t`t<name>$($ni.Name)</name>"
+		X "`t`t<name>$(Esc-XmlText $ni.Name)</name>"
 		X "`t`t<drawingID>$($ni.DrawingId)</drawingID>"
 		X "`t</namedItem>"
 		continue
@@ -2583,7 +2656,7 @@ foreach ($ni in $sortedNamedItems) {
 	$hasCols = $ni.BeginCol -ge 0
 	$type = if ($hasRows -and $hasCols) { 'Rectangle' } elseif ($hasCols) { 'Columns' } else { 'Rows' }
 	X "`t<namedItem xsi:type=`"NamedItemCells`">"
-	X "`t`t<name>$($ni.Name)</name>"
+	X "`t`t<name>$(Esc-XmlText $ni.Name)</name>"
 	X "`t`t<area>"
 	X "`t`t`t<type>$type</type>"
 	X "`t`t`t<beginRow>$($ni.BeginRow)</beginRow>"
@@ -2615,7 +2688,7 @@ foreach ($fe in $fontEntries) {
 		}
 		continue
 	}
-	X "`t<font faceName=`"$($fe.Face)`" height=`"$(Format-Num $fe.Size)`" bold=`"$($fe.Bold)`" italic=`"$($fe.Italic)`" underline=`"$($fe.Underline)`" strikeout=`"$($fe.Strikeout)`" kind=`"Absolute`" scale=`"100`"/>"
+	X "`t<font faceName=`"$(Esc-Xml $fe.Face)`" height=`"$(Format-Num $fe.Size)`" bold=`"$($fe.Bold)`" italic=`"$($fe.Italic)`" underline=`"$($fe.Underline)`" strikeout=`"$($fe.Strikeout)`" kind=`"Absolute`" scale=`"100`"/>"
 }
 
 # 7j. Format palette
@@ -2688,7 +2761,7 @@ X '</document>'
 # --- 8. Write output ---
 
 $enc = New-Object System.Text.UTF8Encoding($true)
-$resolvedPath = if ([System.IO.Path]::IsPathRooted($OutputPath)) { $OutputPath } else { Join-Path (Get-Location) $OutputPath }
+$resolvedPath = if ([System.IO.Path]::IsPathRooted($OutputPath)) { $OutputPath } else { Join-Path (Get-Location).ProviderPath $OutputPath }
 # Каталог назначения создаём сами: типовой путь — Templates/<Имя>/Ext/Template.xml,
 # и его может ещё не быть. Так делают и form-compile, и skd-compile, и py-порт этого
 # навыка; без этого PS-порт падал на «Could not find a part of the path».

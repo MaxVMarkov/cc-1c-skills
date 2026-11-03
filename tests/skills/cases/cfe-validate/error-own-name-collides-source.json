@@ -1,0 +1,135 @@
+{
+  "name": "С -ConfigPath: собственные ТЧ, реквизит (в другом регистре), значение перечисления, команда и макет совпадают по имени с незаимствованными подобъектами источника; ТЧ с именем реквизита источника — можно",
+  "preRun": [
+    {
+      "script": "meta-compile/scripts/meta-compile",
+      "input": [
+        {
+          "type": "Enum",
+          "name": "Статусы",
+          "values": [
+            "Новый",
+            "Закрыт"
+          ]
+        },
+        {
+          "type": "Document",
+          "name": "ЗаказКлиента",
+          "attributes": [
+            "Комментарий: String(50)",
+            "Статус: EnumRef.Статусы"
+          ],
+          "tabularSections": {
+            "Товары": [
+              "Количество: Number(10,3)"
+            ]
+          },
+          "commands": {
+            "Печать": {
+              "synonym": "Печать",
+              "group": "FormCommandBarImportant"
+            }
+          }
+        }
+      ],
+      "args": {
+        "-JsonPath": "{inputFile}",
+        "-OutputDir": "{workDir}"
+      }
+    },
+    {
+      "script": "template-add/scripts/add-template",
+      "args": {
+        "-ObjectName": "ЗаказКлиента",
+        "-TemplateName": "ПечатьЗаказа",
+        "-TemplateType": "SpreadsheetDocument",
+        "-SrcDir": "{workDir}/Documents"
+      }
+    },
+    {
+      "script": "cfe-init/scripts/cfe-init",
+      "args": {
+        "-Name": "Тест",
+        "-NamePrefix": "Тест_",
+        "-OutputDir": "{workDir}/cfe",
+        "-ConfigPath": "{workDir}"
+      }
+    },
+    {
+      "script": "cfe-borrow/scripts/cfe-borrow",
+      "args": {
+        "-ExtensionPath": "{workDir}/cfe",
+        "-ConfigPath": "{workDir}",
+        "-Object": "Document.ЗаказКлиента ;; Enum.Статусы"
+      }
+    },
+    {
+      "script": "meta-edit/scripts/meta-edit",
+      "args": {
+        "-ObjectPath": "{workDir}/cfe/Documents/ЗаказКлиента.xml",
+        "-Operation": "add-ts",
+        "-Value": "Товары: Тест_Х: String(10)"
+      }
+    },
+    {
+      "script": "meta-edit/scripts/meta-edit",
+      "args": {
+        "-ObjectPath": "{workDir}/cfe/Documents/ЗаказКлиента.xml",
+        "-Operation": "add-attribute",
+        "-Value": "КОММЕНТАРИЙ: String(10)"
+      }
+    },
+    {
+      "script": "meta-edit/scripts/meta-edit",
+      "args": {
+        "-ObjectPath": "{workDir}/cfe/Documents/ЗаказКлиента.xml",
+        "-Operation": "add-ts",
+        "-Value": "Статус: Тест_Х: String(10)"
+      }
+    },
+    {
+      "script": "meta-edit/scripts/meta-edit",
+      "args": {
+        "-ObjectPath": "{workDir}/cfe/Enums/Статусы.xml",
+        "-Operation": "add-enumValue",
+        "-Value": "Закрыт"
+      }
+    },
+    {
+      "script": "meta-edit/scripts/meta-edit",
+      "args": {
+        "-ObjectPath": "{workDir}/cfe/Documents/ЗаказКлиента.xml",
+        "-Operation": "add-command",
+        "-Value": "Печать"
+      }
+    },
+    {
+      "script": "template-add/scripts/add-template",
+      "args": {
+        "-ObjectName": "ЗаказКлиента",
+        "-TemplateName": "ПечатьЗаказа",
+        "-TemplateType": "SpreadsheetDocument",
+        "-SrcDir": "{workDir}/cfe/Documents"
+      }
+    }
+  ],
+  "params": {
+    "extensionPath": "cfe"
+  },
+  "args_extra": [
+    "-ConfigPath",
+    "{workDir}"
+  ],
+  "expectError": true,
+  "noSnapshot": "негативный кейс: навык ничего не пишет, проверяется текст ошибки",
+  "expect": {
+    "stdoutContains": [
+      "18. Document.ЗаказКлиента.TabularSection.Товары: own sub-object, but the source configuration has an unborrowed sub-object with this name",
+      "18. Document.ЗаказКлиента.Attribute.КОММЕНТАРИЙ: own sub-object, but the source configuration has an unborrowed sub-object with this name (Document.ЗаказКлиента.Attribute.Комментарий)",
+      "18. Enum.Статусы.EnumValue.Закрыт: own sub-object",
+      "18. Document.ЗаказКлиента.Command.Печать: own sub-object",
+      "18. Document.ЗаказКлиента.Template.ПечатьЗаказа: own sub-object"
+    ],
+    "stdoutNotContains": "TabularSection.Статус:"
+  }
+}

@@ -1,4 +1,4 @@
-# skd-edit v1.41 — Atomic 1C DCS editor (Python port)
+# skd-edit v1.51 — Atomic 1C DCS editor (Python port)
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 import argparse
 import json
@@ -197,15 +197,19 @@ def _sg_find_v8project(start_dir):
 
 def _sg_get_edit_mode(cfg_dir):
     try:
-        pj = _sg_find_v8project(os.getcwd()) or _sg_find_v8project(cfg_dir)
+        pj = _sg_find_v8project(os.getcwd()) or _sg_find_v8project(os.path.abspath(cfg_dir))
         if not pj:
             return "deny"
         proj = json.loads(open(pj, encoding="utf-8-sig").read())
-        cfg_full = os.path.normcase(os.path.abspath(cfg_dir)).rstrip("\\/")
+        # configSrc — от каталога .v8-project.json, а не от рабочего каталога: иначе из подкаталога
+        # проекта база не сопоставляется и берётся правило проекта. Пути — настоящие (realpath):
+        # на macOS /var — ссылка на /private/var, и getcwd с путём аргумента иначе не совпадут.
+        proj_dir = os.path.dirname(pj)
+        cfg_full = os.path.normcase(os.path.realpath(cfg_dir)).rstrip("\\/")
         for db in proj.get("databases", []):
             src = db.get("configSrc")
             if src:
-                src_full = os.path.normcase(os.path.abspath(src)).rstrip("\\/")
+                src_full = os.path.normcase(os.path.realpath(os.path.join(proj_dir, src))).rstrip("\\/")
                 if cfg_full == src_full or cfg_full.startswith(src_full + os.sep):
                     if db.get("editingAllowedCheck"):
                         return db["editingAllowedCheck"]
@@ -697,10 +701,10 @@ def parse_filter_shorthand(s):
             elif re.match(r'^\d{4}-\d{2}-\d{2}T', val_part):
                 result["value"] = val_part
                 result["valueType"] = "xs:dateTime"
-            elif re.match(r'^\d+(\.\d+)?$', val_part):
+            elif re.match(r'^-?\d+(\.\d+)?$', val_part):
                 result["value"] = val_part
                 result["valueType"] = "xs:decimal"
-            elif re.match(r'^(Перечисление|Справочник|ПланСчетов|Документ|ПланВидовХарактеристик|ПланВидовРасчета)\.', val_part):
+            elif is_ref_value_literal(val_part):
                 result["value"] = val_part
                 result["valueType"] = "dcscor:DesignTimeValue"
             else:
@@ -710,6 +714,39 @@ def parse_filter_shorthand(s):
         result["field"] = s
 
     return result
+
+
+# Варианты стандартного периода: краткая запись значения читает их как период, а не строку.
+# Копия в skd-compile, skd-edit и skd-decompile — держит check-inline-drift.
+def standard_period_variants():
+    return [
+        "Custom", "Today", "ThisWeek", "ThisTenDays", "ThisMonth", "ThisQuarter", "ThisHalfYear",
+        "ThisYear", "FromBeginningOfThisWeek", "FromBeginningOfThisTenDays", "FromBeginningOfThisMonth",
+        "FromBeginningOfThisQuarter", "FromBeginningOfThisHalfYear", "FromBeginningOfThisYear",
+        "Yesterday", "LastWeek", "LastTenDays", "LastMonth", "LastQuarter", "LastHalfYear", "LastYear",
+        "LastWeekTillSameWeekDay", "LastTenDaysTillSameDayNumber", "LastMonthTillSameDate",
+        "LastQuarterTillSameDate", "LastHalfYearTillSameDate", "LastYearTillSameDate", "Tomorrow",
+        "NextWeek", "NextTenDays", "NextMonth", "NextQuarter", "NextHalfYear", "NextYear",
+        "NextWeekTillSameWeekDay", "NextTenDaysTillSameDayNumber", "NextMonthTillSameDate",
+        "NextQuarterTillSameDate", "NextHalfYearTillSameDate", "NextYearTillSameDate",
+        "TillEndOfThisWeek", "TillEndOfThisTenDays", "TillEndOfThisMonth", "TillEndOfThisQuarter",
+        "TillEndOfThisHalfYear", "TillEndOfThisYear", "Last7Days", "Next7Days", "Month",
+    ]
+
+
+# Вариант периода в любом регистре → написание платформы; не вариант — None.
+# Копия в skd-compile и skd-edit — держит check-inline-drift.
+def resolve_standard_period_variant(s):
+    for v in standard_period_variants():
+        if v.lower() == str(s).lower():
+            return v
+    return None
+
+
+# Значение-ссылка в краткой записи (Справочник.X.Y, Catalog.X.Y) — пишется как DesignTimeValue.
+# Копия в skd-compile, skd-edit и skd-decompile — держит check-inline-drift.
+def is_ref_value_literal(s):
+    return re.match(r'^(Справочник|Перечисление|ПланСчетов|Документ|ПланВидовХарактеристик|ПланВидовРасчета|БизнесПроцесс|Задача|РегистрСведений|ПланОбмена|Catalog|Enum|ChartOfAccounts|Document|ChartOfCharacteristicTypes|ChartOfCalculationTypes|BusinessProcess|Task|InformationRegister|ExchangePlan)\.', str(s), re.I) is not None
 
 
 def parse_data_param_shorthand(s):
@@ -739,21 +776,20 @@ def parse_data_param_shorthand(s):
     if m:
         result["parameter"] = m.group(1).strip()
         val_str = m.group(2).strip()
+        # Список значений через запятую; запятая внутри значения — в кавычках.
+        items = parse_value_list(val_str)
+        if len(items) == 1:
+            val_str = items[0]
 
-        period_variants = [
-            "Custom", "Today", "ThisWeek", "ThisTenDays", "ThisMonth", "ThisQuarter", "ThisHalfYear", "ThisYear",
-            "FromBeginningOfThisWeek", "FromBeginningOfThisTenDays", "FromBeginningOfThisMonth",
-            "FromBeginningOfThisQuarter", "FromBeginningOfThisHalfYear", "FromBeginningOfThisYear",
-            "LastWeek", "LastTenDays", "LastMonth", "LastQuarter", "LastHalfYear", "LastYear",
-            "NextDay", "NextWeek", "NextTenDays", "NextMonth", "NextQuarter", "NextHalfYear", "NextYear",
-            "TillEndOfThisWeek", "TillEndOfThisTenDays", "TillEndOfThisMonth",
-            "TillEndOfThisQuarter", "TillEndOfThisHalfYear", "TillEndOfThisYear",
-        ]
+        period_variant = resolve_standard_period_variant(val_str)
         # Empty / sentinel — record as "" so caller emits xsi:nil
-        if val_str == "" or val_str == "_" or val_str.lower() == "null":
+        if len(items) >= 2:
+            result["value"] = items
+        elif val_str == "" or val_str == "_" or val_str.lower() == "null":
             result["value"] = ""
-        elif val_str in period_variants:
-            result["value"] = {"variant": val_str}
+        elif period_variant and not re.match(r'^xs:(string|decimal|boolean)$', get_declared_param_type(result["parameter"])):
+            # У параметра, объявленного строкой/числом/булевым, слово-вариант остаётся строкой (ветка ниже)
+            result["value"] = {"variant": period_variant}
         else:
             result["value"] = val_str
     else:
@@ -908,7 +944,9 @@ def split_quoted_csv(s):
             buf.append(ch)
             if ch == in_quote:
                 in_quote = None
-        elif ch in ("'", '"'):
+        elif ch in ("'", '"') and (''.join(buf).strip() == '' or ''.join(buf).rstrip().endswith(':')):
+            # Кавычка открывает значение только в начале элемента или после ':' (представление
+            # в availableValue); апостроф внутри слова (O'Brien) — просто символ
             in_quote = ch
             buf.append(ch)
         elif ch == ',':
@@ -962,7 +1000,8 @@ def parse_available_value_list(s):
             if q:
                 if c == q:
                     q = None
-            elif c in ("'", '"'):
+            elif c in ("'", '"') and j == 0:
+                # Кавычка открывает значение только в начале элемента; апостроф внутри слова — символ
                 q = c
             elif c == ':':
                 colon_idx = j
@@ -999,6 +1038,69 @@ def build_available_value_fragment(item, declared_type, indent):
 
 # ── 4. Build-* functions (XML fragment generators) ──────────
 
+# Разбор примитивного типа DSL: Number / String / Date / DateTime / Time — с синонимами
+# (decimal, numeric, Число, Строка, Дата …), в любом регистре, с пробелами в скобках.
+# Тело общее у всех навыков-компиляторов (семья в check-inline-drift); умолчание для голого типа
+# зависит от места (хранимый реквизит — 10,0 и 10, СКД — без ограничения) и приходит аргументами.
+# Возврат: None — не примитив (ссылки, Boolean, …); {'error'} — база примитива узнана, а
+# параметры нет (вызывающий сообщает ошибку своим способом); иначе описание квалификаторов.
+def parse_primitive_type(type_str, def_digits, def_fraction, def_length):
+    m = re.match(r'^\s*([^\s(]+)\s*(\(.*)?$', type_str or '')
+    if not m:
+        return None
+    rest = m.group(2) or ''
+    kind = {
+        'number': 'Number', 'decimal': 'Number', 'numeric': 'Number', 'число': 'Number',
+        'string': 'String', 'строка': 'String',
+        'date': 'Date', 'дата': 'Date', 'datetime': 'DateTime', 'датавремя': 'DateTime',
+        'time': 'Time', 'время': 'Time',
+    }.get(m.group(1).lower())
+    if not kind:
+        return None
+    bad = {'error': (f"Invalid type '{type_str}'. Expected Number, Number(D), Number(D,F), Number(D,F,nonneg), "
+                     "String, String(N), String(N,fixed), Date, DateTime, Time")}
+    parts = []
+    if rest:
+        m2 = re.match(r'^\((.*)\)\s*$', rest)
+        if not m2:
+            return bad
+        parts = [p.strip().lower() for p in m2.group(1).split(',')]
+    if kind == 'Number':
+        sign = 'Any'
+        if parts and (parts[-1] == 'nonneg' or parts[-1] == 'any'):
+            if parts[-1] == 'nonneg':
+                sign = 'Nonnegative'
+            parts = parts[:-1]
+        if len(parts) > 2:
+            return bad
+        for p in parts:
+            if not re.match(r'^[0-9]{1,9}$', p):
+                return bad
+        d = int(parts[0]) if len(parts) >= 1 else def_digits
+        f = int(parts[1]) if len(parts) >= 2 else (0 if len(parts) == 1 else def_fraction)
+        # Дробная часть у числа без ограничения (0,F) платформа молча обнуляет — это ошибка ввода
+        if d > 38 or f > d:
+            return bad
+        return {'kind': 'Number', 'digits': d, 'fraction': f, 'sign': sign}
+    if kind == 'String':
+        allowed = 'Variable'
+        if len(parts) == 2:
+            if parts[1] == 'fixed' or parts[1] == 'fix':
+                allowed = 'Fixed'
+            elif parts[1] != 'variable':
+                return bad
+        if len(parts) > 2 or (len(parts) >= 1 and not re.match(r'^[0-9]{1,9}$', parts[0])):
+            return bad
+        length = int(parts[0]) if len(parts) >= 1 else def_length
+        # Фиксированную длину у неограниченной строки платформа молча снимает — это ошибка ввода
+        if allowed == 'Fixed' and length == 0:
+            return bad
+        return {'kind': 'String', 'length': length, 'allowed': allowed}
+    if parts:
+        return bad
+    return {'kind': 'Date', 'fractions': kind}
+
+
 def build_value_type_xml(type_str, indent):
     if not type_str:
         return ""
@@ -1015,47 +1117,35 @@ def build_value_type_xml(type_str, indent):
     type_str = resolve_type_str(str(type_str))
     lines = []
 
-    if type_str == "boolean":
+    if type_str.lower() == "boolean":
         lines.append(f"{indent}<v8:Type>xs:boolean</v8:Type>")
         return "\n".join(lines)
 
-    # string, string(N), string(N,fix) — fix → AllowedLength=Fixed
-    m = re.match(r'^string(\((\d+)(,(fix|fixed))?\))?$', type_str)
-    if m:
-        length = m.group(2) if m.group(2) else "0"
-        al = "Fixed" if m.group(4) else "Variable"
-        lines.append(f"{indent}<v8:Type>xs:string</v8:Type>")
-        lines.append(f"{indent}<v8:StringQualifiers>")
-        lines.append(f"{indent}\t<v8:Length>{length}</v8:Length>")
-        lines.append(f"{indent}\t<v8:AllowedLength>{al}</v8:AllowedLength>")
-        lines.append(f"{indent}</v8:StringQualifiers>")
-        return "\n".join(lines)
-
-    # decimal — bare = 10,2; decimal(N) = N,0
-    m = re.match(r'^decimal(\((\d+)(,(\d+))?(,nonneg)?\))?$', type_str)
-    if m:
-        if not m.group(1):
-            digits, fraction, sign = "10", "2", "Any"
+    # Примитивы: string / decimal / date / dateTime / time. Голый тип поля СКД — без ограничения
+    # (decimal 0,0, string 0), как в skd-compile.
+    prim = parse_primitive_type(type_str, 0, 0, 0)
+    if prim:
+        if prim.get('error'):
+            print(prim['error'], file=sys.stderr)
+            sys.exit(1)
+        if prim['kind'] == 'String':
+            lines.append(f"{indent}<v8:Type>xs:string</v8:Type>")
+            lines.append(f"{indent}<v8:StringQualifiers>")
+            lines.append(f"{indent}\t<v8:Length>{prim['length']}</v8:Length>")
+            lines.append(f"{indent}\t<v8:AllowedLength>{prim['allowed']}</v8:AllowedLength>")
+            lines.append(f"{indent}</v8:StringQualifiers>")
+        elif prim['kind'] == 'Number':
+            lines.append(f"{indent}<v8:Type>xs:decimal</v8:Type>")
+            lines.append(f"{indent}<v8:NumberQualifiers>")
+            lines.append(f"{indent}\t<v8:Digits>{prim['digits']}</v8:Digits>")
+            lines.append(f"{indent}\t<v8:FractionDigits>{prim['fraction']}</v8:FractionDigits>")
+            lines.append(f"{indent}\t<v8:AllowedSign>{prim['sign']}</v8:AllowedSign>")
+            lines.append(f"{indent}</v8:NumberQualifiers>")
         else:
-            digits = m.group(2)
-            fraction = m.group(4) if m.group(4) else "0"
-            sign = "Nonnegative" if m.group(5) else "Any"
-        lines.append(f"{indent}<v8:Type>xs:decimal</v8:Type>")
-        lines.append(f"{indent}<v8:NumberQualifiers>")
-        lines.append(f"{indent}\t<v8:Digits>{digits}</v8:Digits>")
-        lines.append(f"{indent}\t<v8:FractionDigits>{fraction}</v8:FractionDigits>")
-        lines.append(f"{indent}\t<v8:AllowedSign>{sign}</v8:AllowedSign>")
-        lines.append(f"{indent}</v8:NumberQualifiers>")
-        return "\n".join(lines)
-
-    # date / dateTime / time — all xs:dateTime
-    m = re.match(r'^(date|dateTime|time)$', type_str)
-    if m:
-        fractions = {"date": "Date", "dateTime": "DateTime", "time": "Time"}[type_str]
-        lines.append(f"{indent}<v8:Type>xs:dateTime</v8:Type>")
-        lines.append(f"{indent}<v8:DateQualifiers>")
-        lines.append(f"{indent}\t<v8:DateFractions>{fractions}</v8:DateFractions>")
-        lines.append(f"{indent}</v8:DateQualifiers>")
+            lines.append(f"{indent}<v8:Type>xs:dateTime</v8:Type>")
+            lines.append(f"{indent}<v8:DateQualifiers>")
+            lines.append(f"{indent}\t<v8:DateFractions>{prim['fractions']}</v8:DateFractions>")
+            lines.append(f"{indent}</v8:DateQualifiers>")
         return "\n".join(lines)
 
     if type_str == "StandardPeriod":
@@ -1088,8 +1178,29 @@ def is_empty_value(v):
     return False
 
 
+# Вид значения для ветвлений эмиттеров значений (параметры, пустые значения): примитив любого
+# написания (Число(15,2), numeric, String(10)) → decimal / string / date / dateTime / time, прочее —
+# через синонимы навыка. Квалификаторы значению не нужны и отбрасываются.
+def get_value_kind_type(type_str):
+    if not type_str:
+        return type_str
+    prim = parse_primitive_type(type_str, 0, 0, 0)
+    if prim and not prim.get('error'):
+        if prim['kind'] == 'Number':
+            return 'decimal'
+        if prim['kind'] == 'String':
+            return 'string'
+        if prim['fractions'] == 'Date':
+            return 'date'
+        if prim['fractions'] == 'Time':
+            return 'time'
+        return 'dateTime'
+    return resolve_type_str(type_str)
+
+
 def build_empty_value_xml(type_str, indent, tag_prefix="", tag_name="value", value_list_allowed=False):
     """Type-aware empty <value> fragment. Returns None when valueListAllowed (omit)."""
+    type_str = get_value_kind_type(type_str)
     if value_list_allowed:
         return None
     t = "" if type_str is None else str(type_str)
@@ -1163,10 +1274,11 @@ def build_restriction_xml(restrict, indent):
     if not restrict:
         return ""
     restrict_map = {"noField": "field", "noFilter": "condition", "noCondition": "condition", "noGroup": "group", "noOrder": "order"}
+    # Флаги — в порядке XSD FieldUseRestriction (field condition group order), не в порядке ввода
+    given = [restrict_map.get(r) for r in restrict]
     lines = [f"{indent}<useRestriction>"]
-    for r in restrict:
-        xml_name = restrict_map.get(r)
-        if xml_name:
+    for xml_name in ("field", "condition", "group", "order"):
+        if xml_name in given:
             lines.append(f"{indent}\t<{xml_name}>true</{xml_name}>")
     lines.append(f"{indent}</useRestriction>")
     return "\n".join(lines)
@@ -1189,25 +1301,35 @@ def build_field_fragment(parsed, indent):
     elif parsed.get("title"):
         lines.append(build_mltext_xml("title", parsed["title"], f"{i}\t"))
 
+    # Остальные части собираем как (место по XSD, xml) и выводим по месту: сохранённые как есть
+    # узлы (attributeUseRestriction, presentationExpression, orderExpression, appearance, …)
+    # встают на своё место, а не в хвост после valueType. Незнакомые — в конец, как раньше.
+    field_order = XSD_CHILD_ORDER['DataSetFieldField']
+    parts = []
     if parsed.get("restrict"):
-        lines.append(build_restriction_xml(parsed["restrict"], f"{i}\t"))
+        parts.append((field_order.index('useRestriction'), build_restriction_xml(parsed["restrict"], f"{i}\t")))
 
     role_xml = build_role_xml(parsed.get("roles"), f"{i}\t")
     if role_xml:
-        lines.append(role_xml)
+        parts.append((field_order.index('role'), role_xml))
 
+    vt_rank = field_order.index('valueType')
     if parsed.get("rawValueType"):
         # Preserve original <valueType> verbatim — keeps qualifiers (StringQualifiers,
         # NumberQualifiers, DateQualifiers, …) that aren't expressible via shorthand.
-        lines.append(f"{i}\t" + parsed["rawValueType"])
+        parts.append((vt_rank, f"{i}\t" + parsed["rawValueType"]))
     elif parsed.get("type"):
-        lines.append(f"{i}\t<valueType>")
-        lines.append(build_value_type_xml(parsed["type"], f"{i}\t\t"))
-        lines.append(f"{i}\t</valueType>")
+        vt = [f"{i}\t<valueType>", build_value_type_xml(parsed["type"], f"{i}\t\t"), f"{i}\t</valueType>"]
+        parts.append((vt_rank, "\n".join(vt)))
 
     # Defense in depth: re-emit OuterXml of unknown children captured by Read.
     for raw in (parsed.get("_unknownChildren") or []):
-        lines.append(f"{i}\t" + raw)
+        m = re.match(r'^<(?:[\w.-]+:)?([\w.-]+)', raw)
+        r = field_order.index(m.group(1)) if m and m.group(1) in field_order else len(field_order)
+        parts.append((r, f"{i}\t" + raw))
+    # Устойчивая сортировка по месту: при равенстве — порядок добавления
+    for _, x in sorted(parts, key=lambda t: t[0]):
+        lines.append(x)
 
     lines.append(f"{i}</field>")
     return "\n".join(lines)
@@ -1245,15 +1367,21 @@ def build_calc_field_fragment(parsed, indent):
 
 def build_param_value_xml(type_str, value, indent, tag_name="value", tag_ns=""):
     """Return list of XML lines for <value xsi:type=...>...</value>."""
+    type_str = get_value_kind_type(type_str)
     val_str = "" if value is None else str(value)
     open_tag = f"{tag_ns}:{tag_name}" if tag_ns else tag_name
     lines = []
 
     if type_str == "StandardPeriod":
+        pv = resolve_standard_period_variant(val_str)
+        if pv:
+            val_str = pv
         lines.append(f'{indent}<{open_tag} xsi:type="v8:StandardPeriod">')
         lines.append(f'{indent}\t<v8:variant xsi:type="v8:StandardPeriodVariant">{esc_xml_text(val_str)}</v8:variant>')
-        lines.append(f"{indent}\t<v8:startDate>0001-01-01T00:00:00</v8:startDate>")
-        lines.append(f"{indent}\t<v8:endDate>0001-01-01T00:00:00</v8:endDate>")
+        # Даты — только у Custom, как у платформы и skd-compile
+        if val_str.lower() == 'custom':
+            lines.append(f"{indent}\t<v8:startDate>0001-01-01T00:00:00</v8:startDate>")
+            lines.append(f"{indent}\t<v8:endDate>0001-01-01T00:00:00</v8:endDate>")
         lines.append(f"{indent}</{open_tag}>")
         return lines
 
@@ -1274,8 +1402,7 @@ def build_param_value_xml(type_str, value, indent, tag_name="value", tag_ns=""):
             xsi = "xs:dateTime"
         elif val_str in ("true", "false"):
             xsi = "xs:boolean"
-        elif re.match(r'^(Перечисление|Справочник|ПланСчетов|Документ|ПланВидовХарактеристик|ПланВидовРасчета|БизнесПроцесс|Задача|РегистрСведений|ПланОбмена)\.', val_str) or \
-             re.match(r'^(Catalog|Document|Enum|ChartOfAccounts|ChartOfCharacteristicTypes|ChartOfCalculationTypes|BusinessProcess|Task|InformationRegister|ExchangePlan)\.', val_str):
+        elif is_ref_value_literal(val_str):
             xsi = "dcscor:DesignTimeValue"
         else:
             xsi = "xs:string"
@@ -1430,6 +1557,53 @@ def build_selection_item_fragment(field_name, indent):
     return "\n".join(lines)
 
 
+# <dcscor:value> параметра данных; список — по элементу на значение, как пишет платформа.
+# Примитивный тип, объявленный у параметра схемы (xs:string/decimal/boolean/dateTime), иначе "".
+# Составной и ссылочный тип не подставляем — тогда тип угадывается по значению, как в skd-compile.
+def get_declared_param_type(name):
+    param_el = find_element_by_child_value(xml_doc, "parameter", "name", name, SCH_NS)
+    if param_el is None:
+        return ""
+    vt_el = find_first_element(param_el, ["valueType"], SCH_NS)
+    if vt_el is None:
+        return ""
+    types = [c for c in vt_el if isinstance(c.tag, str) and local_name(c) == "Type"]
+    if len(types) != 1:
+        return ""
+    m = re.match(r'^(?:\w+:)?(string|decimal|boolean|dateTime)$', (types[0].text or "").strip())
+    return f"xs:{m.group(1)}" if m else ""
+
+
+def build_data_param_value_lines(value, vi, decl_type=""):
+    lines = []
+    if isinstance(value, dict) and value.get("variant"):
+        lines.append(f'{vi}<dcscor:value xsi:type="v8:StandardPeriod">')
+        lines.append(f'{vi}\t<v8:variant xsi:type="v8:StandardPeriodVariant">{esc_xml_text(value["variant"])}</v8:variant>')
+        # Даты — только у Custom, как у платформы и skd-compile
+        if str(value["variant"]).lower() == 'custom':
+            lines.append(f"{vi}\t<v8:startDate>0001-01-01T00:00:00</v8:startDate>")
+            lines.append(f"{vi}\t<v8:endDate>0001-01-01T00:00:00</v8:endDate>")
+        lines.append(f"{vi}</dcscor:value>")
+    elif is_empty_value(value):
+        lines.append(f'{vi}<dcscor:value xsi:nil="true"/>')
+    else:
+        for v in (value if isinstance(value, list) else [value]):
+            if decl_type:
+                # Объявленный тип параметра главнее формы значения
+                v_str = str(v).lower() if decl_type == "xs:boolean" else str(v)
+                lines.append(f'{vi}<dcscor:value xsi:type="{decl_type}">{esc_xml_text(v_str)}</dcscor:value>')
+            elif re.match(r'^\d{4}-\d{2}-\d{2}T', str(v)):
+                lines.append(f'{vi}<dcscor:value xsi:type="xs:dateTime">{esc_xml_text(str(v))}</dcscor:value>')
+            elif str(v).lower() in ("true", "false"):
+                # Регистр не важен, как в skd-compile; xs:boolean — только строчными
+                lines.append(f'{vi}<dcscor:value xsi:type="xs:boolean">{str(v).lower()}</dcscor:value>')
+            elif is_ref_value_literal(str(v)):
+                lines.append(f'{vi}<dcscor:value xsi:type="dcscor:DesignTimeValue">{esc_xml_text(str(v))}</dcscor:value>')
+            else:
+                lines.append(f'{vi}<dcscor:value xsi:type="xs:string">{esc_xml_text(str(v))}</dcscor:value>')
+    return lines
+
+
 def build_data_param_fragment(parsed, indent):
     i = indent
     lines = [f'{i}<dcscor:item xsi:type="dcsset:SettingsParameterValue">']
@@ -1440,21 +1614,7 @@ def build_data_param_fragment(parsed, indent):
     lines.append(f"{i}\t<dcscor:parameter>{esc_xml_text(parsed['parameter'])}</dcscor:parameter>")
 
     if parsed.get("value") is not None:
-        val = parsed["value"]
-        if isinstance(val, dict) and val.get("variant"):
-            lines.append(f'{i}\t<dcscor:value xsi:type="v8:StandardPeriod">')
-            lines.append(f'{i}\t\t<v8:variant xsi:type="v8:StandardPeriodVariant">{esc_xml_text(val["variant"])}</v8:variant>')
-            lines.append(f"{i}\t\t<v8:startDate>0001-01-01T00:00:00</v8:startDate>")
-            lines.append(f"{i}\t\t<v8:endDate>0001-01-01T00:00:00</v8:endDate>")
-            lines.append(f"{i}\t</dcscor:value>")
-        elif is_empty_value(val):
-            lines.append(f'{i}\t<dcscor:value xsi:nil="true"/>')
-        elif re.match(r'^\d{4}-\d{2}-\d{2}T', str(val)):
-            lines.append(f'{i}\t<dcscor:value xsi:type="xs:dateTime">{esc_xml_text(str(val))}</dcscor:value>')
-        elif str(val) in ("true", "false"):
-            lines.append(f'{i}\t<dcscor:value xsi:type="xs:boolean">{esc_xml_text(str(val))}</dcscor:value>')
-        else:
-            lines.append(f'{i}\t<dcscor:value xsi:type="xs:string">{esc_xml_text(str(val))}</dcscor:value>')
+        lines.extend(build_data_param_value_lines(parsed["value"], f"{i}\t", get_declared_param_type(parsed["parameter"])))
 
     if parsed.get("viewMode"):
         lines.append(f"{i}\t<dcsset:viewMode>{esc_xml_text(parsed['viewMode'])}</dcsset:viewMode>")
@@ -1770,12 +1930,28 @@ def find_element_by_child_value(container, elem_name, child_name, child_value, n
         if ns_uri and etree.QName(child.tag).namespace != ns_uri:
             continue
         for gc in child:
-            if isinstance(gc.tag, str) and local_name(gc) == child_name and (gc.text or "").strip() == child_value:
+            # Имена в 1С регистронезависимы — как -eq в PS-порте
+            if isinstance(gc.tag, str) and local_name(gc) == child_name and (gc.text or "").strip().lower() == child_value.lower():
                 return child
     return None
 
 
-def set_or_create_child_element(parent, ln, ns_uri, value, indent):
+# Опорный элемент для вставки нового дочернего: первый, который по схеме идёт после него.
+# order — порядок дочерних элементов (локальные имена). Без order или опоры — None (в конец).
+def get_ordered_insert_ref(parent, ln, order):
+    if not order:
+        return None
+    new_idx = order.index(ln) if ln in order else -1
+    for ch in parent:
+        if not isinstance(ch.tag, str):
+            continue
+        ch_ln = local_name(ch)
+        if (order.index(ch_ln) if ch_ln in order else -1) > new_idx:
+            return ch
+    return None
+
+
+def set_or_create_child_element(parent, ln, ns_uri, value, indent, order=None):
     existing = None
     for ch in parent:
         if isinstance(ch.tag, str) and local_name(ch) == ln and etree.QName(ch.tag).namespace == ns_uri:
@@ -1791,12 +1967,13 @@ def set_or_create_child_element(parent, ln, ns_uri, value, indent):
                 break
         qual_name = f"{prefix}:{ln}" if prefix else ln
         frag_xml = f"{indent}<{qual_name}>{esc_xml_text(value)}</{qual_name}>"
+        ref_el = get_ordered_insert_ref(parent, ln, order)
         nodes = import_fragment(xml_doc, frag_xml)
         for node in nodes:
-            insert_before_element(parent, node, None, indent)
+            insert_before_element(parent, node, ref_el, indent)
 
 
-def set_or_create_child_element_with_attr(parent, ln, ns_uri, value, xsi_type, indent):
+def set_or_create_child_element_with_attr(parent, ln, ns_uri, value, xsi_type, indent, order=None):
     existing = None
     for ch in parent:
         if isinstance(ch.tag, str) and local_name(ch) == ln and etree.QName(ch.tag).namespace == ns_uri:
@@ -1815,9 +1992,10 @@ def set_or_create_child_element_with_attr(parent, ln, ns_uri, value, xsi_type, i
         qual_name = f"{prefix}:{ln}" if prefix else ln
         type_attr = f' xsi:type="{xsi_type}"' if xsi_type else ""
         frag_xml = f"{indent}<{qual_name}{type_attr}>{esc_xml_text(value)}</{qual_name}>"
+        ref_el = get_ordered_insert_ref(parent, ln, order)
         nodes = import_fragment(xml_doc, frag_xml)
         for node in nodes:
-            insert_before_element(parent, node, None, indent)
+            insert_before_element(parent, node, ref_el, indent)
 
 
 def get_all_data_sets():
@@ -1986,7 +2164,54 @@ def resolve_variant_settings():
     sys.exit(1)
 
 
-def ensure_settings_child(settings, child_name, after_siblings):
+# Порядок детей по XSD схемы компоновки: чтение по схеме (XDTO) отвергает нарушенный порядок,
+# поэтому новый узел встаёт перед первым соседом, который по схеме идёт позже. Ключ — вид
+# контейнера: settings, поле набора или xsi:type элемента структуры (без xsi:type — группа).
+XSD_CHILD_ORDER = {
+    'settings': ['userFields', 'selection', 'filter', 'dataParameters', 'order', 'conditionalAppearance', 'outputParameters',
+                 'item', 'additionalProperties', 'itemsViewMode', 'itemsUserSettingID', 'itemsUserSettingPresentation'],
+    'StructureItemGroup': ['use', 'name', 'groupItems', 'filter', 'order', 'selection', 'conditionalAppearance', 'outputParameters',
+                           'item', 'id', 'viewMode', 'userSettingID', 'userSettingPresentation', 'itemsViewMode', 'itemsUserSettingID',
+                           'itemsUserSettingPresentation', 'groupState'],
+    'StructureItemTable': ['use', 'name', 'column', 'row', 'selection', 'conditionalAppearance', 'outputParameters',
+                           'id', 'viewMode', 'userSettingID', 'userSettingPresentation', 'columnsViewMode', 'columnsUserSettingID',
+                           'columnsUserSettingPresentation', 'rowsViewMode', 'rowsUserSettingID', 'rowsUserSettingPresentation'],
+    'StructureItemChart': ['use', 'name', 'point', 'series', 'selection', 'conditionalAppearance', 'outputParameters',
+                           'id', 'viewMode', 'userSettingID', 'userSettingPresentation', 'pointsViewMode', 'pointsUserSettingID',
+                           'pointsUserSettingPresentation', 'seriesViewMode', 'seriesUserSettingID', 'seriesUserSettingPresentation'],
+    'DataSetFieldField': ['dataPath', 'field', 'title', 'useRestriction', 'attributeUseRestriction', 'role', 'presentationExpression',
+                          'orderExpression', 'inHierarchyDataSet', 'inHierarchyDataSetParameter', 'valueType', 'appearance',
+                          'availableValue', 'inputParameters'],
+}
+
+
+def get_xsd_child_order(container):
+    if local_name(container) == 'settings':
+        return XSD_CHILD_ORDER['settings']
+    if local_name(container) == 'field':
+        return XSD_CHILD_ORDER['DataSetFieldField']
+    xt = (container.get('{http://www.w3.org/2001/XMLSchema-instance}type') or '').split(':')[-1]
+    if xt in XSD_CHILD_ORDER:
+        return XSD_CHILD_ORDER[xt]
+    return XSD_CHILD_ORDER['StructureItemGroup']
+
+
+def find_ordered_insert_ref(container, child_name):
+    """Первый сосед, который по XSD идёт после child_name; None — вставлять в конец."""
+    order = get_xsd_child_order(container)
+    if child_name not in order:
+        return None
+    rank = order.index(child_name)
+    for ch in container:
+        if not isinstance(ch.tag, str):
+            continue
+        ln = local_name(ch)
+        if ln in order and order.index(ln) > rank:
+            return ch
+    return None
+
+
+def ensure_settings_child(settings, child_name):
     el = find_first_element(settings, [child_name], SET_NS)
     if el is not None:
         return el
@@ -1995,19 +2220,7 @@ def ensure_settings_child(settings, child_name, after_siblings):
     frag_xml = f"{indent}<dcsset:{child_name}/>"
     nodes = import_fragment(xml_doc, frag_xml)
 
-    ref_node = None
-    for sib_name in after_siblings:
-        sib = find_first_element(settings, [sib_name], SET_NS)
-        if sib is not None:
-            # Get next element sibling
-            found = False
-            for ch in settings:
-                if found and isinstance(ch.tag, str):
-                    ref_node = ch
-                    break
-                if ch is sib:
-                    found = True
-            break
+    ref_node = find_ordered_insert_ref(settings, child_name)
 
     for node in nodes:
         insert_before_element(settings, node, ref_node, indent)
@@ -2108,7 +2321,7 @@ if operation == "add-field":
         if not no_selection:
             settings = resolve_variant_settings()
             var_name = get_variant_name()
-            selection = ensure_settings_child(settings, "selection", [])
+            selection = ensure_settings_child(settings, "selection")
             existing_sel = find_element_by_child_value(selection, "item", "field", parsed["dataPath"], SET_NS)
             if existing_sel is not None:
                 print(f'[INFO] Field "{parsed["dataPath"]}" already in selection -- skipped')
@@ -2186,7 +2399,7 @@ elif operation == "add-calculated-field":
         if not no_selection:
             settings = resolve_variant_settings()
             var_name = get_variant_name()
-            selection = ensure_settings_child(settings, "selection", [])
+            selection = ensure_settings_child(settings, "selection")
             existing_sel = find_element_by_child_value(selection, "item", "field", parsed["dataPath"], SET_NS)
             if existing_sel is not None:
                 print(f'[INFO] Field "{parsed["dataPath"]}" already in selection -- skipped')
@@ -2582,7 +2795,7 @@ elif operation == "add-filter":
     var_name = get_variant_name()
     for val in values:
         parsed = parse_filter_shorthand(val)
-        filter_el = ensure_settings_child(settings, "filter", ["selection"])
+        filter_el = ensure_settings_child(settings, "filter")
         filter_indent = get_container_child_indent(filter_el)
         frag_xml = build_filter_item_fragment(parsed, filter_indent)
         nodes = import_fragment(xml_doc, frag_xml)
@@ -2595,7 +2808,7 @@ elif operation == "add-dataParameter":
     var_name = get_variant_name()
     for val in values:
         parsed = parse_data_param_shorthand(val)
-        dp_el = ensure_settings_child(settings, "dataParameters", ["outputParameters", "conditionalAppearance", "order", "filter", "selection"])
+        dp_el = ensure_settings_child(settings, "dataParameters")
         dp_indent = get_container_child_indent(dp_el)
         frag_xml = build_data_param_fragment(parsed, dp_indent)
         nodes = import_fragment(xml_doc, frag_xml)
@@ -2608,7 +2821,7 @@ elif operation == "add-order":
     var_name = get_variant_name()
     for val in values:
         parsed = parse_order_shorthand(val)
-        order_el = ensure_settings_child(settings, "order", ["filter", "selection"])
+        order_el = ensure_settings_child(settings, "order")
         order_indent = get_container_child_indent(order_el)
 
         if parsed["field"] == "Auto":
@@ -2665,7 +2878,7 @@ elif operation == "add-selection":
         else:
             target_el = settings
 
-        selection = ensure_settings_child(target_el, "selection", [])
+        selection = ensure_settings_child(target_el, "selection")
 
         # Dedup: skip if SelectedItemAuto already exists
         if field_name == "Auto":
@@ -2737,7 +2950,7 @@ elif operation == "set-outputParameter":
     var_name = get_variant_name()
     for val in values:
         parsed = parse_output_param_shorthand(val)
-        output_el = ensure_settings_child(settings, "outputParameters", ["conditionalAppearance", "order", "filter", "selection"])
+        output_el = ensure_settings_child(settings, "outputParameters")
         output_indent = get_container_child_indent(output_el)
 
         existing_param = find_element_by_child_value(output_el, "item", "parameter", parsed["key"], COR_NS)
@@ -2763,7 +2976,8 @@ elif operation == "set-structure":
     struct_items = parse_structure_shorthand(value_arg)
     settings_indent = get_child_indent(settings)
 
-    ref_node = find_first_element(settings, ["outputParameters", "dataParameters", "conditionalAppearance", "order", "filter", "selection", "item"], SET_NS)
+    # Место по XSD: после outputParameters и прочих блоков, до additionalProperties/itemsViewMode
+    ref_node = find_ordered_insert_ref(settings, "item")
 
     for struct_item in struct_items:
         frag_xml = build_structure_item_fragment(struct_item, settings_indent)
@@ -2967,7 +3181,7 @@ elif operation == "add-conditionalAppearance":
     var_name = get_variant_name()
     for val in values:
         parsed = parse_conditional_appearance_shorthand(val)
-        ca_el = ensure_settings_child(settings, "conditionalAppearance", ["outputParameters", "order", "filter", "selection"])
+        ca_el = ensure_settings_child(settings, "conditionalAppearance")
         ca_indent = get_container_child_indent(ca_el)
         frag_xml = build_conditional_appearance_item_fragment(parsed, ca_indent)
         nodes = import_fragment(xml_doc, frag_xml)
@@ -3041,15 +3255,16 @@ elif operation == "modify-filter":
             continue
 
         item_indent = get_child_indent(filter_item)
-        set_or_create_child_element(filter_item, "comparisonType", SET_NS, parsed["op"], item_indent)
+        filter_child_order = ["use", "left", "comparisonType", "right", "presentation", "viewMode", "userSettingID", "userSettingPresentation"]
+        set_or_create_child_element(filter_item, "comparisonType", SET_NS, parsed["op"], item_indent, filter_child_order)
 
         if parsed.get("value") is not None:
             vt = parsed.get("valueType", "xs:string")
-            set_or_create_child_element_with_attr(filter_item, "right", SET_NS, str(parsed["value"]), vt, item_indent)
+            set_or_create_child_element_with_attr(filter_item, "right", SET_NS, str(parsed["value"]), vt, item_indent, filter_child_order)
 
         # Update use (only when explicitly set via @off / @on)
         if parsed.get("use") is False:
-            set_or_create_child_element(filter_item, "use", SET_NS, "false", item_indent)
+            set_or_create_child_element(filter_item, "use", SET_NS, "false", item_indent, filter_child_order)
         elif parsed.get("use") is True:
             # @on: remove existing use=false if any
             for ch in filter_item:
@@ -3059,11 +3274,11 @@ elif operation == "modify-filter":
                     break
 
         if parsed.get("viewMode"):
-            set_or_create_child_element(filter_item, "viewMode", SET_NS, parsed["viewMode"], item_indent)
+            set_or_create_child_element(filter_item, "viewMode", SET_NS, parsed["viewMode"], item_indent, filter_child_order)
 
         if parsed.get("userSettingID"):
             uid = new_uuid() if parsed["userSettingID"] == "auto" else parsed["userSettingID"]
-            set_or_create_child_element(filter_item, "userSettingID", SET_NS, uid, item_indent)
+            set_or_create_child_element(filter_item, "userSettingID", SET_NS, uid, item_indent, filter_child_order)
 
         dirty = True; print(f'[OK] Filter "{parsed["field"]}" modified in variant "{var_name}"')
 
@@ -3083,41 +3298,38 @@ elif operation == "modify-dataParameter":
             continue
 
         item_indent = get_child_indent(dp_item)
+        dp_child_order = ["use", "parameter", "value", "viewMode", "userSettingID", "userSettingPresentation"]
 
         if parsed.get("value") is not None:
-            existing_val = None
+            # Удалить ВСЕ прежние значения (у списка их несколько)
+            existing_vals = []
+            param_el = None
             for ch in dp_item:
-                if isinstance(ch.tag, str) and local_name(ch) == "value" and etree.QName(ch.tag).namespace == COR_NS:
-                    existing_val = ch
-                    break
-            if existing_val is not None:
-                remove_node_with_whitespace(existing_val)
+                if not isinstance(ch.tag, str) or etree.QName(ch.tag).namespace != COR_NS:
+                    continue
+                if local_name(ch) == "value":
+                    existing_vals.append(ch)
+                elif local_name(ch) == "parameter":
+                    param_el = ch
+            for ev in existing_vals:
+                remove_node_with_whitespace(ev)
 
-            val_lines = []
-            pv = parsed["value"]
-            if isinstance(pv, dict) and pv.get("variant"):
-                val_lines.append(f'{item_indent}<dcscor:value xsi:type="v8:StandardPeriod">')
-                val_lines.append(f'{item_indent}\t<v8:variant xsi:type="v8:StandardPeriodVariant">{esc_xml_text(pv["variant"])}</v8:variant>')
-                val_lines.append(f"{item_indent}\t<v8:startDate>0001-01-01T00:00:00</v8:startDate>")
-                val_lines.append(f"{item_indent}\t<v8:endDate>0001-01-01T00:00:00</v8:endDate>")
-                val_lines.append(f"{item_indent}</dcscor:value>")
-            elif is_empty_value(pv):
-                val_lines.append(f'{item_indent}<dcscor:value xsi:nil="true"/>')
-            elif re.match(r'^\d{4}-\d{2}-\d{2}T', str(pv)):
-                val_lines.append(f'{item_indent}<dcscor:value xsi:type="xs:dateTime">{esc_xml_text(str(pv))}</dcscor:value>')
-            elif str(pv) in ("true", "false"):
-                val_lines.append(f'{item_indent}<dcscor:value xsi:type="xs:boolean">{esc_xml_text(str(pv))}</dcscor:value>')
-            else:
-                val_lines.append(f'{item_indent}<dcscor:value xsi:type="xs:string">{esc_xml_text(str(pv))}</dcscor:value>')
+            # Новые значения — сразу после <dcscor:parameter>: по схеме value идёт до viewMode/userSettingID
+            ref_el = None
+            if param_el is not None:
+                sib = param_el.getnext()
+                while sib is not None and not isinstance(sib.tag, str):
+                    sib = sib.getnext()
+                ref_el = sib
 
-            val_xml = "\n".join(val_lines)
+            val_xml = "\n".join(build_data_param_value_lines(parsed["value"], item_indent, get_declared_param_type(parsed["parameter"])))
             val_nodes = import_fragment(xml_doc, val_xml)
             for node in val_nodes:
-                insert_before_element(dp_item, node, None, item_indent)
+                insert_before_element(dp_item, node, ref_el, item_indent)
 
         # Update use (only when explicitly set via @off / @on)
         if parsed.get("use") is False:
-            set_or_create_child_element(dp_item, "use", COR_NS, "false", item_indent)
+            set_or_create_child_element(dp_item, "use", COR_NS, "false", item_indent, dp_child_order)
         elif parsed.get("use") is True:
             # @on: remove existing use=false if any
             for ch in dp_item:
@@ -3127,11 +3339,11 @@ elif operation == "modify-dataParameter":
                     break
 
         if parsed.get("viewMode"):
-            set_or_create_child_element(dp_item, "viewMode", SET_NS, parsed["viewMode"], item_indent)
+            set_or_create_child_element(dp_item, "viewMode", SET_NS, parsed["viewMode"], item_indent, dp_child_order)
 
         if parsed.get("userSettingID"):
             uid = new_uuid() if parsed["userSettingID"] == "auto" else parsed["userSettingID"]
-            set_or_create_child_element(dp_item, "userSettingID", SET_NS, uid, item_indent)
+            set_or_create_child_element(dp_item, "userSettingID", SET_NS, uid, item_indent, dp_child_order)
 
         dirty = True; print(f'[OK] DataParameter "{parsed["parameter"]}" modified in variant "{var_name}"')
 
@@ -3256,7 +3468,8 @@ elif operation == "set-field-role":
         lines.append(f"{field_indent}</role>")
         frag_xml = "\n".join(lines)
 
-        ref_node = next((ch for ch in field_el if isinstance(ch.tag, str) and local_name(ch) in ("valueType", "inputParameters") and etree.QName(ch.tag).namespace == SCH_NS), None)
+        # Место по XSD: после attributeUseRestriction, до presentationExpression/orderExpression/valueType
+        ref_node = find_ordered_insert_ref(field_el, "role")
         for node in import_fragment(xml_doc, frag_xml):
             insert_before_element(field_el, node, ref_node, field_indent)
 

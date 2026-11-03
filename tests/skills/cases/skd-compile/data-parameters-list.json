@@ -1,0 +1,51 @@
+{
+  "name": "dataParameters: список значений — по <dcscor:value> на элемент; без valueType — тип из объявления параметра (главнее формы значения); null — xsi:nil, и в списке из одних null, и в значении параметра схемы; апостроф внутри слова (#119); TRUE в краткой записи — как true; слово-вариант периода (month) у строкового параметра — строкой как написано; тип {uri, name} — xmlns на каждом <dcscor:value>; имя параметра в другом регистре — тип из объявления",
+  "params": { "outputPath": "Template.xml" },
+  "input": {
+    "dataSets": [{
+      "query": "ВЫБРАТЬ Т.Код КАК Код ИЗ (ВЫБРАТЬ \"A\" КАК Код) КАК Т ГДЕ Т.Код В (&Коды)",
+      "fields": ["Код: string(10)"]
+    }],
+    "parameters": [
+      "Коды: string(10) = A, B, C",
+      { "name": "Суммы", "type": "decimal(10,2)", "valueListAllowed": true, "value": [1, 2.5] },
+      "Метки: string(20) @valueList",
+      "Порог: decimal(10,2) = 1",
+      "Фамилии: string(20) @valueList",
+      "Пусто: string(10) @valueList",
+      "Режим: string(10)",
+      "Единица: string(10)",
+      "Вид: string(10)",
+      { "name": "Отметки", "type": "string(30)", "valueListAllowed": true, "value": [null, "a"] }
+    ],
+    "settingsVariants": [
+      {
+        "name": "Авто",
+        "settings": { "selection": ["Код"], "structure": "details", "dataParameters": "auto" }
+      },
+      {
+        "name": "Явный",
+        "settings": {
+          "selection": ["Код"],
+          "structure": "details",
+          "dataParameters": [
+            "Коды = X, 'Y, Z' @user",
+            { "parameter": "Суммы", "value": [3, 4.75] },
+            { "parameter": "Метки", "value": ["одна, с запятой", null, "2024-01-01T00:00:00"] },
+            { "parameter": "Пусто", "value": [null, null] },
+            "Режим = TRUE",
+            "Единица = month",
+            "вид = Today",
+            { "parameter": "Отметки", "value": ["Active", "Passive"], "valueType": { "uri": "http://v8.1c.ru/8.1/data/enterprise", "name": "AccountType" } },
+            "Порог = 5",
+            "Фамилии = Иванов, O'Brien, Петров"
+          ]
+        }
+      }
+    ]
+  },
+  "validatePath": "Template.xml",
+  "expect": {
+    "files": ["Template.xml"]
+  }
+}

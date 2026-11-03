@@ -1,4 +1,4 @@
-﻿# interface-validate v1.5 — Validate 1C CommandInterface.xml structure
+﻿# interface-validate v1.7 — Validate 1C CommandInterface.xml structure
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 [CmdletBinding(PositionalBinding=$false)]
 param(
@@ -68,7 +68,7 @@ function Get-ExtBodyOwner([string]$bodyPath) {
 
 # --- Resolve path ---
 if (-not [System.IO.Path]::IsPathRooted($CIPath)) {
-	$CIPath = Join-Path (Get-Location).Path $CIPath
+	$CIPath = Join-Path (Get-Location).ProviderPath $CIPath
 }
 # A: Directory → Ext/CommandInterface.xml
 if (Test-Path $CIPath -PathType Container) {
@@ -86,7 +86,7 @@ if (-not (Test-Path $CIPath)) {
 	Write-Host "[ERROR] File not found: $CIPath"
 	exit 1
 }
-$resolvedPath = (Resolve-Path $CIPath).Path
+$resolvedPath = (Resolve-Path $CIPath).ProviderPath
 
 # --- Derive context name from path ---
 $contextName = ""
@@ -466,6 +466,7 @@ if ($script:errors -eq 0 -and $script:warnings -eq 0 -and -not $Detailed) {
 	$result = "=== Validation OK: CommandInterface ($contextName) ($checks checks) ==="
 } else {
 	Out-Line ""
+	if ($script:stopped -and $script:errors -ge $MaxErrors) { Out-Line "Stopped after $MaxErrors errors. Fix and re-run." }
 	Out-Line "=== Result: $($script:errors) errors, $($script:warnings) warnings ($checks checks) ==="
 	$result = $script:output.ToString()
 }
@@ -474,7 +475,7 @@ Write-Host $result
 
 if ($OutFile) {
 	if (-not [System.IO.Path]::IsPathRooted($OutFile)) {
-		$OutFile = Join-Path (Get-Location).Path $OutFile
+		$OutFile = Join-Path (Get-Location).ProviderPath $OutFile
 	}
 	$utf8Bom = New-Object System.Text.UTF8Encoding($true)
 	[System.IO.File]::WriteAllText($OutFile, $result, $utf8Bom)

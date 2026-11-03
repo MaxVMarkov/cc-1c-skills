@@ -1,4 +1,4 @@
-﻿# meta-info v1.15 — Compact summary of 1C metadata object
+﻿# meta-info v1.17 — Compact summary of 1C metadata object
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 [CmdletBinding(PositionalBinding=$false)]
 param(
@@ -20,7 +20,7 @@ function Out([string]$text) { $script:lines += $text }
 
 # --- Resolve path ---
 if (-not [System.IO.Path]::IsPathRooted($ObjectPath)) {
-	$ObjectPath = Join-Path (Get-Location).Path $ObjectPath
+	$ObjectPath = Join-Path (Get-Location).ProviderPath $ObjectPath
 }
 
 # Directory -> find XML inside or as sibling
@@ -353,16 +353,22 @@ function Format-Type($typeNode) {
 function Format-SingleType([string]$raw, $parentNode) {
 	switch -Wildcard ($raw) {
 		"xs:string" {
+			# Параметры всегда явно: без квалификаторов платформа читает строку как неограниченную.
 			$sq = $parentNode.SelectSingleNode("v8:StringQualifiers/v8:Length", $ns)
-			$len = if ($sq) { $sq.InnerText } else { "" }
-			if ($len) { return "Строка($len)" } else { return "Строка" }
+			$al = $parentNode.SelectSingleNode("v8:StringQualifiers/v8:AllowedLength", $ns)
+			$len = if ($sq) { $sq.InnerText } else { "0" }
+			if ($al -and $al.InnerText -eq 'Fixed') { return "Строка($len,fixed)" }
+			return "Строка($len)"
 		}
 		"xs:decimal" {
+			# Параметры всегда явно: без квалификаторов платформа читает число как 0,0.
 			$dg = $parentNode.SelectSingleNode("v8:NumberQualifiers/v8:Digits", $ns)
 			$fr = $parentNode.SelectSingleNode("v8:NumberQualifiers/v8:FractionDigits", $ns)
-			$d = if ($dg) { $dg.InnerText } else { "" }
+			$sg = $parentNode.SelectSingleNode("v8:NumberQualifiers/v8:AllowedSign", $ns)
+			$d = if ($dg) { $dg.InnerText } else { "0" }
 			$f = if ($fr) { $fr.InnerText } else { "0" }
-			if ($d) { return "Число($d,$f)" } else { return "Число" }
+			if ($sg -and $sg.InnerText -eq 'Nonnegative') { return "Число($d,$f,nonneg)" }
+			return "Число($d,$f)"
 		}
 		"xs:boolean" { return "Булево" }
 		"xs:dateTime" {
@@ -1757,7 +1763,7 @@ if ($Limit -gt 0 -and $outLines.Count -gt $Limit) {
 
 if ($OutFile) {
 	if (-not [System.IO.Path]::IsPathRooted($OutFile)) {
-		$OutFile = Join-Path (Get-Location).Path $OutFile
+		$OutFile = Join-Path (Get-Location).ProviderPath $OutFile
 	}
 	$utf8 = New-Object System.Text.UTF8Encoding($true)
 	[System.IO.File]::WriteAllLines($OutFile, $outLines, $utf8)

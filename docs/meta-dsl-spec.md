@@ -178,7 +178,8 @@ JSON DSL для описания объектов метаданных конф�
 | `БизнесПроцессСсылка.Xxx` | `BusinessProcessRef.Xxx` |
 | `ЗадачаСсылка.Xxx` | `TaskRef.Xxx` |
 | `ОпределяемыйТип.Xxx` | `DefinedType.Xxx` |
-| `ХранилищеЗначений` / `ХранилищеЗначения` / `base64Binary` | `ValueStorage` |
+| `ХранилищеЗначений` / `ХранилищеЗначения` | `ValueStorage` |
+| `ДвоичныеДанные` / `base64Binary` | `BinaryData` |
 | `УникальныйИдентификатор` | `UUID` |
 
 Регистронезависимые.
@@ -217,7 +218,7 @@ JSON DSL для описания объектов метаданных конф�
 |------|-----|-----------|----------|
 | `synonym` / `tooltip` | Synonym / ToolTip | авто / пусто | ML (§4.4) |
 | `comment` | Comment | пусто | строка |
-| `fillChecking` | FillChecking | DontCheck | DontCheck/ShowError/ShowWarning. Синоним `fillCheck` (из формы; `true`→ShowError). Флаг `req`→ShowError |
+| `fillChecking` | FillChecking | DontCheck | DontCheck/ShowError. Синоним `fillCheck` (из формы; `true`→ShowError). Флаг `req`→ShowError |
 | `fullTextSearch` | FullTextSearch | Use | Use/DontUse |
 | `fillFromFillingValue` | FillFromFillingValue | false | bool |
 | `fillValue` | FillValue | по типу (см. ниже) | значение заполнения — bool/число/строка/дата/DTR-путь; `null` → nil |
@@ -360,7 +361,7 @@ JSON-**строка** → `xsi:type="xs:string"` (напр. год `"2000"`, к�
 }
 ```
 
-Свойства объектной формы ТЧ: `synonym` (ML; нет ключа → авто из имени), `tooltip` (ML), `comment` (строка), `fillChecking` (`DontCheck`|`ShowError`|`ShowWarning`), `use` (`ForItem`|`ForFolder`|`ForFolderAndItem`, только Catalog/ПВХ; omit при дефолте `ForItem`), `attributes` (колонки; синоним `columns`), `lineNumber` (кастомизация стандартного реквизита НомерСтроки, см. ниже), `lineNumberLength` (разрядность номера строки, см. §5.2).
+Свойства объектной формы ТЧ: `synonym` (ML; нет ключа → авто из имени), `tooltip` (ML), `comment` (строка), `fillChecking` (`DontCheck`|`ShowError`), `use` (`ForItem`|`ForFolder`|`ForFolderAndItem`, только Catalog/ПВХ; omit при дефолте `ForItem`), `attributes` (колонки; синоним `columns`), `lineNumber` (кастомизация стандартного реквизита НомерСтроки, см. ниже), `lineNumberLength` (разрядность номера строки, см. §5.2).
 
 Для Catalog/ChartOfCharacteristicTypes в Properties ТЧ пишется `<Use>` (дефолт `ForItem`; ключ `use` объектной формы → `ForFolder`/`ForFolderAndItem`). Document `<Use>` не имеет.
 
@@ -497,7 +498,7 @@ LineNumber дефолтные. Ключ `lineNumber` на объектной ф�
 
 Формат: `standardAttributes` — объект `{ ИмяРеквизита: { переопределения } }`. Имена реквизитов — как в XML: `PredefinedDataName`, `Predefined`, `Ref`, `DeletionMark`, `IsFolder`, `Owner`, `Parent`, `Description`, `Code`.
 
-Переопределяемые поля реквизита: `synonym` (ML — строка/`{ru,en}`), `tooltip` (ML), `fillChecking` (`DontCheck`|`ShowError`|`ShowWarning`), `fillFromFillingValue` (bool), `fullTextSearch` (`Use`|`DontUse`), `dataHistory` (`Use`|`DontUse`), `fillValue` (значение — DTR-путь/строка/bool; см. §4.2), `choiceParameterLinks` / `choiceParameters` (как у реквизита, §4.2), `comment`, `mask`, `choiceForm`.
+Переопределяемые поля реквизита: `synonym` (ML — строка/`{ru,en}`), `tooltip` (ML), `fillChecking` (`DontCheck`|`ShowError`), `fillFromFillingValue` (bool), `fullTextSearch` (`Use`|`DontUse`), `dataHistory` (`Use`|`DontUse`), `fillValue` (значение — DTR-путь/строка/bool; см. §4.2), `choiceParameterLinks` / `choiceParameters` (как у реквизита, §4.2), `comment`, `mask`, `choiceForm`.
 
 > «Пустая ссылка» как значение заполнения (`<FillValue xsi:type="xr:DesignTimeRef"/>` без содержимого) — маркер
 > `fillValue: {emptyRef: true}` (декомпилятор проставляет его сам; тип из строки не выводится, т.к. `DefinedType.X`
@@ -591,11 +592,11 @@ LineNumber дефолтные. Ключ `lineNumber` на объектной ф�
 | `commandParameterType` | CommandParameterType | пусто (тип, напр. `CatalogRef.Номенклатура`) |
 | `parameterUseMode` | ParameterUseMode | `Single` (`Single`/`Multiple`) |
 | `modifiesData` | ModifiesData | `false` (bool) |
-| `representation` | Representation | `Auto` |
+| `representation` | Representation | `Auto` (`Auto`/`Text`/`Picture`/`PictureAndText`) |
 | `picture` | Picture | пусто (структурный блок, см. ниже) |
 | `loadTransparent` | Picture/LoadTransparent | `true` (bool, sibling `picture`) |
 | `shortcut` | Shortcut | пусто |
-| `onMainServerUnavalableBehavior` | OnMainServerUnavalableBehavior | `Auto` |
+| `onMainServerUnavalableBehavior` | OnMainServerUnavalableBehavior | `Auto` (`Auto`/`MakeDisable`/`DontChangeBehavior`) |
 
 **`picture`** — картинка команды `<Picture>` (структурный блок `<xr:Ref>`+`<xr:LoadTransparent>`, зеркало form-compile).
 Значение: строка-ref (`StdPicture.X` / `CommonPicture.X`; встроенная — префикс `abs:` → `<xr:Abs>`) ЛИБО объект
@@ -695,7 +696,7 @@ omit-on-empty. Поля пишутся частичной формой (`Standar
 | `realTimePosting` | `Deny` | RealTimePosting |
 | `registerRecordsDeletion` | `AutoDelete` | RegisterRecordsDeletion *(безопасный дефолт для авторства; в корпусе редкий)* |
 | `registerRecordsWritingOnPost` | `WriteSelected` | RegisterRecordsWritingOnPost |
-| `sequenceFilling` | `AutoFill` | SequenceFilling |
+| `sequenceFilling` | `AutoFill` | SequenceFilling (`AutoFill`/`AutoFillOff`) |
 | `postInPrivilegedMode` | `true` | PostInPrivilegedMode |
 | `unpostInPrivilegedMode` | `true` | UnpostInPrivilegedMode |
 | `createOnInput` | `Use` | CreateOnInput |
@@ -862,7 +863,7 @@ Split-CamelCase имени.
 | `codeLength` | `5` | CodeLength |
 | `descriptionLength` | `100` | DescriptionLength |
 | `codeAllowedLength` | `Variable` | CodeAllowedLength |
-| `dependenceOnCalculationTypes` | `DontUse` | DependenceOnCalculationTypes (`DontUse`/`OnPeriod`/`OnActionPeriod`) |
+| `dependenceOnCalculationTypes` | `DontUse` | DependenceOnCalculationTypes (`DontUse`/`OnActionPeriod`/`OnRegistrationPeriod`) |
 | `baseCalculationTypes` | `[]` | BaseCalculationTypes (список ссылок на ПВР; `ПланВидовРасчета.X` → `ChartOfCalculationTypes.X`) |
 | `actionPeriodUse` | `false` | ActionPeriodUse (использовать период действия) |
 | `dataLockControlMode` | `Automatic` | DataLockControlMode |
@@ -1052,7 +1053,7 @@ true); `characteristics` (§7.1.4); `basedOn`/`inputByString`/`dataLockFields` (
 ### 7.6d Task (Задача)
 
 Ссылочный тип адресных задач. Поля: нумерация (как БП) + `taskNumberAutoPrefix`/`descriptionLength`; `addressing`
-(ссылка на регистр сведений исполнителей); `mainAddressingAttribute`/`currentPerformer` (ссылки); `defaultPresentation`;
+(ссылка на регистр сведений исполнителей); `mainAddressingAttribute`/`currentPerformer` (ссылки); `defaultPresentation` (`AsDescription`/`AsNumber`);
 `basedOn`/`characteristics`/`inputByString`/`dataLockFields`; формы/презентации; `dataLockControlMode` (дефолт **Managed**).
 Дети: `attributes`, `commands` и **`addressingAttributes`** — реквизиты адресации (полный object-слой реквизита +
 `addressingDimension`: ссылка на измерение регистра исполнителей).
@@ -1302,7 +1303,7 @@ ChildObjects и модулей.
 
 | Поле JSON | Умолчание | XML элемент |
 |-----------|----------|-------------|
-| `moveBoundaryOnPosting` | `DontMove` | MoveBoundaryOnPosting |
+| `moveBoundaryOnPosting` | `DontMove` | MoveBoundaryOnPosting (`DontMove`/`Move`) |
 | `documents` | `[]` | Documents — массив MDObjectRef документов последовательности |
 | `registerRecords` | `[]` | RegisterRecords — движения (список MDObjectRef) |
 | `dataLockControlMode` | `Automatic` | DataLockControlMode |
@@ -1364,7 +1365,7 @@ ChildObjects и модулей.
 | Поле JSON | Умолчание | XML элемент |
 |-----------|----------|-------------|
 | `comment` | пусто | Comment |
-| `formType` | `Managed` | FormType |
+| `formType` | `Managed` | FormType (`Managed`/`Ordinary`) |
 | `includeHelpInContents` | `false` | IncludeHelpInContents |
 | `usePurposes` | `[PlatformApplication, MobilePlatformApplication]` | UsePurposes (массив ApplicationUsePurpose) |
 | `useStandardCommands` | `false` | UseStandardCommands |
@@ -1382,14 +1383,16 @@ ChildObjects и модулей.
 - **SessionParameter** — параметр сеанса: `valueType` (составной тип значения). Без ChildObjects.
 - **FunctionalOptionsParameter** — параметр функ. опции: `use` (массив MDObjectRef — измерения/реквизиты).
 - **WSReference** — WS-ссылка: `locationURL` (URL WSDL). +InternalInfo Manager.
-- **CommandGroup** — группа команд: `representation` (Auto), `tooltip` (ML), `picture` (§7.1.3), `category` (NavigationPanel).
+- **CommandGroup** — группа команд: `representation` (Auto/Text/Picture/PictureAndText), `tooltip` (ML), `picture` (§7.1.3), `category` (NavigationPanel).
 - **CommonCommand** — общая команда: `group`, `representation`, `tooltip`, `picture`, `shortcut`, `includeHelpInContents`,
-  `commandParameterType` (тип), `parameterUseMode` (Single), `modifiesData`, `onMainServerUnavalableBehavior` (Auto).
+  `commandParameterType` (тип), `parameterUseMode` (Single), `modifiesData`, `onMainServerUnavalableBehavior` (Auto/MakeDisable/DontChangeBehavior).
   Создаёт `Ext/CommandModule.bsl`.
 - **CommonAttribute** — общий реквизит: `valueType` (дефолт `String(0)`) + все value-свойства (§4.2) + `content`
-  (массив `{metadata, use?, conditionalSeparation?}` или строка) + свойства разделения данных (`autoUse`/`dataSeparation`/
-  `separatedDataUse`/`usersSeparation`/`authenticationSeparation`/`configurationExtensionsSeparation` — дефолт DontUse/
-  Independently) + `indexing`/`fullTextSearch`/`dataHistory`. FillValue тип-зависим; `{nil: true}` — явный nil на типизированном.
+  (массив `{metadata, use?, conditionalSeparation?}` или строка; `use` — Auto/Use/DontUse) + свойства разделения данных
+  (`autoUse` — DontUse/Use; `dataSeparation`/`usersSeparation`/`authenticationSeparation`/`configurationExtensionsSeparation` —
+  DontUse/Separate; `separatedDataUse` — Independently/IndependentlyAndSimultaneously; дефолт DontUse/Independently;
+  при `dataSeparation: Separate` платформа требует `dataSeparationValue`/`dataSeparationUse` — `SessionParameter.<Имя>`).
+  `quickChoice` здесь — перечисление Auto/Use/DontUse, как у реквизита + `indexing`/`fullTextSearch`/`dataHistory`. FillValue тип-зависим; `{nil: true}` — явный nil на типизированном.
 
 ```json
 { "type": "CommonAttribute", "name": "Организация", "valueType": "CatalogRef.Организации",
@@ -1403,7 +1406,7 @@ ChildObjects и модулей.
 
 - **CommonPicture** — `availabilityForChoice` / `availabilityForAppearance` (bool, дефолт false).
 - **CommonTemplate** — `templateType` (SpreadsheetDocument[дефолт]/TextDocument/HTMLDocument/BinaryData/AddIn/
-  DataCompositionSchema/DataCompositionAppearanceTemplate/GraphicalSchema).
+  DataCompositionSchema/DataCompositionAppearanceTemplate/GraphicalSchema/GeographicalSchema/ActiveDocument).
 
 ```json
 { "type": "CommonTemplate", "name": "ПечатьЗаказа", "templateType": "SpreadsheetDocument" }
@@ -1502,7 +1505,7 @@ ChildObjects и модулей.
 | `numberAllowedLength` | `Variable` | NumberAllowedLength |
 | `checkUnique` | `true` | CheckUnique |
 | `autonumbering` | `true` | Autonumbering |
-| `taskNumberAutoPrefix` | `BusinessProcessNumber` | TaskNumberAutoPrefix |
+| `taskNumberAutoPrefix` | `BusinessProcessNumber` | TaskNumberAutoPrefix (`BusinessProcessNumber`/`DontUse`) |
 | `descriptionLength` | `150` | DescriptionLength |
 | `addressing` | `""` | Addressing (ссылка на РС адресации) |
 | `mainAddressingAttribute` | `""` | MainAddressingAttribute |
@@ -1533,7 +1536,9 @@ ChildObjects и модулей.
 | `urlTemplates` | `{}` | → URLTemplate в ChildObjects (§16) |
 
 Шаблон: строкой — только путь; объектом — `template`, `synonym`, `comment`, `methods`.
-Метод: строкой — только HTTP-метод; объектом — `httpMethod`, `handler`, `synonym`, `comment`.
+Метод: строкой — только HTTP-метод; объектом — `httpMethod`, `handler`, `synonym`, `comment`. HTTP-метод:
+`GET`/`HEAD`/`PUT`/`POST`/`DELETE`/`PATCH`/`MERGE`/`OPTIONS`/`TRACE`/`CONNECT`/`PROPFIND`/`PROPPATCH`/`MOVE`/`COPY`/
+`LOCK`/`UNLOCK`/`MKCOL` или `Any` (любой).
 Обработчик по умолчанию `<ИмяШаблона><ИмяМетода>`; в типовых конфигурациях он обычно
 произвольный, тогда задают `handler` явно.
 

@@ -1,11 +1,23 @@
 {
-  "name": "availableValues, denyIncompleteValues, Folder в selection",
+  "name": "availableValues, denyIncompleteValues, Folder в selection; ссылка БизнесПроцесс.X.Y в availableValues — DesignTimeValue; availableValues поля набора (ссылка — DesignTimeValue, null — xsi:nil, дробное — decimal) и вычисляемого поля; null у параметра — xsi:nil; значение-период в availableValues и значение параметра в любом регистре — узлами периода; «_» с valueType xs:string — строкой; пустая строка с valueType — самозакрывающимся тегом",
   "params": { "outputPath": "Template.xml" },
   "input": {
     "dataSets": [{
       "name": "Основной",
       "query": "ВЫБРАТЬ Т.Счет, Т.Остаток, Т.Поступление1, Т.Поступление2, Т.Выбытие1, Т.Выбытие2 ИЗ Регистр КАК Т",
-      "fields": ["Счет: string", "Остаток: decimal(15,2)", "Поступление1: decimal(15,2)", "Поступление2: decimal(15,2)", "Выбытие1: decimal(15,2)", "Выбытие2: decimal(15,2)"]
+      "fields": [
+        {"field": "Счет", "type": "string", "availableValues": [
+          {"value": "Справочник.Счета.Касса", "presentation": "Касса"},
+          {"value": null, "presentation": "Не указан"}
+        ]},
+        {"field": "Остаток", "type": "decimal(15,2)", "availableValues": [{"value": 3.1}, {"value": 0}]},
+        "Поступление1: decimal(15,2)", "Поступление2: decimal(15,2)", "Выбытие1: decimal(15,2)", "Выбытие2: decimal(15,2)"]
+    }],
+    "calculatedFields": [{
+      "name": "Признак",
+      "expression": "1",
+      "type": "decimal(1,0)",
+      "availableValues": [{"value": 1, "presentation": "Да"}, {"value": null, "presentation": "Нет"}]
     }],
     "parameters": [{
       "name": "ПорядокОкругления",
@@ -17,6 +29,23 @@
         {"value": "Перечисление.Округления.Окр1_00", "presentation": "руб. коп"},
         {"value": "Перечисление.Округления.Окр1", "presentation": "руб."},
         {"value": "Перечисление.Округления.Окр1000", "presentation": "тыс. руб"}
+      ]
+    }, {
+      "name": "Процесс",
+      "type": "string(50)",
+      "availableValues": [
+        {"value": "БизнесПроцесс.Задание.ПустаяСсылка", "presentation": "Без процесса"},
+        {"value": null, "presentation": "Не задан"},
+        {"value": "_", "valueType": "xs:string", "presentation": "Подчёркивание"},
+        {"value": "", "valueType": "xs:string", "presentation": "Пустая строка"}
+      ]
+    }, {
+      "name": "Пер",
+      "type": "StandardPeriod",
+      "value": "lastmonth",
+      "availableValues": [
+        {"value": {"variant": "thisyear"}, "presentation": "Год"},
+        {"value": {"variant": "Custom", "startDate": "2024-01-01T00:00:00", "endDate": "2024-12-31T23:59:59"}, "presentation": "2024"}
       ]
     }],
     "settingsVariants": [{

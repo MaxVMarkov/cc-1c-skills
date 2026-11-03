@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# form-compile v1.199 — Compile 1C managed form from JSON or object metadata
+# form-compile v1.225 — Compile 1C managed form from JSON or object metadata
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 import argparse
 import copy
@@ -184,15 +184,19 @@ def _sg_find_v8project(start_dir):
 
 def _sg_get_edit_mode(cfg_dir):
     try:
-        pj = _sg_find_v8project(os.getcwd()) or _sg_find_v8project(cfg_dir)
+        pj = _sg_find_v8project(os.getcwd()) or _sg_find_v8project(os.path.abspath(cfg_dir))
         if not pj:
             return "deny"
         proj = json.loads(open(pj, encoding="utf-8-sig").read())
-        cfg_full = os.path.normcase(os.path.abspath(cfg_dir)).rstrip("\\/")
+        # configSrc — от каталога .v8-project.json, а не от рабочего каталога: иначе из подкаталога
+        # проекта база не сопоставляется и берётся правило проекта. Пути — настоящие (realpath):
+        # на macOS /var — ссылка на /private/var, и getcwd с путём аргумента иначе не совпадут.
+        proj_dir = os.path.dirname(pj)
+        cfg_full = os.path.normcase(os.path.realpath(cfg_dir)).rstrip("\\/")
         for db in proj.get("databases", []):
             src = db.get("configSrc")
             if src:
-                src_full = os.path.normcase(os.path.abspath(src)).rstrip("\\/")
+                src_full = os.path.normcase(os.path.realpath(os.path.join(proj_dir, src))).rstrip("\\/")
                 if cfg_full == src_full or cfg_full.startswith(src_full + os.sep):
                     if db.get("editingAllowedCheck"):
                         return db["editingAllowedCheck"]
@@ -869,7 +873,7 @@ def generate_catalog_item_dsl(meta, p, fd):
     # BSP group
     bsp_group = (p.get('additional') or {}).get('bspGroup', True)
     if bsp_group:
-        root_elements.append(OrderedDict([('group', 'vertical'), ('name', '\u0413\u0440\u0443\u043f\u043f\u0430\u0414\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435\u0420\u0435\u043a\u0432\u0438\u0437\u0438\u0442\u044b')]))
+        root_elements.append(OrderedDict([('group', 'vertical'), ('name', '\u0413\u0440\u0443\u043f\u043f\u0430\u0414\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435\u0420\u0435\u043a\u0432\u0438\u0437\u0438\u0442\u044b'), ('showTitle', True)]))
 
     # Properties
     form_props = OrderedDict()
@@ -1083,7 +1087,7 @@ def generate_document_item_dsl(meta, p, fd):
         else:
             add_page_children.extend(add_left_els + add_right_els)
         if add_bsp_group:
-            add_page_children.append(OrderedDict([('group', 'vertical'), ('name', '\u0413\u0440\u0443\u043f\u043f\u0430\u0414\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435\u0420\u0435\u043a\u0432\u0438\u0437\u0438\u0442\u044b')]))
+            add_page_children.append(OrderedDict([('group', 'vertical'), ('name', '\u0413\u0440\u0443\u043f\u043f\u0430\u0414\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435\u0420\u0435\u043a\u0432\u0438\u0437\u0438\u0442\u044b'), ('showTitle', True)]))
         additional_page = OrderedDict([('page', '\u0413\u0440\u0443\u043f\u043f\u0430\u0414\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u043e'), ('title', '\u0414\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u043e'), ('children', add_page_children)])
 
     # Build TS page elements
@@ -1110,7 +1114,7 @@ def generate_document_item_dsl(meta, p, fd):
         if footer_elements:
             root_elements.extend(footer_elements)
         if add_bsp_group and add_pos != 'none':
-            root_elements.append(OrderedDict([('group', 'vertical'), ('name', '\u0413\u0440\u0443\u043f\u043f\u0430\u0414\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435\u0420\u0435\u043a\u0432\u0438\u0437\u0438\u0442\u044b')]))
+            root_elements.append(OrderedDict([('group', 'vertical'), ('name', '\u0413\u0440\u0443\u043f\u043f\u0430\u0414\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435\u0420\u0435\u043a\u0432\u0438\u0437\u0438\u0442\u044b'), ('showTitle', True)]))
     else:
         # Pages form
         if header_pos == 'abovePages':
@@ -1447,7 +1451,7 @@ def generate_chart_of_accounts_item_dsl(meta, p, fd, preset_data):
         for flag in meta['AccountingFlags']:
             flag_children.append(OrderedDict([('check', flag['Name']), ('path', f"\u041e\u0431\u044a\u0435\u043a\u0442.{flag['Name']}")]))
         elements.append(OrderedDict([
-            ('group', 'vertical'), ('name', '\u0413\u0440\u0443\u043f\u043f\u0430\u041f\u0440\u0438\u0437\u043d\u0430\u043a\u0438\u0423\u0447\u0435\u0442\u0430'), ('title', '\u041f\u0440\u0438\u0437\u043d\u0430\u043a\u0438 \u0443\u0447\u0435\u0442\u0430'),
+            ('group', 'vertical'), ('name', '\u0413\u0440\u0443\u043f\u043f\u0430\u041f\u0440\u0438\u0437\u043d\u0430\u043a\u0438\u0423\u0447\u0435\u0442\u0430'), ('showTitle', True), ('title', '\u041f\u0440\u0438\u0437\u043d\u0430\u043a\u0438 \u0443\u0447\u0435\u0442\u0430'),
             ('children', flag_children),
         ]))
 
@@ -1704,7 +1708,7 @@ def parse_filter_shorthand(s):
             elif re.match(r'^\d+(\.\d+)?$', val_part):
                 result['value'] = val_part
                 result['valueType'] = 'xs:decimal'
-            elif re.match(r'^(Перечисление|Справочник|ПланСчетов|Документ|ПланВидовХарактеристик|ПланВидовРасчета)\.', val_part):
+            elif re.match(r'^(Перечисление|Справочник|ПланСчетов|Документ|ПланВидовХарактеристик|ПланВидовРасчета|БизнесПроцесс|Задача|ПланОбмена|Enum|Catalog|Document|ChartOfAccounts|ChartOfCharacteristicTypes|ChartOfCalculationTypes|BusinessProcess|Task|ExchangePlan)\.[^.]+\.[^.]+', val_part):
                 result['value'] = val_part
                 result['valueType'] = 'dcscor:DesignTimeValue'
             else:
@@ -1799,7 +1803,7 @@ def emit_filter_item(lines, item, indent):
         else:
             for v in val:
                 vt = _value_type_for(v, item.get('valueType'))
-                v_str = str(v).lower() if isinstance(v, bool) else esc_xml_text(str(v))
+                v_str = str(v).lower() if isinstance(v, bool) else esc_xml_text(normalize_design_time_value(v) if vt == 'dcscor:DesignTimeValue' else str(v))
                 ns_attr = _value_type_ns_attr(vt, v)
                 lines.append(f'{indent}\t<dcsset:right{ns_attr} xsi:type="{vt}">{v_str}</dcsset:right>')
     elif val is not None and (
@@ -1827,7 +1831,7 @@ def emit_filter_item(lines, item, indent):
         lines.append(f'{indent}\t<dcsset:right xsi:type="{vt}"/>')
     elif val is not None:
         vt = _value_type_for(val, item.get('valueType'))
-        v_str = str(val).lower() if isinstance(val, bool) else esc_xml_text(str(val))
+        v_str = str(val).lower() if isinstance(val, bool) else esc_xml_text(normalize_design_time_value(val) if vt == 'dcscor:DesignTimeValue' else str(val))
         ns_attr = _value_type_ns_attr(vt, val)
         lines.append(f'{indent}\t<dcsset:right{ns_attr} xsi:type="{vt}">{v_str}</dcsset:right>')
     if item.get('presentation'):
@@ -2268,64 +2272,215 @@ def new_id():
 _seen_element_names = set()  # пул имён элементов (глобально по всей форме)
 
 def _ensure_unique(name, seen, kind):
-    if name in seen:
+    if name.lower() in seen:
         print(f"[ERROR] Duplicate {kind} name '{name}' — names must be unique within their collection in a 1C form (set a unique 'name')", file=sys.stderr)
         sys.exit(1)
-    seen.add(name)
+    seen.add(name.lower())
 
 
 # --- Event handler name generator ---
 
-EVENT_SUFFIX_MAP = {
-    "OnChange": "\u041f\u0440\u0438\u0418\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0438",
-    "StartChoice": "\u041d\u0430\u0447\u0430\u043b\u043e\u0412\u044b\u0431\u043e\u0440\u0430",
-    "ChoiceProcessing": "\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u0412\u044b\u0431\u043e\u0440\u0430",
-    "AutoComplete": "\u0410\u0432\u0442\u043e\u041f\u043e\u0434\u0431\u043e\u0440",
-    "Clearing": "\u041e\u0447\u0438\u0441\u0442\u043a\u0430",
-    "Opening": "\u041e\u0442\u043a\u0440\u044b\u0442\u0438\u0435",
-    "Click": "\u041d\u0430\u0436\u0430\u0442\u0438\u0435",
-    "OnActivateRow": "\u041f\u0440\u0438\u0410\u043a\u0442\u0438\u0432\u0438\u0437\u0430\u0446\u0438\u0438\u0421\u0442\u0440\u043e\u043a\u0438",
-    "BeforeAddRow": "\u041f\u0435\u0440\u0435\u0434\u041d\u0430\u0447\u0430\u043b\u043e\u043c\u0414\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u0438\u044f",
-    "BeforeDeleteRow": "\u041f\u0435\u0440\u0435\u0434\u0423\u0434\u0430\u043b\u0435\u043d\u0438\u0435\u043c",
-    "BeforeRowChange": "\u041f\u0435\u0440\u0435\u0434\u041d\u0430\u0447\u0430\u043b\u043e\u043c\u0418\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u044f",
-    "OnStartEdit": "\u041f\u0440\u0438\u041d\u0430\u0447\u0430\u043b\u0435\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u044f",
-    "OnEndEdit": "\u041f\u0440\u0438\u041e\u043a\u043e\u043d\u0447\u0430\u043d\u0438\u0438\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u044f",
-    "Selection": "\u0412\u044b\u0431\u043e\u0440\u0421\u0442\u0440\u043e\u043a\u0438",
-    "OnCurrentPageChange": "\u041f\u0440\u0438\u0421\u043c\u0435\u043d\u0435\u0421\u0442\u0440\u0430\u043d\u0438\u0446\u044b",
-    "TextEditEnd": "\u041e\u043a\u043e\u043d\u0447\u0430\u043d\u0438\u0435\u0412\u0432\u043e\u0434\u0430\u0422\u0435\u043a\u0441\u0442\u0430",
-    "URLProcessing": "\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u041d\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u043e\u043d\u043d\u043e\u0439\u0421\u0441\u044b\u043b\u043a\u0438",
-    "DragStart": "\u041d\u0430\u0447\u0430\u043b\u043e\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u044f",
-    "Drag": "\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u0435",
-    "DragCheck": "\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u044f",
-    "Drop": "\u041f\u043e\u043c\u0435\u0449\u0435\u043d\u0438\u0435",
-    "AfterDeleteRow": "\u041f\u043e\u0441\u043b\u0435\u0423\u0434\u0430\u043b\u0435\u043d\u0438\u044f",
-}
+# --- Каталог событий формы (генерируется) ---
+# Tag ("Form" for the form itself) -> event -> (handler suffix, compile directive, params,
+# platform the event exists since ("" = 8.3.24), table data source the event is limited to).
+# Source: standard configurations (28.5k forms) + load test on 8.3.24/8.3.27/8.5.
+# Regenerate: python debug/form-handlers/gen_event_catalog.py
+def get_form_event_catalog():
+    return {
+        "CalendarField": {
+            "OnActivateDate": ("\u041f\u0440\u0438\u0410\u043a\u0442\u0438\u0432\u0438\u0437\u0430\u0446\u0438\u0438\u0414\u0430\u0442\u044b", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+            "OnChange": ("\u041f\u0440\u0438\u0418\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+            "OnPeriodOutput": ("\u041f\u0440\u0438\u0412\u044b\u0432\u043e\u0434\u0435\u041f\u0435\u0440\u0438\u043e\u0434\u0430", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041e\u0444\u043e\u0440\u043c\u043b\u0435\u043d\u0438\u0435\u041f\u0435\u0440\u0438\u043e\u0434\u0430", "", ""),
+            "Selection": ("\u0412\u044b\u0431\u043e\u0440", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0412\u044b\u0431\u0440\u0430\u043d\u043d\u0430\u044f\u0414\u0430\u0442\u0430", "", ""),
+        },
+        "ChartField": {
+            "DetailProcessing": ("\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u0420\u0430\u0441\u0448\u0438\u0444\u0440\u043e\u0432\u043a\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0420\u0430\u0441\u0448\u0438\u0444\u0440\u043e\u0432\u043a\u0430, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "Selection": ("\u0412\u044b\u0431\u043e\u0440", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0417\u043d\u0430\u0447\u0435\u043d\u0438\u0435\u0414\u0438\u0430\u0433\u0440\u0430\u043c\u043c\u044b, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+        },
+        "CheckBoxField": {
+            "OnChange": ("\u041f\u0440\u0438\u0418\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+        },
+        "ExtendedTooltip": {
+            "Click": ("\u041d\u0430\u0436\u0430\u0442\u0438\u0435", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+            "URLProcessing": ("\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u041d\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u043e\u043d\u043d\u043e\u0439\u0421\u0441\u044b\u043b\u043a\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041d\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u043e\u043d\u043d\u0430\u044f\u0421\u0441\u044b\u043b\u043a\u0430\u0424\u043e\u0440\u043c\u0430\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u043d\u043e\u0439\u0421\u0442\u0440\u043e\u043a\u0438, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+        },
+        "Form": {
+            "AfterWrite": ("\u041f\u043e\u0441\u043b\u0435\u0417\u0430\u043f\u0438\u0441\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b\u0417\u0430\u043f\u0438\u0441\u0438", "", ""),
+            "AfterWriteAtServer": ("\u041f\u043e\u0441\u043b\u0435\u0417\u0430\u043f\u0438\u0441\u0438\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u0422\u0435\u043a\u0443\u0449\u0438\u0439\u041e\u0431\u044a\u0435\u043a\u0442, \u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b\u0417\u0430\u043f\u0438\u0441\u0438", "", ""),
+            "BeforeClose": ("\u041f\u0435\u0440\u0435\u0434\u0417\u0430\u043a\u0440\u044b\u0442\u0438\u0435\u043c", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u041e\u0442\u043a\u0430\u0437, \u0417\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0438\u0435\u0420\u0430\u0431\u043e\u0442\u044b, \u0422\u0435\u043a\u0441\u0442\u041f\u0440\u0435\u0434\u0443\u043f\u0440\u0435\u0436\u0434\u0435\u043d\u0438\u044f, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "BeforeLoadDataFromSettingsAtServer": ("\u041f\u0435\u0440\u0435\u0434\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u043e\u0439\u0414\u0430\u043d\u043d\u044b\u0445\u0418\u0437\u041d\u0430\u0441\u0442\u0440\u043e\u0435\u043a\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438", "", ""),
+            "BeforeLoadUserSettingsAtServer": ("\u041f\u0435\u0440\u0435\u0434\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u043e\u0439\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c\u0441\u043a\u0438\u0445\u041d\u0430\u0441\u0442\u0440\u043e\u0435\u043a\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u043e\u0432\u044b\u0435\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c\u0441\u043a\u0438\u0435\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438\u041a\u0414", "", ""),
+            "BeforeLoadVariantAtServer": ("\u041f\u0435\u0440\u0435\u0434\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u043e\u0439\u0412\u0430\u0440\u0438\u0430\u043d\u0442\u0430\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u043e\u0432\u044b\u0435\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438\u041a\u0414", "", ""),
+            "BeforeWrite": ("\u041f\u0435\u0440\u0435\u0434\u0417\u0430\u043f\u0438\u0441\u044c\u044e", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u041e\u0442\u043a\u0430\u0437, \u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b\u0417\u0430\u043f\u0438\u0441\u0438", "", ""),
+            "BeforeWriteAtServer": ("\u041f\u0435\u0440\u0435\u0434\u0417\u0430\u043f\u0438\u0441\u044c\u044e\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041e\u0442\u043a\u0430\u0437, \u0422\u0435\u043a\u0443\u0449\u0438\u0439\u041e\u0431\u044a\u0435\u043a\u0442, \u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b\u0417\u0430\u043f\u0438\u0441\u0438", "", ""),
+            "ChoiceProcessing": ("\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u0412\u044b\u0431\u043e\u0440\u0430", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u0412\u044b\u0431\u0440\u0430\u043d\u043d\u043e\u0435\u0417\u043d\u0430\u0447\u0435\u043d\u0438\u0435, \u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a\u0412\u044b\u0431\u043e\u0440\u0430", "", ""),
+            "ExternalEvent": ("\u0412\u043d\u0435\u0448\u043d\u0435\u0435\u0421\u043e\u0431\u044b\u0442\u0438\u0435", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a, \u0421\u043e\u0431\u044b\u0442\u0438\u0435, \u0414\u0430\u043d\u043d\u044b\u0435", "", ""),
+            "FillCheckProcessingAtServer": ("\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0438\u0417\u0430\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u044f\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041e\u0442\u043a\u0430\u0437, \u041f\u0440\u043e\u0432\u0435\u0440\u044f\u0435\u043c\u044b\u0435\u0420\u0435\u043a\u0432\u0438\u0437\u0438\u0442\u044b", "", ""),
+            "NavigationProcessing": ("\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u041f\u0435\u0440\u0435\u0445\u043e\u0434\u0430", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u041e\u0431\u044a\u0435\u043a\u0442\u041f\u0435\u0440\u0435\u0445\u043e\u0434\u0430, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "NewWriteProcessing": ("\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u0417\u0430\u043f\u0438\u0441\u0438\u041d\u043e\u0432\u043e\u0433\u043e", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u041d\u043e\u0432\u044b\u0439\u041e\u0431\u044a\u0435\u043a\u0442, \u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "NotificationProcessing": ("\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u041e\u043f\u043e\u0432\u0435\u0449\u0435\u043d\u0438\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u0418\u043c\u044f\u0421\u043e\u0431\u044b\u0442\u0438\u044f, \u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440, \u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a", "", ""),
+            "OnChangeDisplaySettings": ("\u041f\u0440\u0438\u0418\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0438\u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u043e\u0432\u042d\u043a\u0440\u0430\u043d\u0430", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "", "", ""),
+            "OnClose": ("\u041f\u0440\u0438\u0417\u0430\u043a\u0440\u044b\u0442\u0438\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u0417\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0438\u0435\u0420\u0430\u0431\u043e\u0442\u044b", "", ""),
+            "OnCreateAtServer": ("\u041f\u0440\u0438\u0421\u043e\u0437\u0434\u0430\u043d\u0438\u0438\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041e\u0442\u043a\u0430\u0437, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "OnLoadDataFromSettingsAtServer": ("\u041f\u0440\u0438\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0435\u0414\u0430\u043d\u043d\u044b\u0445\u0418\u0437\u041d\u0430\u0441\u0442\u0440\u043e\u0435\u043a\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438", "", ""),
+            "OnLoadUserSettingsAtServer": ("\u041f\u0440\u0438\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0435\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c\u0441\u043a\u0438\u0445\u041d\u0430\u0441\u0442\u0440\u043e\u0435\u043a\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438, \u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u044e\u0442\u0441\u044f\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u044b\u0435\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438", "", ""),
+            "OnLoadVariantAtServer": ("\u041f\u0440\u0438\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0435\u0412\u0430\u0440\u0438\u0430\u043d\u0442\u0430\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438", "", ""),
+            "OnMainServerAvailabilityChange": ("\u041f\u0440\u0438\u0418\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0438\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e\u0441\u0442\u0438\u041e\u0441\u043d\u043e\u0432\u043d\u043e\u0433\u043e\u0421\u0435\u0440\u0432\u0435\u0440\u0430", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "OnOpen": ("\u041f\u0440\u0438\u041e\u0442\u043a\u0440\u044b\u0442\u0438\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u041e\u0442\u043a\u0430\u0437", "", ""),
+            "OnReadAtServer": ("\u041f\u0440\u0438\u0427\u0442\u0435\u043d\u0438\u0438\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u0422\u0435\u043a\u0443\u0449\u0438\u0439\u041e\u0431\u044a\u0435\u043a\u0442", "", ""),
+            "OnReopen": ("\u041f\u0440\u0438\u041f\u043e\u0432\u0442\u043e\u0440\u043d\u043e\u043c\u041e\u0442\u043a\u0440\u044b\u0442\u0438\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "", "", ""),
+            "OnSaveDataInSettingsAtServer": ("\u041f\u0440\u0438\u0421\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0438\u0438\u0414\u0430\u043d\u043d\u044b\u0445\u0412\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430\u0445\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438", "", ""),
+            "OnSaveUserSettingsAtServer": ("\u041f\u0440\u0438\u0421\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0438\u0438\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c\u0441\u043a\u0438\u0445\u041d\u0430\u0441\u0442\u0440\u043e\u0435\u043a\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438", "", ""),
+            "OnSaveVariantAtServer": ("\u041f\u0440\u0438\u0421\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0438\u0438\u0412\u0430\u0440\u0438\u0430\u043d\u0442\u0430\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438\u041a\u0414", "", ""),
+            "OnUpdateUserSettingSetAtServer": ("\u041f\u0440\u0438\u041e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0438\u0421\u043e\u0441\u0442\u0430\u0432\u0430\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c\u0441\u043a\u0438\u0445\u041d\u0430\u0441\u0442\u0440\u043e\u0435\u043a\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "OnWriteAtServer": ("\u041f\u0440\u0438\u0417\u0430\u043f\u0438\u0441\u0438\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041e\u0442\u043a\u0430\u0437, \u0422\u0435\u043a\u0443\u0449\u0438\u0439\u041e\u0431\u044a\u0435\u043a\u0442, \u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b\u0417\u0430\u043f\u0438\u0441\u0438", "", ""),
+            "URLGetProcessing": ("\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u041f\u043e\u043b\u0443\u0447\u0435\u043d\u0438\u044f\u041d\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u043e\u043d\u043d\u043e\u0439\u0421\u0441\u044b\u043b\u043a\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u041a\u043b\u044e\u0447, \u041f\u0440\u0435\u0434\u0441\u0442\u0430\u0432\u043b\u0435\u043d\u0438\u0435, \u041d\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u043e\u043d\u043d\u0430\u044f\u0421\u0441\u044b\u043b\u043a\u0430, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "URLListGetProcessing": ("\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u041f\u043e\u043b\u0443\u0447\u0435\u043d\u0438\u044f\u0421\u043f\u0438\u0441\u043a\u0430\u041d\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u043e\u043d\u043d\u044b\u0445\u0421\u0441\u044b\u043b\u043e\u043a", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u0421\u043f\u0438\u0441\u043e\u043a\u041d\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u043e\u043d\u044b\u0445\u0421\u0441\u044b\u043b\u043e\u043a, \u041a\u043b\u044e\u0447\u041f\u043e\u0423\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e", "", ""),
+            "URLProcessing": ("\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u041d\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u043e\u043d\u043d\u043e\u0439\u0421\u0441\u044b\u043b\u043a\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u041d\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u043e\u043d\u043d\u0430\u044f\u0421\u0441\u044b\u043b\u043a\u0430\u0424\u043e\u0440\u043c\u0430\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u043d\u043e\u0439\u0421\u0442\u0440\u043e\u043a\u0438, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+        },
+        "FormattedDocumentField": {
+            "OnChange": ("\u041f\u0440\u0438\u0418\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+        },
+        "GanttChartField": {
+            "DetailProcessing": ("\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u0420\u0430\u0441\u0448\u0438\u0444\u0440\u043e\u0432\u043a\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0420\u0430\u0441\u0448\u0438\u0444\u0440\u043e\u0432\u043a\u0438, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430, \u0414\u0430\u0442\u0430", "", ""),
+            "OnChange": ("\u041f\u0440\u0438\u0418\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+        },
+        "GraphicalSchemaField": {
+            "OnActivate": ("\u041f\u0440\u0438\u0410\u043a\u0442\u0438\u0432\u0438\u0437\u0430\u0446\u0438\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+            "Selection": ("\u0412\u044b\u0431\u043e\u0440", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+        },
+        "HTMLDocumentField": {
+            "DocumentComplete": ("\u0414\u043e\u043a\u0443\u043c\u0435\u043d\u0442\u0421\u0444\u043e\u0440\u043c\u0438\u0440\u043e\u0432\u0430\u043d", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+            "OnClick": ("\u041f\u0440\u0438\u041d\u0430\u0436\u0430\u0442\u0438\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0414\u0430\u043d\u043d\u044b\u0435\u0421\u043e\u0431\u044b\u0442\u0438\u044f, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+        },
+        "InputField": {
+            "AutoComplete": ("\u0410\u0432\u0442\u043e\u041f\u043e\u0434\u0431\u043e\u0440", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0422\u0435\u043a\u0441\u0442, \u0414\u0430\u043d\u043d\u044b\u0435\u0412\u044b\u0431\u043e\u0440\u0430, \u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b\u041f\u043e\u043b\u0443\u0447\u0435\u043d\u0438\u044f\u0414\u0430\u043d\u043d\u044b\u0445, \u041e\u0436\u0438\u0434\u0430\u043d\u0438\u0435, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "ChoiceProcessing": ("\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u0412\u044b\u0431\u043e\u0440\u0430", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0412\u044b\u0431\u0440\u0430\u043d\u043d\u043e\u0435\u0417\u043d\u0430\u0447\u0435\u043d\u0438\u0435, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "Clearing": ("\u041e\u0447\u0438\u0441\u0442\u043a\u0430", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "Creating": ("\u0421\u043e\u0437\u0434\u0430\u043d\u0438\u0435", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "EditTextChange": ("\u0418\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0435\u0422\u0435\u043a\u0441\u0442\u0430\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0422\u0435\u043a\u0441\u0442, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "MultipleValueOpening": ("\u041e\u0442\u043a\u0440\u044b\u0442\u0438\u0435\u041c\u043d\u043e\u0436\u0435\u0441\u0442\u0432\u0435\u043d\u043d\u043e\u0433\u043e\u0417\u043d\u0430\u0447\u0435\u043d\u0438\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0418\u0434\u0435\u043d\u0442\u0438\u0444\u0438\u043a\u0430\u0442\u043e\u0440, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "MultipleValueURLProcessing": ("\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u041d\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u043e\u043d\u043d\u043e\u0439\u0421\u0441\u044b\u043b\u043a\u0438\u041c\u043d\u043e\u0436\u0435\u0441\u0442\u0432\u0435\u043d\u043d\u043e\u0433\u043e\u0417\u043d\u0430\u0447\u0435\u043d\u0438\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0418\u0434\u0435\u043d\u0442\u0438\u0444\u0438\u043a\u0430\u0442\u043e\u0440, \u041d\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u043e\u043d\u043d\u0430\u044f\u0421\u0441\u044b\u043b\u043a\u0430\u0424\u043e\u0440\u043c\u0430\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u043d\u043e\u0439\u0421\u0442\u0440\u043e\u043a\u0438, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "MultipleValuesAdd": ("", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0417\u043d\u0430\u0447\u0435\u043d\u0438\u044f, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "MultipleValuesDelete": ("\u0423\u0434\u0430\u043b\u0435\u043d\u0438\u0435\u041c\u043d\u043e\u0436\u0435\u0441\u0442\u0432\u0435\u043d\u043d\u044b\u0445\u0417\u043d\u0430\u0447\u0435\u043d\u0438\u0439", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0418\u0434\u0435\u043d\u0442\u0438\u0444\u0438\u043a\u0430\u0442\u043e\u0440\u044b, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "OnChange": ("\u041f\u0440\u0438\u0418\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+            "Opening": ("\u041e\u0442\u043a\u0440\u044b\u0442\u0438\u0435", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "StartChoice": ("\u041d\u0430\u0447\u0430\u043b\u043e\u0412\u044b\u0431\u043e\u0440\u0430", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0414\u0430\u043d\u043d\u044b\u0435\u0412\u044b\u0431\u043e\u0440\u0430, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "StartListChoice": ("\u041d\u0430\u0447\u0430\u043b\u043e\u0412\u044b\u0431\u043e\u0440\u0430\u0418\u0437\u0421\u043f\u0438\u0441\u043a\u0430", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "TextEditEnd": ("\u041e\u043a\u043e\u043d\u0447\u0430\u043d\u0438\u0435\u0412\u0432\u043e\u0434\u0430\u0422\u0435\u043a\u0441\u0442\u0430", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0422\u0435\u043a\u0441\u0442, \u0414\u0430\u043d\u043d\u044b\u0435\u0412\u044b\u0431\u043e\u0440\u0430, \u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b\u041f\u043e\u043b\u0443\u0447\u0435\u043d\u0438\u044f\u0414\u0430\u043d\u043d\u044b\u0445, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "Tuning": ("\u0420\u0435\u0433\u0443\u043b\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u0435", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041d\u0430\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+        },
+        "LabelDecoration": {
+            "Click": ("\u041d\u0430\u0436\u0430\u0442\u0438\u0435", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+            "URLProcessing": ("\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u041d\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u043e\u043d\u043d\u043e\u0439\u0421\u0441\u044b\u043b\u043a\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041d\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u043e\u043d\u043d\u0430\u044f\u0421\u0441\u044b\u043b\u043a\u0430\u0424\u043e\u0440\u043c\u0430\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u043d\u043e\u0439\u0421\u0442\u0440\u043e\u043a\u0438, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+        },
+        "LabelField": {
+            "Click": ("\u041d\u0430\u0436\u0430\u0442\u0438\u0435", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "OnChange": ("\u041f\u0440\u0438\u0418\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+            "URLProcessing": ("\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u041d\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u043e\u043d\u043d\u043e\u0439\u0421\u0441\u044b\u043b\u043a\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041d\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u043e\u043d\u043d\u0430\u044f\u0421\u0441\u044b\u043b\u043a\u0430\u0424\u043e\u0440\u043c\u0430\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u043d\u043e\u0439\u0421\u0442\u0440\u043e\u043a\u0438, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+        },
+        "Pages": {
+            "OnCurrentPageChange": ("\u041f\u0440\u0438\u0421\u043c\u0435\u043d\u0435\u0421\u0442\u0440\u0430\u043d\u0438\u0446\u044b", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0422\u0435\u043a\u0443\u0449\u0430\u044f\u0421\u0442\u0440\u0430\u043d\u0438\u0446\u0430", "", ""),
+        },
+        "PictureDecoration": {
+            "Click": ("\u041d\u0430\u0436\u0430\u0442\u0438\u0435", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+            "Drag": ("\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u0435", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u044f, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "DragCheck": ("\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u044f, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+        },
+        "PictureField": {
+            "Click": ("\u041d\u0430\u0436\u0430\u0442\u0438\u0435", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "Drag": ("\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u0435", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u044f, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "DragCheck": ("\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u044f, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "OnChange": ("", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+        },
+        "PlannerField": {
+            "BeforeCreate": ("\u041f\u0435\u0440\u0435\u0434\u0421\u043e\u0437\u0434\u0430\u043d\u0438\u0435\u043c", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041d\u0430\u0447\u0430\u043b\u043e, \u041a\u043e\u043d\u0435\u0446, \u0417\u043d\u0430\u0447\u0435\u043d\u0438\u044f\u0418\u0437\u043c\u0435\u0440\u0435\u043d\u0438\u0439, \u0422\u0435\u043a\u0441\u0442, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "BeforeDelete": ("\u041f\u0435\u0440\u0435\u0434\u0423\u0434\u0430\u043b\u0435\u043d\u0438\u0435\u043c", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041e\u0442\u043a\u0430\u0437", "", ""),
+            "BeforeStartEdit": ("\u041f\u0435\u0440\u0435\u0434\u041d\u0430\u0447\u0430\u043b\u043e\u043c\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041d\u043e\u0432\u044b\u0439\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "BeforeStartQuickEdit": ("\u041f\u0435\u0440\u0435\u0434\u041d\u0430\u0447\u0430\u043b\u043e\u043c\u0411\u044b\u0441\u0442\u0440\u043e\u0433\u043e\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "CommandGenerateProcessing": ("\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u0424\u043e\u0440\u043c\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u044f\u041a\u043e\u043c\u0430\u043d\u0434", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b\u041a\u043e\u043c\u0430\u043d\u0434, \u041a\u043e\u043c\u0430\u043d\u0434\u044b, \u041a\u043e\u043c\u0430\u043d\u0434\u0430\u041f\u043e\u0423\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e", "", ""),
+            "Drag": ("\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u0435", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u044f, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430, \u0414\u0430\u0442\u0430, \u0417\u043d\u0430\u0447\u0435\u043d\u0438\u044f", "", ""),
+            "DragCheck": ("\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u044f, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430, \u0414\u0430\u0442\u0430, \u0417\u043d\u0430\u0447\u0435\u043d\u0438\u044f", "", ""),
+            "OnActivate": ("\u041f\u0440\u0438\u0410\u043a\u0442\u0438\u0432\u0438\u0437\u0430\u0446\u0438\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+            "OnCurrentRepresentationPeriodChange": ("\u041f\u0440\u0438\u0421\u043c\u0435\u043d\u0435\u0422\u0435\u043a\u0443\u0449\u0435\u0433\u043e\u041f\u0435\u0440\u0438\u043e\u0434\u0430\u041e\u0442\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0422\u0435\u043a\u0443\u0449\u0438\u0435\u041f\u0435\u0440\u0438\u043e\u0434\u044b\u041e\u0442\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "OnEditEnd": ("\u041f\u0440\u0438\u041e\u043a\u043e\u043d\u0447\u0430\u043d\u0438\u0438\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041d\u043e\u0432\u044b\u0439\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041e\u0442\u043c\u0435\u043d\u0430\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u044f", "", ""),
+            "Selection": ("\u0412\u044b\u0431\u043e\u0440", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+        },
+        "RadioButtonField": {
+            "OnChange": ("\u041f\u0440\u0438\u0418\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+        },
+        "SpreadSheetDocumentField": {
+            "AdditionalDetailProcessing": ("\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u0414\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u043e\u0439\u0420\u0430\u0441\u0448\u0438\u0444\u0440\u043e\u0432\u043a\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0420\u0430\u0441\u0448\u0438\u0444\u0440\u043e\u0432\u043a\u0430, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "BeforePrint": ("", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0414\u0438\u0430\u043b\u043e\u0433\u041f\u0435\u0447\u0430\u0442\u0438, \u041e\u0442\u043a\u0430\u0437", "", ""),
+            "BeforeWrite": ("\u041f\u0435\u0440\u0435\u0434\u0417\u0430\u043f\u0438\u0441\u044c\u044e", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u0435, \u041e\u0442\u043a\u0430\u0437", "", ""),
+            "DetailProcessing": ("\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u0420\u0430\u0441\u0448\u0438\u0444\u0440\u043e\u0432\u043a\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0420\u0430\u0441\u0448\u0438\u0444\u0440\u043e\u0432\u043a\u0430, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "Drag": ("\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u0435", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u044f, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430, \u041e\u0431\u043b\u0430\u0441\u0442\u044c", "", ""),
+            "DragCheck": ("\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u044f, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430, \u041e\u0431\u043b\u0430\u0441\u0442\u044c", "", ""),
+            "OnActivate": ("\u041f\u0440\u0438\u0410\u043a\u0442\u0438\u0432\u0438\u0437\u0430\u0446\u0438\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+            "OnChange": ("\u041f\u0440\u0438\u0418\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+            "OnChangeAreaContent": ("\u041f\u0440\u0438\u0418\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0438\u0421\u043e\u0434\u0435\u0440\u0436\u0438\u043c\u043e\u0433\u043e\u041e\u0431\u043b\u0430\u0441\u0442\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041e\u0431\u043b\u0430\u0441\u0442\u044c", "", ""),
+            "Selection": ("\u0412\u044b\u0431\u043e\u0440", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041e\u0431\u043b\u0430\u0441\u0442\u044c, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "URLProcessing": ("\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u041d\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u043e\u043d\u043d\u043e\u0439\u0421\u0441\u044b\u043b\u043a\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041d\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u043e\u043d\u043d\u0430\u044f\u0421\u0441\u044b\u043b\u043a\u0430\u0424\u043e\u0440\u043c\u0430\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u043d\u043e\u0439\u0421\u0442\u0440\u043e\u043a\u0438, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+        },
+        "Table": {
+            "AfterDeleteRow": ("\u041f\u043e\u0441\u043b\u0435\u0423\u0434\u0430\u043b\u0435\u043d\u0438\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+            "BeforeAddRow": ("\u041f\u0435\u0440\u0435\u0434\u041d\u0430\u0447\u0430\u043b\u043e\u043c\u0414\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u0438\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041e\u0442\u043a\u0430\u0437, \u041a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u0435, \u0420\u043e\u0434\u0438\u0442\u0435\u043b\u044c, \u0413\u0440\u0443\u043f\u043f\u0430, \u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440", "", ""),
+            "BeforeCollapse": ("\u041f\u0435\u0440\u0435\u0434\u0421\u0432\u043e\u0440\u0430\u0447\u0438\u0432\u0430\u043d\u0438\u0435\u043c", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0421\u0442\u0440\u043e\u043a\u0430, \u041e\u0442\u043a\u0430\u0437", "", ""),
+            "BeforeDeleteRow": ("\u041f\u0435\u0440\u0435\u0434\u0423\u0434\u0430\u043b\u0435\u043d\u0438\u0435\u043c", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041e\u0442\u043a\u0430\u0437", "", ""),
+            "BeforeEditEnd": ("\u041f\u0435\u0440\u0435\u0434\u041e\u043a\u043e\u043d\u0447\u0430\u043d\u0438\u0435\u043c\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041d\u043e\u0432\u0430\u044f\u0421\u0442\u0440\u043e\u043a\u0430, \u041e\u0442\u043c\u0435\u043d\u0430\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u044f, \u041e\u0442\u043a\u0430\u0437", "", ""),
+            "BeforeExpand": ("\u041f\u0435\u0440\u0435\u0434\u0420\u0430\u0437\u0432\u043e\u0440\u0430\u0447\u0438\u0432\u0430\u043d\u0438\u0435\u043c", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0421\u0442\u0440\u043e\u043a\u0430, \u041e\u0442\u043a\u0430\u0437", "", ""),
+            "BeforeLoadUserSettingsAtServer": ("\u041f\u0435\u0440\u0435\u0434\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u043e\u0439\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c\u0441\u043a\u0438\u0445\u041d\u0430\u0441\u0442\u0440\u043e\u0435\u043a\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438", "", "DynamicList"),
+            "BeforeRowChange": ("\u041f\u0435\u0440\u0435\u0434\u041d\u0430\u0447\u0430\u043b\u043e\u043c\u0418\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041e\u0442\u043a\u0430\u0437", "", ""),
+            "ChoiceProcessing": ("\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u0412\u044b\u0431\u043e\u0440\u0430", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0412\u044b\u0431\u0440\u0430\u043d\u043d\u043e\u0435\u0417\u043d\u0430\u0447\u0435\u043d\u0438\u0435, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "Drag": ("\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u0435", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u044f, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430, \u0421\u0442\u0440\u043e\u043a\u0430, \u041f\u043e\u043b\u0435", "", ""),
+            "DragCheck": ("\u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u044f, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430, \u0421\u0442\u0440\u043e\u043a\u0430, \u041f\u043e\u043b\u0435", "", ""),
+            "DragEnd": ("\u041e\u043a\u043e\u043d\u0447\u0430\u043d\u0438\u0435\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u044f, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "DragStart": ("\u041d\u0430\u0447\u0430\u043b\u043e\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b\u041f\u0435\u0440\u0435\u0442\u0430\u0441\u043a\u0438\u0432\u0430\u043d\u0438\u044f, \u0412\u044b\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u0435", "", ""),
+            "NewWriteProcessing": ("\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u0417\u0430\u043f\u0438\u0441\u0438\u041d\u043e\u0432\u043e\u0433\u043e", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u041d\u043e\u0432\u044b\u0439\u041e\u0431\u044a\u0435\u043a\u0442, \u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "OnActivateCell": ("\u041f\u0440\u0438\u0410\u043a\u0442\u0438\u0432\u0438\u0437\u0430\u0446\u0438\u0438\u042f\u0447\u0435\u0439\u043a\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+            "OnActivateField": ("\u041f\u0440\u0438\u0410\u043a\u0442\u0438\u0432\u0438\u0437\u0430\u0446\u0438\u0438\u041f\u043e\u043b\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+            "OnActivateRow": ("\u041f\u0440\u0438\u0410\u043a\u0442\u0438\u0432\u0438\u0437\u0430\u0446\u0438\u0438\u0421\u0442\u0440\u043e\u043a\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+            "OnChange": ("\u041f\u0440\u0438\u0418\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+            "OnCurrentParentChange": ("\u041f\u0440\u0438\u0421\u043c\u0435\u043d\u0435\u0422\u0435\u043a\u0443\u0449\u0435\u0433\u043e\u0420\u043e\u0434\u0438\u0442\u0435\u043b\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+            "OnEditEnd": ("\u041f\u0440\u0438\u041e\u043a\u043e\u043d\u0447\u0430\u043d\u0438\u0438\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041d\u043e\u0432\u0430\u044f\u0421\u0442\u0440\u043e\u043a\u0430, \u041e\u0442\u043c\u0435\u043d\u0430\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u044f", "", ""),
+            "OnGetDataAtServer": ("\u041f\u0440\u0438\u041f\u043e\u043b\u0443\u0447\u0435\u043d\u0438\u0438\u0414\u0430\u043d\u043d\u044b\u0445\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435\u0411\u0435\u0437\u041a\u043e\u043d\u0442\u0435\u043a\u0441\u0442\u0430", "\u0418\u043c\u044f\u042d\u043b\u0435\u043c\u0435\u043d\u0442\u0430, \u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438, \u0421\u0442\u0440\u043e\u043a\u0438", "", "DynamicList"),
+            "OnHover": ("\u041f\u0440\u0438\u041d\u0430\u0432\u0435\u0434\u0435\u043d\u0438\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0421\u0442\u0440\u043e\u043a\u0430, \u041f\u043e\u043b\u0435", "8.5", ""),
+            "OnLoadUserSettingsAtServer": ("\u041f\u0440\u0438\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0435\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c\u0441\u043a\u0438\u0445\u041d\u0430\u0441\u0442\u0440\u043e\u0435\u043a\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438", "", "DynamicList"),
+            "OnSaveUserSettingsAtServer": ("\u041f\u0440\u0438\u0421\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0438\u0438\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c\u0441\u043a\u0438\u0445\u041d\u0430\u0441\u0442\u0440\u043e\u0435\u043a\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438", "", "DynamicList"),
+            "OnSelectedRowsSetChange": ("\u041f\u0440\u0438\u0418\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0438\u0421\u043e\u0441\u0442\u0430\u0432\u0430\u0412\u044b\u0434\u0435\u043b\u0435\u043d\u043d\u044b\u0445\u0421\u0442\u0440\u043e\u043a", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "8.5", ""),
+            "OnStartEdit": ("\u041f\u0440\u0438\u041d\u0430\u0447\u0430\u043b\u0435\u0420\u0435\u0434\u0430\u043a\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041d\u043e\u0432\u0430\u044f\u0421\u0442\u0440\u043e\u043a\u0430, \u041a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u0435", "", ""),
+            "OnUpdateUserSettingSetAtServer": ("\u041f\u0440\u0438\u041e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0438\u0421\u043e\u0441\u0442\u0430\u0432\u0430\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c\u0441\u043a\u0438\u0445\u041d\u0430\u0441\u0442\u0440\u043e\u0435\u043a\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u041d\u0430\u0421\u0435\u0440\u0432\u0435\u0440\u0435", "\u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", "DynamicList"),
+            "RefreshRequestProcessing": ("\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u0417\u0430\u043f\u0440\u043e\u0441\u0430\u041e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "", "", ""),
+            "Selection": ("\u0412\u044b\u0431\u043e\u0440", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0412\u044b\u0431\u0440\u0430\u043d\u043d\u0430\u044f\u0421\u0442\u0440\u043e\u043a\u0430, \u041f\u043e\u043b\u0435, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+            "URLGetProcessing": ("\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430\u041f\u043e\u043b\u0443\u0447\u0435\u043d\u0438\u044f\u041d\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u043e\u043d\u043d\u043e\u0439\u0421\u0441\u044b\u043b\u043a\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u041a\u043b\u044e\u0447, \u041f\u0440\u0435\u0434\u0441\u0442\u0430\u0432\u043b\u0435\u043d\u0438\u0435, \u041d\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u043e\u043d\u043d\u0430\u044f\u0421\u0441\u044b\u043b\u043a\u0430, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", "DynamicList"),
+            "ValueChoice": ("\u0412\u044b\u0431\u043e\u0440\u0417\u043d\u0430\u0447\u0435\u043d\u0438\u044f", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442, \u0417\u043d\u0430\u0447\u0435\u043d\u0438\u0435, \u0421\u0442\u0430\u043d\u0434\u0430\u0440\u0442\u043d\u0430\u044f\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430", "", ""),
+        },
+        "TextDocumentField": {
+            "OnChange": ("\u041f\u0440\u0438\u0418\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+        },
+        "TrackBarField": {
+            "OnChange": ("\u041f\u0440\u0438\u0418\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0438", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "", ""),
+        },
+        "UsualGroup": {
+            "Click": ("\u041d\u0430\u0436\u0430\u0442\u0438\u0435", "\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435", "\u042d\u043b\u0435\u043c\u0435\u043d\u0442", "8.5", ""),
+        },
+    }
+# --- конец каталога событий формы ---
+EVENT_CATALOG = get_form_event_catalog()
 
-KNOWN_EVENTS = {
-    "input": ["OnChange", "StartChoice", "ChoiceProcessing", "AutoComplete", "TextEditEnd", "Clearing", "Creating", "EditTextChange"],
-    "check": ["OnChange"],
-    "radio": ["OnChange"],
-    "label": ["Click", "URLProcessing"],
-    "labelField": ["OnChange", "StartChoice", "ChoiceProcessing", "Click", "URLProcessing", "Clearing"],
-    "table": ["Selection", "BeforeAddRow", "AfterDeleteRow", "BeforeDeleteRow", "OnActivateRow", "OnEditEnd", "OnStartEdit", "BeforeRowChange", "BeforeEditEnd", "ValueChoice", "OnActivateCell", "OnActivateField", "Drag", "DragStart", "DragCheck", "DragEnd", "OnGetDataAtServer", "BeforeLoadUserSettingsAtServer", "OnUpdateUserSettingSetAtServer", "OnChange"],
-    "pages": ["OnCurrentPageChange"],
-    "page": ["OnCurrentPageChange"],
-    "button": ["Click"],
-    "picField": ["OnChange", "StartChoice", "ChoiceProcessing", "Click", "Clearing"],
-    "calendar": ["OnChange", "OnActivate"],
-    "picture": ["Click"],
-    "cmdBar": [],
-    "popup": [],
-    "group": [],
-}
+# Format version of the form being compiled and its DSL (set in main): the event check needs both.
+_format_version = ''
+# Префикс имён расширения (set in main): обработчик с видом вызова получает его в имени по null.
+_ext_name_prefix = ''
+_defn = {}
 
-KNOWN_FORM_EVENTS = [
-    "OnCreateAtServer", "OnOpen", "BeforeClose", "OnClose", "NotificationProcessing",
-    "ChoiceProcessing", "OnReadAtServer", "AfterWriteAtServer", "BeforeWriteAtServer",
-    "AfterWrite", "BeforeWrite", "OnWriteAtServer", "FillCheckProcessingAtServer",
-    "OnLoadDataFromSettingsAtServer", "BeforeLoadDataFromSettingsAtServer",
-    "OnSaveDataInSettingsAtServer", "ExternalEvent", "OnReopen", "Opening",
-]
+
+# Catalog entry of a tag's event (event name is case-sensitive: the platform accepts nothing else).
+def get_event_entry(xml_tag, event_name):
+    if not xml_tag or xml_tag not in EVENT_CATALOG:
+        return None
+    return EVENT_CATALOG[xml_tag].get(event_name)
+
 
 KNOWN_KEYS = {
     "group", "columnGroup", "buttonGroup", "input", "check", "radio", "label", "labelField", "table", "pages", "page",
@@ -2527,6 +2682,29 @@ REF_ROOT_SYNONYMS = {
     "КритерийОтбора": "FilterCriterion",
 }
 ENUM_VALUE_SYNONYMS = {"EnumValue", "ЗначениеПеречисления"}
+
+
+# Значение ссылки в dcscor:DesignTimeValue (отборы, параметры) — к виду Конфигуратора:
+# "Enum.X.EnumValue.Y" / "Enum.X.Y" → "Перечисление.X.Y", "Catalog.X.EmptyRef" → "Справочник.X.ПустаяСсылка".
+# Вид с сегментом EnumValue платформа не разрешает: сравнение с ним всегда ложно (замер 8.3.24).
+DESIGN_TIME_REF_ROOTS = {
+    "Enum": "Перечисление", "Catalog": "Справочник", "Document": "Документ", "ChartOfAccounts": "ПланСчетов",
+    "ChartOfCharacteristicTypes": "ПланВидовХарактеристик", "ChartOfCalculationTypes": "ПланВидовРасчета",
+    "ExchangePlan": "ПланОбмена", "BusinessProcess": "БизнесПроцесс", "Task": "Задача",
+}
+
+
+def normalize_design_time_value(v):
+    parts = str(v).split('.')
+    if len(parts) < 3:
+        return str(v)
+    # Сравнения без учёта регистра — как в PS-порте (ключи хэш-таблицы, -contains)
+    parts[0] = next((v for k, v in DESIGN_TIME_REF_ROOTS.items() if k.lower() == parts[0].lower()), parts[0])
+    if parts[0] == 'Перечисление' and len(parts) >= 4 and parts[2].lower() in {x.lower() for x in ENUM_VALUE_SYNONYMS}:
+        parts = parts[:2] + parts[3:]
+    if parts[-1] == 'EmptyRef':
+        parts[-1] = 'ПустаяСсылка'
+    return '.'.join(parts)
 
 
 def normalize_meta_type_ref(ref):
@@ -2838,11 +3016,31 @@ def normalize_radio_button_type(raw):
     return str(raw).strip()
 
 
-def get_handler_name(element_name, event_name):
-    suffix = EVENT_SUFFIX_MAP.get(event_name)
-    if suffix:
-        return f"{element_name}{suffix}"
-    return f"{element_name}{event_name}"
+# Handler name by the standard configurations' convention: <Element><Suffix>, a form event gets the suffix alone.
+# An event outside the catalog gets <Element><Event>.
+def get_handler_name(element_name, event_name, xml_tag='', call_type=''):
+    entry = get_event_entry(xml_tag, event_name)
+    name = f"{element_name}{entry[0]}" if entry and entry[0] else f"{element_name}{event_name}"
+    # Обработчик с видом вызова (расширение) — как называет Конфигуратор: префикс расширения + имя + вид вызова.
+    # Без этого имя совпало бы с процедурой исходной формы.
+    if call_type:
+        name = f"{_ext_name_prefix}{name}" + {'Before': '\u041f\u0435\u0440\u0435\u0434', 'After': '\u041f\u043e\u0441\u043b\u0435', 'Override': '\u0412\u043c\u0435\u0441\u0442\u043e'}.get(call_type, '')
+    return name
+
+
+# Префикс имён расширения — <NamePrefix> ближайшего вверх Configuration.xml; "" — не расширение или не задан.
+def get_extension_name_prefix(d):
+    while d:
+        cfg = os.path.join(d, 'Configuration.xml')
+        if os.path.isfile(cfg):
+            with open(cfg, encoding='utf-8-sig', errors='replace') as f:
+                m = re.search(r'<NamePrefix>([^<]*)</NamePrefix>', f.read())
+            return m.group(1) if m else ''
+        parent = os.path.dirname(d)
+        if not parent or parent == d:
+            break
+        d = parent
+    return ''
 
 
 def get_element_name(el, type_key):
@@ -2854,50 +3052,430 @@ def get_element_name(el, type_key):
 # Собрать упорядоченный список событий элемента (имя, обработчик) из DSL.
 # Основной формат: el['events'] = { Событие: ИмяОбработчика } (None/"" → авто-имя по конвенции).
 # Legacy (принимается ради совместимости): el['on'] (массив) + el['handlers'] (переопределение имён).
-def get_event_pairs(el, element_name):
+def get_event_pairs(el, element_name, xml_tag=''):
     pairs = []
     events = el.get('events')
     if events:
         for ev_name, val in events.items():
-            handler = '' if val is None else str(val)
-            if not handler:
-                handler = get_handler_name(element_name, ev_name)
-            pairs.append((ev_name, handler))
+            # Значение — имя обработчика; null — имя по шаблону; объект { handler, callType } или массив
+            # таких объектов (в расширении на одно событие вешают и Before, и After)
+            for v in (val if isinstance(val, list) else [val]):
+                if isinstance(v, dict):
+                    handler = '' if v.get('handler') is None else str(v.get('handler'))
+                    call_type = normalize_call_type(v.get('callType'), element_name, ev_name)
+                else:
+                    handler = '' if v is None else str(v)
+                    call_type = ''
+                if not handler:
+                    handler = get_handler_name(element_name, ev_name, xml_tag, call_type)
+                pairs.append((ev_name, handler, call_type))
     elif el.get('on'):
         handlers = el.get('handlers') or {}
-        for evt in el['on']:
-            evt_name = str(evt)
-            if handlers.get(evt_name):
-                handler = str(handlers[evt_name])
+        for evt in (el['on'] if isinstance(el['on'], list) else [el['on']]):
+            if isinstance(evt, dict):
+                evt_name = str(evt.get('event', ''))
+                handler = '' if evt.get('handler') is None else str(evt.get('handler'))
+                call_type = normalize_call_type(evt.get('callType'), element_name, evt_name)
             else:
-                handler = get_handler_name(element_name, evt_name)
-            pairs.append((evt_name, handler))
+                evt_name, handler, call_type = str(evt), '', ''
+            if not handler:
+                handler = str(handlers[evt_name]) if handlers.get(evt_name) else get_handler_name(element_name, evt_name, xml_tag, call_type)
+            pairs.append((evt_name, handler, call_type))
     return pairs
 
 
-# Проверить, подключено ли событие к элементу (в любом из форматов).
-def test_element_event(el, event_name):
-    events = el.get('events')
-    if events and event_name in events:
-        return True
-    return event_name in (el.get('on') or [])
+# Вид вызова обработчика в расширении: Before / After / Override (регистр не важен); пусто — не указан.
+def normalize_call_type(raw, element_name, event_name):
+    if raw is None or str(raw) == '':
+        return ''
+    for v in ('Before', 'After', 'Override'):
+        if str(raw).lower() == v.lower():
+            return v
+    print(f"[ERROR] Element '{element_name}', event '{event_name}': callType '{raw}' — expected Before, After or Override", file=sys.stderr)
+    sys.exit(1)
 
 
-def emit_events(lines, el, element_name, indent, type_key):
-    pairs = get_event_pairs(el, element_name)
+# Events are checked against the catalog. An event the element lacks is dropped by the platform on load
+# (logged) — warn but still write it: the catalog comes from standard configurations and may miss a rare event.
+# source — type of the attribute the table is bound to ('' — unknown, the source is not checked).
+def test_event_pairs(pairs, xml_tag, element_name, source=''):
+    what = 'the form' if xml_tag == 'Form' else f"{xml_tag} '{element_name}'"
+    evs = EVENT_CATALOG.get(xml_tag)
+    for ev, _, _ in pairs:
+        ev = str(ev)
+        if not evs:
+            print(f"[WARN] {what} has no events in standard configurations — the platform may drop '{ev}' on load")
+            continue
+        entry = get_event_entry(xml_tag, ev)
+        if not entry:
+            print(f"[WARN] Unknown event '{ev}' for {what} — the platform may drop it on load. Known: {', '.join(sorted(evs))}")
+            continue
+        since = entry[3]
+        if since and format_rank(_format_version) < PLATFORM_FORMAT_RANK[since]:
+            print(f"[WARN] Event '{ev}' of {what} exists since platform {since} — earlier platforms drop it on load")
+        only = entry[4]
+        if only and source and source.lower() != only.lower():
+            print(f"[WARN] Event '{ev}' of {what} exists only for a table bound to {only} (bound to {source}) — the platform drops it on load")
+
+
+# Type of the attribute the table is bound to ('' — undetermined: no path or the attribute is not in the DSL).
+def get_table_source(el):
+    if el.get('_dynList'):
+        return 'DynamicList'
+    root = str(el.get('path') or '').split('.')[0]
+    if not root:
+        return ''
+    for a in (_defn.get('attributes') or []):
+        if str(a.get('name') or '').lower() == root.lower():
+            return '' if a.get('type') is None else str(a.get('type'))
+    return ''
+
+
+# The element kind has no events: given events/on are not written — warn instead of losing them silently.
+def warn_events_ignored(el, xml_tag, element_name):
+    names = list((el.get('events') or {}).keys())
+    on = el.get('on')
+    for evt in (on if isinstance(on, list) else ([] if on is None else [on])):
+        if evt is not None:
+            names.append(str(evt.get('event', '')) if isinstance(evt, dict) else str(evt))
+    if names:
+        print(f"[WARN] {xml_tag} '{element_name}' has no events — ignored: {', '.join(names)}")
+
+
+# First XML format version of the platform where a catalog event appeared.
+PLATFORM_FORMAT_RANK = {"8.3.25": 218, "8.3.26": 219, "8.3.27": 220, "8.5": 221}
+
+# --- Заготовки обработчиков в модуле формы ---
+# Привязки, которые затронул запуск, собираются в _handler_bindings; после записи Form.xml
+# update_form_module дописывает в модуль процедуры, которых там ещё нет, — в области по стандарту БСП.
+_handler_bindings = []
+# таблица, колонки которой сейчас эмитятся
+_handler_table = {'name': ''}
+
+
+# kind: form | element | command; table — таблица, внутри которой элемент (область «…ТаблицыФормы<Имя>»).
+# Одно имя на несколько событий — одна процедура: сигнатуру даёт первая привязка.
+def register_handler(handler, kind, xml_tag='', event_name='', table=''):
+    if not handler:
+        return
+    for b in _handler_bindings:
+        if b['handler'].lower() == handler.lower():
+            return
+    _handler_bindings.append({'handler': handler, 'kind': kind, 'xmlTag': xml_tag, 'eventName': event_name, 'table': table or ''})
+
+
+# Пустой модуль формы. Табличных областей нет: имя таблицы при создании формы неизвестно.
+def get_form_module_template():
+    out = []
+    for r in ('\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a\u0438\u0421\u043e\u0431\u044b\u0442\u0438\u0439\u0424\u043e\u0440\u043c\u044b',
+              '\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a\u0438\u0421\u043e\u0431\u044b\u0442\u0438\u0439\u042d\u043b\u0435\u043c\u0435\u043d\u0442\u043e\u0432\u0428\u0430\u043f\u043a\u0438\u0424\u043e\u0440\u043c\u044b',
+              '\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a\u0438\u041a\u043e\u043c\u0430\u043d\u0434\u0424\u043e\u0440\u043c\u044b',
+              '\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a\u0438\u041e\u043f\u043e\u0432\u0435\u0449\u0435\u043d\u0438\u0439',
+              '\u0421\u043b\u0443\u0436\u0435\u0431\u043d\u044b\u0435\u041f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u044b\u0418\u0424\u0443\u043d\u043a\u0446\u0438\u0438'):
+        if out:
+            out.append('')
+        out += [f'#\u041e\u0431\u043b\u0430\u0441\u0442\u044c {r}', '', '#\u041a\u043e\u043d\u0435\u0446\u041e\u0431\u043b\u0430\u0441\u0442\u0438']
+    return out
+
+
+# Сканер BSL: строковые литералы (с "" и многострочными продолжениями «|») и комментарии // отделяются
+# от кода, номера строк сохраняются. Lines — строки текста; Code — они же без комментариев, литерал
+# заменён на ""; Literals — {Line, Text, Prefix — код этой строки слева от литерала}.
+def get_bsl_scan(text):
+    lines = text.replace("\r", "").split("\n")
+    code = []
+    mask = []
+    lits = []
+    in_str = False
+    cur = None
+    cur_line = 0
+    cur_prefix = ""
+    cur_col = -1
+    for i, line in enumerate(lines):
+        # строка без кавычек вне литерала — только отрезать комментарий
+        if not in_str and '"' not in line:
+            k = line.find('//')
+            code.append(line[:k] if k >= 0 else line)
+            mask.append(line[:k] + ' ' * (len(line) - k) if k >= 0 else line)
+            continue
+        sb = []
+        mk = list(line)
+        j = 0
+        if in_str:
+            # продолжение многострочного литерала: пробелы, затем «|»
+            while j < len(line) and line[j] in (' ', '\t'):
+                j += 1
+            # строка «//…» между строками литерала — комментарий, литерал продолжается на следующей
+            if line.startswith('//', j):
+                code.append("")
+                mask.append(' ' * len(line))
+                continue
+            if j < len(line) and line[j] == '|':
+                mk[j] = ' '
+                j += 1
+            cur += "\n"
+            cur_col = -1
+        while j < len(line):
+            c = line[j]
+            if in_str:
+                if c == '"':
+                    if j + 1 < len(line) and line[j + 1] == '"':
+                        cur += '"'
+                        mk[j] = ' '
+                        mk[j + 1] = ' '
+                        j += 2
+                        continue
+                    in_str = False
+                    lits.append({"Line": cur_line, "Text": cur, "Prefix": cur_prefix, "Col": cur_col})
+                    sb.append('""')
+                    j += 1
+                    continue
+                cur += c
+                mk[j] = ' '
+                j += 1
+                continue
+            if c == '/' and j + 1 < len(line) and line[j + 1] == '/':
+                for q in range(j, len(mk)):
+                    mk[q] = ' '
+                break
+            if c == '"':
+                in_str = True
+                cur = ""
+                cur_line = i + 1
+                cur_prefix = "".join(sb)
+                cur_col = j + 1
+                j += 1
+                continue
+            sb.append(c)
+            j += 1
+        code.append("".join(sb))
+        mask.append("".join(mk))
+    return {"Lines": lines, "Code": code, "Mask": mask, "Literals": lits}
+
+
+# Процедуры и функции модуля (имя, первая и последняя строка; первая — с аннотациями над заголовком)
+# и области (имя, строки #Область и #КонецОбласти, вложенность). Строки нумеруются с 1.
+# Заголовок — только в начале строки: продолжение литерала («|…») и комментарий заголовком не станут.
+def get_module_outline(lines):
+    procs, regions, opened = [], [], []
+    cur = None
+    for i, l in enumerate(lines):
+        if cur is not None:
+            # \u043a\u043e\u043d\u0435\u0446 \u043f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u044b \u2014 \u0432 \u043d\u0430\u0447\u0430\u043b\u0435 \u0441\u0442\u0440\u043e\u043a\u0438 \u0438\u043b\u0438 \u043f\u043e\u0441\u043b\u0435 \u00ab;\u00bb (`\u0412\u043e\u0437\u0432\u0440\u0430\u0442 \u0425;\u041a\u043e\u043d\u0435\u0446\u0424\u0443\u043d\u043a\u0446\u0438\u0438`)
+            if re.search(r'(^|;)\s*(\u041a\u043e\u043d\u0435\u0446\u041f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u044b|\u041a\u043e\u043d\u0435\u0446\u0424\u0443\u043d\u043a\u0446\u0438\u0438|EndProcedure|EndFunction)(?!\w)', l, re.I):
+                cur['end'] = i + 1
+                procs.append(cur)
+                cur = None
+            continue
+        m = re.match(r'^\s*(?:(?:\u0410\u0441\u0438\u043d\u0445|Async)\s+)?(?:\u041f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043d\u043a\u0446\u0438\u044f|Procedure|Function)\s+(\w+)\s*\(', l, re.I)
+        if m:
+            s = i
+            while s > 0 and re.match(r'^\s*&', lines[s - 1]):
+                s -= 1
+            cur = {'name': m.group(1), 'start': s + 1, 'end': i + 1}
+            continue
+        m = re.match(r'^\s*#(?:\u041e\u0431\u043b\u0430\u0441\u0442\u044c|Region)\s+(\S+)', l, re.I)
+        if m:
+            opened.append({'name': m.group(1), 'start': i + 1, 'end': 0, 'depth': len(opened)})
+            continue
+        if re.match(r'^\s*#(\u041a\u043e\u043d\u0435\u0446\u041e\u0431\u043b\u0430\u0441\u0442\u0438|EndRegion)(?!\w)', l, re.I) and opened:
+            r = opened.pop()
+            r['end'] = i + 1
+            regions.append(r)
+    return {'procs': procs, 'regions': regions}
+
+
+# Разметка модуля по коду без литералов и комментариев: «;КонецПроцедуры» в строке не закроет процедуру.
+def get_module_code_outline(lines):
+    return get_module_outline(get_bsl_scan('\n'.join(lines))['Code'])
+
+
+# Текст заготовки: директива и параметры — из каталога событий, у команды — (Команда) на клиенте.
+# None — событие вне каталога, сигнатура неизвестна.
+def get_handler_stub(b):
+    if b['kind'] == 'command':
+        directive, params = '\u041d\u0430\u041a\u043b\u0438\u0435\u043d\u0442\u0435', '\u041a\u043e\u043c\u0430\u043d\u0434\u0430'
+    else:
+        entry = get_event_entry(b['xmlTag'], b['eventName'])
+        if not entry:
+            return None
+        directive, params = entry[1], entry[2]
+    return [f'&{directive}', f"\u041f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u0430 {b['handler']}({params})", '\t// \u0412\u0441\u0442\u0430\u0432\u0438\u0442\u044c \u0441\u043e\u0434\u0435\u0440\u0436\u0438\u043c\u043e\u0435 \u043e\u0431\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a\u0430.', '\u041a\u043e\u043d\u0435\u0446\u041f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u044b']
+
+
+# Порядок областей модуля формы по стандарту (типовые): куда встаёт новая область.
+def get_region_rank(name):
+    n = name.lower()
+    if n == '\u043e\u043f\u0438\u0441\u0430\u043d\u0438\u0435\u043f\u0435\u0440\u0435\u043c\u0435\u043d\u043d\u044b\u0445':
+        return 0
+    if n == '\u043e\u0431\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a\u0438\u0441\u043e\u0431\u044b\u0442\u0438\u0439\u0444\u043e\u0440\u043c\u044b':
+        return 1
+    if n in ('\u043e\u0431\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a\u0438\u0441\u043e\u0431\u044b\u0442\u0438\u0439\u044d\u043b\u0435\u043c\u0435\u043d\u0442\u043e\u0432\u0448\u0430\u043f\u043a\u0438\u0444\u043e\u0440\u043c\u044b', '\u043e\u0431\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a\u0438\u0441\u043e\u0431\u044b\u0442\u0438\u0439\u044d\u043b\u0435\u043c\u0435\u043d\u0442\u043e\u0432\u0444\u043e\u0440\u043c\u044b'):
+        return 2
+    if n.startswith('\u043e\u0431\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a\u0438\u0441\u043e\u0431\u044b\u0442\u0438\u0439\u044d\u043b\u0435\u043c\u0435\u043d\u0442\u043e\u0432\u0442\u0430\u0431\u043b\u0438\u0446\u044b\u0444\u043e\u0440\u043c\u044b'):
+        return 3
+    if n == '\u043e\u0431\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a\u0438\u043a\u043e\u043c\u0430\u043d\u0434\u0444\u043e\u0440\u043c\u044b':
+        return 4
+    if n == '\u043e\u0431\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a\u0438\u043e\u043f\u043e\u0432\u0435\u0449\u0435\u043d\u0438\u0439':
+        return 5
+    if n == '\u0441\u043b\u0443\u0436\u0435\u0431\u043d\u044b\u0435\u043f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u044b\u0438\u0444\u0443\u043d\u043a\u0446\u0438\u0438':
+        return 6
+    return -1
+
+
+# Область для привязки. Общая область элементов (без «шапки») — для всех элементов, и табличных тоже:
+# модуль уже так устроен.
+def get_handler_region_name(b, regions):
+    if b['kind'] == 'form':
+        return '\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a\u0438\u0421\u043e\u0431\u044b\u0442\u0438\u0439\u0424\u043e\u0440\u043c\u044b'
+    if b['kind'] == 'command':
+        return '\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a\u0438\u041a\u043e\u043c\u0430\u043d\u0434\u0424\u043e\u0440\u043c\u044b'
+    has = {r['name'].lower() for r in regions}
+    # своя область таблицы, если она уже есть, — важнее общей
+    if b['table'] and f"\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a\u0438\u0421\u043e\u0431\u044b\u0442\u0438\u0439\u042d\u043b\u0435\u043c\u0435\u043d\u0442\u043e\u0432\u0422\u0430\u0431\u043b\u0438\u0446\u044b\u0424\u043e\u0440\u043c\u044b{b['table']}".lower() in has:
+        return f"\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a\u0438\u0421\u043e\u0431\u044b\u0442\u0438\u0439\u042d\u043b\u0435\u043c\u0435\u043d\u0442\u043e\u0432\u0422\u0430\u0431\u043b\u0438\u0446\u044b\u0424\u043e\u0440\u043c\u044b{b['table']}"
+    if '\u043e\u0431\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a\u0438\u0441\u043e\u0431\u044b\u0442\u0438\u0439\u044d\u043b\u0435\u043c\u0435\u043d\u0442\u043e\u0432\u0444\u043e\u0440\u043c\u044b' in has and '\u043e\u0431\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a\u0438\u0441\u043e\u0431\u044b\u0442\u0438\u0439\u044d\u043b\u0435\u043c\u0435\u043d\u0442\u043e\u0432\u0448\u0430\u043f\u043a\u0438\u0444\u043e\u0440\u043c\u044b' not in has:
+        return '\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a\u0438\u0421\u043e\u0431\u044b\u0442\u0438\u0439\u042d\u043b\u0435\u043c\u0435\u043d\u0442\u043e\u0432\u0424\u043e\u0440\u043c\u044b'
+    if b['table']:
+        return f"\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a\u0438\u0421\u043e\u0431\u044b\u0442\u0438\u0439\u042d\u043b\u0435\u043c\u0435\u043d\u0442\u043e\u0432\u0422\u0430\u0431\u043b\u0438\u0446\u044b\u0424\u043e\u0440\u043c\u044b{b['table']}"
+    return '\u041e\u0431\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a\u0438\u0421\u043e\u0431\u044b\u0442\u0438\u0439\u042d\u043b\u0435\u043c\u0435\u043d\u0442\u043e\u0432\u0428\u0430\u043f\u043a\u0438\u0424\u043e\u0440\u043c\u044b'
+
+
+# Вставить заготовку в модуль (список строк): в конец своей области, нет области — создать её на месте
+# по порядку областей, нет областей вообще — в конец модуля. Отделяется одной пустой строкой.
+def add_stub_to_module(lines, stub, b):
+    outline = get_module_code_outline(lines)
+    if not outline['regions']:
+        while lines and not lines[-1].strip():
+            lines.pop()
+        if lines:
+            lines.append('')
+        lines.extend(stub)
+        return
+    name = get_handler_region_name(b, outline['regions'])
+    target = None
+    for r in outline['regions']:
+        if r['name'].lower() == name.lower() and (target is None or r['start'] < target['start']):
+            target = r
+    if target is not None:
+        # перед #КонецОбласти, сняв пустые строки над ним
+        k = target['end'] - 1
+        while k - 1 > target['start'] - 1 and not lines[k - 1].strip():
+            k -= 1
+            del lines[k]
+        lines[k:k] = [''] + stub + ['']
+        return
+    block = [f'#\u041e\u0431\u043b\u0430\u0441\u0442\u044c {name}', ''] + stub + ['', '#\u041a\u043e\u043d\u0435\u0446\u041e\u0431\u043b\u0430\u0441\u0442\u0438']
+    rank = get_region_rank(name)
+    top = sorted([r for r in outline['regions'] if r['depth'] == 0], key=lambda r: r['start'])
+    after = before = None
+    for r in top:
+        rr = get_region_rank(r['name'])
+        if rr < 0:
+            continue
+        if rr <= rank:
+            after = r
+        elif before is None:
+            before = r
+    if after is not None:
+        lines[after['end']:after['end']] = [''] + block
+        return
+    if before is not None:
+        lines[before['start'] - 1:before['start'] - 1] = block + ['']
+        return
+    while lines and not lines[-1].strip():
+        lines.pop()
+    lines.extend([''] + block)
+
+
+# Дописать в модуль формы процедуры для привязок, которых в нём нет. Модуль — <каталог Form.xml>/Form/Module.bsl;
+# нет модуля — создаётся из шаблона, но только в раскладке выгрузки (Form.xml в каталоге Ext).
+# Кодировка и переводы строк существующего модуля сохраняются; новый — UTF-8 с BOM, CRLF, как у form-add.
+# Возвращает строки отчёта: что добавлено, что уже было, с диапазонами строк по итоговому тексту.
+def update_form_module(form_xml_path, shown_form_path):
+    if not _handler_bindings:
+        return []
+    xml_dir = os.path.dirname(form_xml_path)
+    path = os.path.join(xml_dir, 'Form', 'Module.bsl')
+    # путь для вывода — в том же виде, что путь к Form.xml в выводе навыка
+    sep = '\\' if ('\\' in shown_form_path and '/' not in shown_form_path) else '/'
+    shown = re.sub(r'[^\\/]+$', '', shown_form_path) + f'Form{sep}Module.bsl'
+    created = False
+    if os.path.exists(path):
+        with open(path, 'rb') as f:
+            raw = f.read()
+        bom = raw.startswith(b'\xef\xbb\xbf')
+        # строго: модуль не в UTF-8 перезапись испортила бы — такой не трогаем
+        try:
+            text = raw.decode('utf-8')
+        except UnicodeDecodeError:
+            return [f'[WARN] Form module is not UTF-8: {shown} — handler stubs not created']
+        if bom:
+            text = text[1:]
+        eol = '\r\n' if ('\r\n' in text or '\n' not in text) else '\n'
+        norm = text.replace('\r\n', '\n')
+        # сколько переводов строк в конце — столько и запишем: модуль не должен меняться вне вставок
+        tail = len(norm) - len(norm.rstrip('\n'))
+        src = norm.rstrip('\n').split('\n')
+        if not text.strip():
+            src = get_form_module_template()
+    elif os.path.basename(xml_dir).lower() == 'ext':
+        created, bom, eol, tail = True, True, '\r\n', 0
+        src = get_form_module_template()
+    else:
+        return [f'[WARN] Form module not found: {shown} \u2014 handler stubs not created']
+    lines = list(src)
+    status = {}
+    changed = False
+    for b in _handler_bindings:
+        key = b['handler'].lower()
+        outline = get_module_code_outline(lines)
+        if any(p['name'].lower() == key for p in outline['procs']):
+            status[key] = 'exists'
+            continue
+        stub = get_handler_stub(b)
+        if stub is None:
+            status[key] = f"not added: no signature known for event '{b['eventName']}' of {b['xmlTag']}"
+            continue
+        add_stub_to_module(lines, stub, b)
+        status[key] = 'added'
+        changed = True
+    if changed or created:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        out = eol.join(lines) + eol * tail
+        with open(path, 'wb') as f:
+            f.write((('\ufeff' if bom else '') + out).encode('utf-8'))
+    outline = get_module_code_outline(lines)
+    # \u0432 \u043f\u043e\u0440\u044f\u0434\u043a\u0435 \u0441\u0442\u0440\u043e\u043a \u043c\u043e\u0434\u0443\u043b\u044f; \u043d\u0435 \u0434\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u043d\u044b\u0435 \u2014 \u0432 \u043a\u043e\u043d\u0446\u0435
+    rows = []
+    for b in _handler_bindings:
+        key = b['handler'].lower()
+        st = status[key]
+        p = next((x for x in outline['procs'] if x['name'].lower() == key), None)
+        if st == 'added':
+            rows.append((p['start'], len(rows), f"  + {b['handler']} \u2014 added, lines {p['start']}-{p['end']}"))
+        elif st == 'exists':
+            rows.append((p['start'], len(rows), f"  = {b['handler']} \u2014 exists, lines {p['start']}-{p['end']}"))
+        else:
+            rows.append((sys.maxsize, len(rows), f"  ? {b['handler']} \u2014 {st}"))
+    report = [f'Handlers ({shown}, module created):' if created else f'Handlers ({shown}):']
+    report += [r[2] for r in sorted(rows)]
+    return report
+
+
+def emit_events(lines, el, element_name, indent, xml_tag, source=''):
+    pairs = get_event_pairs(el, element_name, xml_tag)
     if not pairs:
         return
-
-    # Validate event names
-    if type_key and type_key in KNOWN_EVENTS:
-        allowed = KNOWN_EVENTS[type_key]
-        for ev_name, _ in pairs:
-            if allowed and str(ev_name) not in allowed:
-                print(f"[WARN] Unknown event '{ev_name}' for {type_key} '{element_name}'. Known: {', '.join(allowed)}")
+    test_event_pairs(pairs, xml_tag, element_name, source)
+    table = element_name if xml_tag == 'Table' else _handler_table['name']
+    for ev_name, handler, _ in pairs:
+        register_handler(handler, 'element', xml_tag, ev_name, table)
 
     lines.append(f"{indent}<Events>")
-    for ev_name, handler in pairs:
-        lines.append(f'{indent}\t<Event name="{ev_name}">{handler}</Event>')
+    for ev_name, handler, call_type in pairs:
+        ct_attr = f' callType="{call_type}"' if call_type else ''
+        lines.append(f'{indent}\t<Event name="{ev_name}"{ct_attr}>{handler}</Event>')
     lines.append(f"{indent}</Events>")
 
 
@@ -2959,7 +3537,7 @@ def emit_companion(lines, tag, name, indent, content=None):
         if content.get('tooltip'):
             emit_mltext(lines, inner, 'ToolTip', content['tooltip'])
         # События компаньона (ExtendedTooltip = LabelDecoration: напр. URLProcessing у hyperlink-подсказки)
-        emit_events(lines, content, name, inner, 'label')
+        emit_events(lines, content, name, inner, 'ExtendedTooltip')
     else:
         emit_companion_title(lines, content, inner)
     lines.append(f'{indent}</{tag}>')
@@ -3708,6 +4286,8 @@ GENERIC_SCALARS = [
     ('AllowInputEmptyMultipleValues', 'allowInputEmptyMultipleValues', 'bool'),
     ('BehaviorOnHorizontalCompression', 'behaviorOnHorizontalCompression', 'value'),
 ]
+# Простые скаляры (pass-through) известны валидатору ключей — компилятор их выводит
+GENERIC_SCALAR_KEYS = {k for _, k, _ in GENERIC_SCALARS}
 
 
 def emit_generic_scalars(lines, el, indent):
@@ -3938,6 +4518,69 @@ def resolve_type_str(type_str):
     if resolved:
         return resolved
     return type_str
+# Разбор примитивного типа DSL: Number / String / Date / DateTime / Time — с синонимами
+# (decimal, numeric, Число, Строка, Дата …), в любом регистре, с пробелами в скобках.
+# Тело общее у всех навыков-компиляторов (семья в check-inline-drift); умолчание для голого типа
+# зависит от места (хранимый реквизит — 10,0 и 10, СКД — без ограничения) и приходит аргументами.
+# Возврат: None — не примитив (ссылки, Boolean, …); {'error'} — база примитива узнана, а
+# параметры нет (вызывающий сообщает ошибку своим способом); иначе описание квалификаторов.
+def parse_primitive_type(type_str, def_digits, def_fraction, def_length):
+    m = re.match(r'^\s*([^\s(]+)\s*(\(.*)?$', type_str or '')
+    if not m:
+        return None
+    rest = m.group(2) or ''
+    kind = {
+        'number': 'Number', 'decimal': 'Number', 'numeric': 'Number', 'число': 'Number',
+        'string': 'String', 'строка': 'String',
+        'date': 'Date', 'дата': 'Date', 'datetime': 'DateTime', 'датавремя': 'DateTime',
+        'time': 'Time', 'время': 'Time',
+    }.get(m.group(1).lower())
+    if not kind:
+        return None
+    bad = {'error': (f"Invalid type '{type_str}'. Expected Number, Number(D), Number(D,F), Number(D,F,nonneg), "
+                     "String, String(N), String(N,fixed), Date, DateTime, Time")}
+    parts = []
+    if rest:
+        m2 = re.match(r'^\((.*)\)\s*$', rest)
+        if not m2:
+            return bad
+        parts = [p.strip().lower() for p in m2.group(1).split(',')]
+    if kind == 'Number':
+        sign = 'Any'
+        if parts and (parts[-1] == 'nonneg' or parts[-1] == 'any'):
+            if parts[-1] == 'nonneg':
+                sign = 'Nonnegative'
+            parts = parts[:-1]
+        if len(parts) > 2:
+            return bad
+        for p in parts:
+            if not re.match(r'^[0-9]{1,9}$', p):
+                return bad
+        d = int(parts[0]) if len(parts) >= 1 else def_digits
+        f = int(parts[1]) if len(parts) >= 2 else (0 if len(parts) == 1 else def_fraction)
+        # Дробная часть у числа без ограничения (0,F) платформа молча обнуляет — это ошибка ввода
+        if d > 38 or f > d:
+            return bad
+        return {'kind': 'Number', 'digits': d, 'fraction': f, 'sign': sign}
+    if kind == 'String':
+        allowed = 'Variable'
+        if len(parts) == 2:
+            if parts[1] == 'fixed' or parts[1] == 'fix':
+                allowed = 'Fixed'
+            elif parts[1] != 'variable':
+                return bad
+        if len(parts) > 2 or (len(parts) >= 1 and not re.match(r'^[0-9]{1,9}$', parts[0])):
+            return bad
+        length = int(parts[0]) if len(parts) >= 1 else def_length
+        # Фиксированную длину у неограниченной строки платформа молча снимает — это ошибка ввода
+        if allowed == 'Fixed' and length == 0:
+            return bad
+        return {'kind': 'String', 'length': length, 'allowed': allowed}
+    if parts:
+        return bad
+    return {'kind': 'Date', 'fractions': kind}
+
+
 def emit_single_type(lines, type_str, indent):
     type_str = resolve_type_str(type_str)
     # TypeId — тип, заданный глобальным стабильным GUID (<v8:TypeId>, не <v8:Type>). Платформа так
@@ -3948,45 +4591,34 @@ def emit_single_type(lines, type_str, indent):
         lines.append(f'{indent}<v8:TypeId>{m.group(1)}</v8:TypeId>')
         return
     # boolean
-    if type_str == 'boolean':
+    if type_str.lower() == 'boolean':
         lines.append(f'{indent}<v8:Type>xs:boolean</v8:Type>')
         return
 
-    # string or string(N) or string(N,fixed) (AllowedLength: Variable дефолт / Fixed)
-    m = re.match(r'^string(\((\d+)(\s*,\s*(fixed|variable))?\))?$', type_str, re.IGNORECASE)
-    if m:
-        length = m.group(2) if m.group(2) else '0'
-        al = 'Fixed' if (m.group(4) and m.group(4).lower() == 'fixed') else 'Variable'
-        lines.append(f'{indent}<v8:Type>xs:string</v8:Type>')
-        lines.append(f'{indent}<v8:StringQualifiers>')
-        lines.append(f'{indent}\t<v8:Length>{length}</v8:Length>')
-        lines.append(f'{indent}\t<v8:AllowedLength>{al}</v8:AllowedLength>')
-        lines.append(f'{indent}</v8:StringQualifiers>')
-        return
-
-    # decimal(D,F) or decimal(D,F,nonneg)
-    m = re.match(r'^decimal\((\d+),(\d+)(,nonneg)?\)$', type_str)
-    if m:
-        digits = m.group(1)
-        fraction = m.group(2)
-        sign = 'Nonnegative' if m.group(3) else 'Any'
-        lines.append(f'{indent}<v8:Type>xs:decimal</v8:Type>')
-        lines.append(f'{indent}<v8:NumberQualifiers>')
-        lines.append(f'{indent}\t<v8:Digits>{digits}</v8:Digits>')
-        lines.append(f'{indent}\t<v8:FractionDigits>{fraction}</v8:FractionDigits>')
-        lines.append(f'{indent}\t<v8:AllowedSign>{sign}</v8:AllowedSign>')
-        lines.append(f'{indent}</v8:NumberQualifiers>')
-        return
-
-    # date / dateTime / time
-    m = re.match(r'^(date|dateTime|time)$', type_str)
-    if m:
-        fractions_map = {'date': 'Date', 'dateTime': 'DateTime', 'time': 'Time'}
-        fractions = fractions_map[type_str]
-        lines.append(f'{indent}<v8:Type>xs:dateTime</v8:Type>')
-        lines.append(f'{indent}<v8:DateQualifiers>')
-        lines.append(f'{indent}\t<v8:DateFractions>{fractions}</v8:DateFractions>')
-        lines.append(f'{indent}</v8:DateQualifiers>')
+    # Примитивы: string / decimal / date / dateTime / time. Голое число реквизита формы — 10,0,
+    # голая строка — неограниченная.
+    prim = parse_primitive_type(type_str, 10, 0, 0)
+    if prim:
+        if prim.get('error'):
+            raise ValueError(prim['error'])
+        if prim['kind'] == 'String':
+            lines.append(f'{indent}<v8:Type>xs:string</v8:Type>')
+            lines.append(f'{indent}<v8:StringQualifiers>')
+            lines.append(f'{indent}\t<v8:Length>{prim["length"]}</v8:Length>')
+            lines.append(f'{indent}\t<v8:AllowedLength>{prim["allowed"]}</v8:AllowedLength>')
+            lines.append(f'{indent}</v8:StringQualifiers>')
+        elif prim['kind'] == 'Number':
+            lines.append(f'{indent}<v8:Type>xs:decimal</v8:Type>')
+            lines.append(f'{indent}<v8:NumberQualifiers>')
+            lines.append(f'{indent}\t<v8:Digits>{prim["digits"]}</v8:Digits>')
+            lines.append(f'{indent}\t<v8:FractionDigits>{prim["fraction"]}</v8:FractionDigits>')
+            lines.append(f'{indent}\t<v8:AllowedSign>{prim["sign"]}</v8:AllowedSign>')
+            lines.append(f'{indent}</v8:NumberQualifiers>')
+        else:
+            lines.append(f'{indent}<v8:Type>xs:dateTime</v8:Type>')
+            lines.append(f'{indent}<v8:DateQualifiers>')
+            lines.append(f'{indent}\t<v8:DateFractions>{prim["fractions"]}</v8:DateFractions>')
+            lines.append(f'{indent}</v8:DateQualifiers>')
         return
 
     # V8 types
@@ -4078,10 +4710,7 @@ def emit_type(lines, type_str, indent, tag="Type", tag_attrs=""):
 
 # --- Element emitters ---
 
-def emit_element(lines, el, indent, in_cmd_bar=False):
-    # Companion-панели (объект/массив-значение) → commandBar/contextMenu, до тип-синонимов.
-    normalize_panel_synonyms(el)
-
+def normalize_element_type_synonyms(el):
     # Silent synonyms: model often writes XML name or Russian (ПолеПереключателя/RadioButtonField → radio).
     # commandBar/autoCommandBar/КоманднаяПанель → тип-элемент ТОЛЬКО при строковом значении (имя).
     for src, dst in ELEMENT_TYPE_SYNONYMS.items():
@@ -4089,6 +4718,941 @@ def emit_element(lines, el, indent, in_cmd_bar=False):
             if src in STR_ONLY_TYPE_SYNONYMS and not isinstance(el[src], str):
                 continue
             el[dst] = el.pop(src)
+
+
+# --- Перечисления свойств формы (генерируется) ---
+# Значения свойств-перечислений элементов формы и корня (ключ «Тип.Свойство» или общий «Свойство»).
+# Источник — XSD xcf-logform 2.10–2.21, сверено с корпусом БП/ERP 8.3.24 (17036 форм, расхождений нет)
+# и загрузкой в 8.3.24. Перегенерировать: python debug/form-dsl-revision/gen_enum_table.py
+valid_enum_values = {
+    "ActionPurpose": ["Usual", "Create", "Finish"],
+    "AppearanceInCard": ["Auto", "Extended"],
+    "AppearanceMode": ["Auto", "CommandBar", "UsualGroup"],
+    "AutoAddIncomplete": ["true", "false", "auto"],
+    "AutoCapitalizationOnTextInput": ["Auto", "None", "Words", "Sentences", "AllCharacters"],
+    "AutoChoiceIncomplete": ["true", "false", "auto"],
+    "AutoCorrectionOnTextInput": ["Auto", "Use", "DontUse"],
+    "AutoMarkIncomplete": ["true", "false", "auto"],
+    "AutoSaveDataInSettings": ["DontUse", "Use"],
+    "AutoShowClearButtonMode": ["Auto", "Always", "FilledOnly"],
+    "AutoShowOpenButtonMode": ["Auto", "Always", "FilledOnly"],
+    "AutoShowState": ["Auto", "DontShow", "Show", "ShowOnComposition"],
+    "AutoTime": ["DontUse", "Last", "First", "CurrentOrLast", "CurrentOrFirst"],
+    "AutoWidthInTable": ["Auto", "ByData", "None", "ByDataAndTitle"],
+    "AutofillHint": ["DontUse", "FullName", "GivenName", "FamilyName", "MiddleName", "NamePrefix", "NameSuffix", "Street", "City", "Region", "Country", "PostalCode", "UserName", "Password", "NewPassword", "OneTimeCode", "Email", "PhoneNumber", "CreditCardNumber"],
+    "BackPictureEffect": ["Auto", "None", "Semitransparency", "SemitransparencyAndBlur"],
+    "BackgroundShowMode": ["Auto", "DontShow", "ShowAndIncreaseSize", "ShowAndDontIncreaseSize"],
+    "Behavior": ["Usual", "Collapsible", "PopUp", "Auto"],
+    "BehaviorOnHorizontalCompression": ["Auto", "HideItemsByImportance", "MoveItemsByImportance"],
+    "ButtonImportance": ["Main", "Normal", "Supplementary"],
+    "CardBehaviorOnVerticalCompression": ["Auto", "MoveItemsToSwipeablePages", "HideItems"],
+    "CardPictureAndTitleAlign": ["Auto", "LeftHorizontallySidesVertically", "CenterHorizontallySidesVertically", "CenterHorizontallyCenterVertically"],
+    "CardRepresentationType": ["Usual", "Group"],
+    "CellActionsButtonViewMode": ["Auto", "DontShow", "ShowOnHover"],
+    "CellHyperlinkDisplayVariant": ["Auto", "Always", "OnRowHover"],
+    "CellHyperlinkRepresentation": ["Auto", "Show", "DontShow"],
+    "CellHyperlinksRepresentation": ["Auto", "AutoForSingle", "ForAll", "DontShow"],
+    "CellMark": ["None", "ShapeUnderTextOval", "IconCircle"],
+    "CheckBoxType": ["Auto", "CheckBox", "Tumbler", "Switcher"],
+    "ChildItemsTitleLocation": ["Auto", "Left", "LeftIfPossible", "Top"],
+    "ChildItemsWidth": ["Auto", "Equal", "LeftWide", "LeftWidest", "LeftNarrow", "LeftNarrowest"],
+    "ChildrenAlign": ["Auto", "None", "ItemsLeftTitlesLeft", "ItemsRightTitlesLeft", "ItemsLeftTitlesRight", "ItemsRightTitlesRight", "TitlesLeftDataLeft", "TitlesLeftDataRight", "TitlesRightDataLeft", "TitlesRightDataRight", "TitlesLeftDataAuto"],
+    "ChoiceButton": ["true", "false", "auto"],
+    "ChoiceButtonRepresentation": ["Auto", "ShowInDropList", "ShowInDropListAndInInputField", "ShowInInputField"],
+    "InputField.ChoiceFoldersAndItems": ["Items", "Folders", "FoldersAndItems", "Auto"],
+    "Table.ChoiceFoldersAndItems": ["Items", "Folders", "FoldersAndItems"],
+    "ChoiceHistoryOnInput": ["Auto", "DontUse"],
+    "ChoiceListButton": ["true", "false", "auto"],
+    "ClearButton": ["true", "false", "auto"],
+    "CollapseItemsByImportanceVariant": ["Auto", "Use", "DontUse"],
+    "CommandBarLocation": ["None", "Auto", "Top", "Bottom"],
+    "ComplexSettingsViewMode": ["Show", "DontShow"],
+    "ControlRepresentation": ["TitleHyperlink", "Picture", "Button", "ButtonInParentElement"],
+    "ConversationsRepresentation": ["Auto", "Show", "DontShow"],
+    "CreateButton": ["true", "false", "auto"],
+    "Command.CurrentRowUse": ["Use", "DontUse", "Auto"],
+    "Pages.CurrentRowUse": ["Use", "DontUse", "Auto"],
+    "Table.CurrentRowUse": ["Auto", "Choice", "SelectionPresentation", "SelectionPresentationAndChoice"],
+    "UsualGroup.CurrentRowUse": ["Use", "DontUse", "Auto"],
+    "DisplayImportance": ["Auto", "VeryHigh", "High", "Usual", "Low", "VeryLow"],
+    "DrawingSelectionShowMode": ["Show", "DontShow", "Auto"],
+    "DropListButton": ["true", "false", "auto"],
+    "EditMode": ["Directly", "Enter", "EnterOnInput", "Auto"],
+    "EditTextUpdate": ["Auto", "DontUse", "OnValueChange", "Always"],
+    "EnterKeyBehavior": ["ControlNavigation", "DefaultButton"],
+    "EqualColumnsWidth": ["true", "false", "auto"],
+    "EqualItemsWidth": ["true", "false", "auto"],
+    "ExtendedEdit": ["true", "false", "auto"],
+    "FileDragMode": ["AsFile", "AsFileRef"],
+    "FillCheck": ["DontCheck", "ShowError"],
+    "FixInCard": ["true", "false", "auto"],
+    "FixingInTable": ["None", "Left", "Right"],
+    "FooterHorizontalAlign": ["Left", "Center", "Right", "Auto"],
+    "ColumnGroup.Group": ["Horizontal", "Vertical", "InCell"],
+    "Form.Group": ["Horizontal", "Vertical", "HorizontalIfPossible", "AlwaysHorizontal", "Auto", "AutoScreenTypeSensitive"],
+    "Page.Group": ["Horizontal", "Vertical", "HorizontalIfPossible", "AlwaysHorizontal", "Auto", "AutoScreenTypeSensitive"],
+    "UsualGroup.Group": ["Horizontal", "Vertical", "HorizontalIfPossible", "AlwaysHorizontal", "Auto", "AutoScreenTypeSensitive"],
+    "GroupHorizontalAlign": ["Left", "Center", "Right", "Auto"],
+    "GroupVerticalAlign": ["Top", "Center", "Bottom", "Auto"],
+    "HeaderHorizontalAlign": ["Left", "Center", "Right", "Auto"],
+    "InputField.HeightControlVariant": ["Auto", "UseHeightInFormRows", "UseContentHeight"],
+    "Table.HeightControlVariant": ["Auto", "UseHeightInFormRows", "UseHeightInTableRows", "UseContentHeight"],
+    "HierarchyPanelLocation": ["Auto", "None"],
+    "HorizontalAlign": ["Left", "Center", "Right", "Auto"],
+    "HorizontalLinesBWA": ["true", "false", "auto"],
+    "HorizontalLocation": ["Left", "Center", "Right", "Auto"],
+    "Table.HorizontalScrollBar": ["DontUse", "UseAlways", "AutoUse"],
+    "HorizontalSpacing": ["Auto", "None", "Half", "Single", "OneAndHalf", "Double"],
+    "AutoCommandBar.HorizontalStretch": ["true", "false", "auto"],
+    "ButtonGroup.HorizontalStretch": ["true", "false", "auto"],
+    "CheckBoxField.HorizontalStretch": ["true", "false", "auto"],
+    "ColumnGroup.HorizontalStretch": ["true", "false", "auto"],
+    "CommandBar.HorizontalStretch": ["true", "false", "auto"],
+    "ContextMenu.HorizontalStretch": ["true", "false", "auto"],
+    "ExtendedTooltip.HorizontalStretch": ["true", "false", "auto"],
+    "InputField.HorizontalStretch": ["true", "false", "auto"],
+    "LabelDecoration.HorizontalStretch": ["true", "false", "auto"],
+    "LabelField.HorizontalStretch": ["true", "false", "auto"],
+    "Page.HorizontalStretch": ["true", "false", "auto"],
+    "Pages.HorizontalStretch": ["true", "false", "auto"],
+    "PictureDecoration.HorizontalStretch": ["true", "false", "auto"],
+    "Popup.HorizontalStretch": ["true", "false", "auto"],
+    "RadioButtonField.HorizontalStretch": ["true", "false", "auto"],
+    "SearchControlAddition.HorizontalStretch": ["true", "false", "auto"],
+    "SearchStringAddition.HorizontalStretch": ["true", "false", "auto"],
+    "UsualGroup.HorizontalStretch": ["true", "false", "auto"],
+    "ViewStatusAddition.HorizontalStretch": ["true", "false", "auto"],
+    "Importance": ["Main", "Normal", "Supplementary"],
+    "IncompleteChoiceMode": ["OnEnterPressed", "OnActivate"],
+    "InitialListView": ["Beginning", "End", "Auto"],
+    "InitialRowActivation": ["Auto", "Activate", "NoActivate"],
+    "InitialTreeView": ["NoExpand", "ExpandTopLevel", "ExpandAllLevels"],
+    "IntervalsSelectionMode": ["Auto", "Multiple", "Single", "None"],
+    "KeyType": ["Auto", "FieldValue", "RowKey", "RowNumber"],
+    "LocationInCommandBar": ["Auto", "InAdditionalSubmenu", "InCommandBar", "InCommandBarAndInAdditionalSubmenu"],
+    "MarkNegatives": ["true", "false", "auto"],
+    "MarkRequiredComplete": ["true", "false", "auto"],
+    "MarkingAppearance": ["DontShow", "TopLeft", "BottomRight", "BothSides"],
+    "MobileDeviceTableType": ["Auto", "List", "Cards"],
+    "MultiLine": ["true", "false", "auto"],
+    "MultipleValuePictureShape": ["Auto", "Rect", "Circle", "Square"],
+    "MultipleValuePictureSize": ["Auto", "Small", "Medium", "Large"],
+    "MultipleValuesHyperlink": ["true", "false", "auto"],
+    "OnMainServerUnavalableBehavior": ["Auto", "MakeDisable", "DontChangeBehavior"],
+    "OnScreenKeyboardReturnKeyText": ["Auto", "Return", "Go", "Join", "Next", "Search", "Send", "Done", "Continue"],
+    "OnlyInAllActions": ["true", "false", "auto"],
+    "OpenButton": ["true", "false", "auto"],
+    "Orientation": ["Horizontal", "Vertical", "HorizontalIfPossible"],
+    "Output": ["Auto", "Enable", "Disable"],
+    "PagesRepresentation": ["None", "TabsOnTop", "TabsOnBottom", "TabsOnLeftHorizontal", "TabsOnRightHorizontal", "Swipe", "Auto"],
+    "PasswordMode": ["true", "false", "auto"],
+    "PictureLocation": ["Auto", "Left", "Right", "Top", "Bottom"],
+    "PictureSize": ["RealSize", "Stretch", "Proportionally", "Tile", "AutoSize", "RealSizeIgnoreScale", "AutoSizeIgnoreScale", "ByFontSize"],
+    "PlacementArea": ["mainCmdsLeft", "autoCmds", "userCmds", "mainCmdsRight"],
+    "PointerType": ["Special", "Regular"],
+    "QuickChoice": ["true", "false", "auto"],
+    "RadioButtonType": ["Auto", "RadioButtons", "Tumbler"],
+    "RefreshRequest": ["None", "PullFromTop", "PullFromBottom", "PullFromTopOrBottom"],
+    "ReportFormType": ["Main", "Settings", "Variant"],
+    "ReportResultViewMode": ["Auto", "Default", "Compact"],
+    "Button.Representation": ["Text", "Picture", "PictureAndText", "Auto"],
+    "ButtonGroup.Representation": ["Auto", "Usual", "Compact"],
+    "Command.Representation": ["Text", "Picture", "TextPicture", "Auto"],
+    "Popup.Representation": ["Text", "Picture", "PictureAndText", "Auto"],
+    "ProgressBarField.Representation": ["Smooth", "Broken", "BrokenTilt"],
+    "Table.Representation": ["List", "HierarchicalList", "Tree"],
+    "UsualGroup.Representation": ["Auto", "None", "StrongSeparation", "WeakSeparation", "NormalSeparation", "GroupBox", "Line", "Margin"],
+    "RepresentationInContextMenu": ["None", "AdditionalInContextMenu", "OnlyInContextMenu", "Auto"],
+    "RowActionsShowType": ["Auto", "DontShow", "ShowOnHover", "ShowAlways"],
+    "RowInputMode": ["EndOfList", "EndOfWindow", "AfterCurrentRow", "BeforeCurrentRow"],
+    "RowSelectionMode": ["Auto", "Cell", "Row"],
+    "SaveColors": ["Auto", "ForUser", "ByKeyForUser", "DontUse"],
+    "SaveDataInSettings": ["DontUse", "UseList"],
+    "ScaleVariant": ["Auto", "Normal", "Compact", "NormalIfPossible"],
+    "ScalingMode": ["Auto", "Normal", "Compact"],
+    "Page.ScrollOnCompress": ["true", "false", "auto"],
+    "UsualGroup.ScrollOnCompress": ["true", "false", "auto"],
+    "SearchControlLocation": ["Auto", "None", "CommandBar"],
+    "SearchOnInput": ["Use", "DontUse", "Auto"],
+    "SearchStringLocation": ["Auto", "None", "CommandBar", "Top", "Bottom", "FormCaption", "PullFromTop"],
+    "SelectedRowsUse": ["Use", "DontUse", "Auto"],
+    "CalendarField.SelectionMode": ["Single", "Multiple", "Interval"],
+    "Table.SelectionMode": ["SingleRow", "MultiRow"],
+    "SelectionShowMode": ["WhenActive", "Always", "DontShow", "WhenMultipleCellsSelected", "WhenMultipleCellsSelectedWhenActive"],
+    "Shape": ["Auto", "Usual", "Oval"],
+    "ShapeRepresentation": ["Auto", "Always", "WhenActive", "None"],
+    "ShowCheckBoxesInDropList": ["true", "false", "auto"],
+    "ShowCommandBar": ["true", "false", "auto"],
+    "ShowHorizontalLinesFlag": ["true", "false", "auto"],
+    "ColumnGroup.ShowTitle": ["true", "false", "auto"],
+    "Form.ShowTitle": ["true", "false", "auto"],
+    "Page.ShowTitle": ["true", "false", "auto"],
+    "UsualGroup.ShowTitle": ["true", "false", "auto"],
+    "ShowTitleInCard": ["true", "false", "auto"],
+    "ShowVerticalLinesFlag": ["true", "false", "auto"],
+    "SkipOnInput": ["true", "false", "auto"],
+    "SpecialTextInputMode": ["Auto", "None", "DigitsAndPunctuation", "URL", "Email", "PhoneNumber", "Digits"],
+    "SpellCheckingOnTextInput": ["Auto", "Use", "DontUse"],
+    "SpinButton": ["true", "false", "auto"],
+    "SpreadsheetDocumentMultipleSelectionPanelViewMode": ["Auto", "DontShow", "ShowOnMultipleSelection", "ShowAlways"],
+    "TableLocation": ["Auto", "Left", "Right", "None"],
+    "TextSize": ["Enlarged", "Normal", "Reduced"],
+    "ThroughAlign": ["Use", "DontUse", "Auto"],
+    "TimeChoiceMode": ["Auto", "DontChoose", "CustomTime", "Interval1Minute", "Interval5Minutes", "Interval10Minutes", "Interval15Minutes", "Interval15And20Minutes", "Interval20Minutes", "Interval30Minutes", "Interval60Minutes"],
+    "TitleLocation": ["None", "Auto", "Left", "Top", "Right", "Bottom"],
+    "ToolTipRepresentation": ["Auto", "None", "Balloon", "Button", "ShowAuto", "ShowTop", "ShowLeft", "ShowBottom", "ShowRight"],
+    "TumblerRepresentation": ["Text", "Picture", "Auto"],
+    "Button.Type": ["CommandBarButton", "UsualButton", "Hyperlink", "CommandBarHyperlink"],
+    "UpdateOnDataChange": ["Auto", "DontUpdate"],
+    "UseAlternationRowColorBWA": ["true", "false", "auto"],
+    "UseCopy": ["true", "false", "auto"],
+    "UseForFoldersAndItems": ["Items", "Folders", "FoldersAndItems"],
+    "UsePostingMode": ["Regular", "RealTime", "Ask", "Auto"],
+    "ValuesSelectionMode": ["Auto", "Multiple", "Single", "None"],
+    "VerticalAlign": ["Top", "Center", "Bottom", "Auto"],
+    "VerticalLinesBWA": ["true", "false", "auto"],
+    "VerticalScroll": ["auto", "use", "useIfNecessary", "useWithoutStretch"],
+    "Table.VerticalScrollBar": ["DontUse", "UseAlways", "AutoUse"],
+    "VerticalSpacing": ["Auto", "None", "Half", "Single", "OneAndHalf", "Double"],
+    "AutoCommandBar.VerticalStretch": ["true", "false", "auto"],
+    "ButtonGroup.VerticalStretch": ["true", "false", "auto"],
+    "ColumnGroup.VerticalStretch": ["true", "false", "auto"],
+    "CommandBar.VerticalStretch": ["true", "false", "auto"],
+    "ContextMenu.VerticalStretch": ["true", "false", "auto"],
+    "ExtendedTooltip.VerticalStretch": ["true", "false", "auto"],
+    "InputField.VerticalStretch": ["true", "false", "auto"],
+    "LabelDecoration.VerticalStretch": ["true", "false", "auto"],
+    "LabelField.VerticalStretch": ["true", "false", "auto"],
+    "Page.VerticalStretch": ["true", "false", "auto"],
+    "Pages.VerticalStretch": ["true", "false", "auto"],
+    "PictureDecoration.VerticalStretch": ["true", "false", "auto"],
+    "Popup.VerticalStretch": ["true", "false", "auto"],
+    "UsualGroup.VerticalStretch": ["true", "false", "auto"],
+    "ViewMode": ["All", "QuickAccess"],
+    "ViewModeApplicationOnSetReportResult": ["Auto", "Apply", "DontApply"],
+    "ViewScalingMode": ["Auto", "Normal", "Large"],
+    "ViewStatusLocation": ["Auto", "None", "Top", "Bottom"],
+    "WarningOnEditRepresentation": ["Show", "DontShow", "Auto"],
+    "WidthInCard": ["Auto", "Full", "Half"],
+    "WindowOpeningMode": ["Auto", "DontBlock", "LockOwner", "LockWholeInterface", "Independent", "LockOwnerWindow"],
+}
+# Старые имена значений, которые платформа принимает и переводит в современные (замер выгрузки 8.3.24)
+enum_value_aliases = {
+    "TitlesLeftDataLeft": "ItemsLeftTitlesLeft",
+    "TitlesLeftDataRight": "ItemsRightTitlesLeft",
+    "TitlesRightDataLeft": "ItemsLeftTitlesRight",
+    "TitlesRightDataRight": "ItemsRightTitlesRight",
+    "GroupBox": "StrongSeparation",
+    "Margin": "NormalSeparation",
+    "Square": "Rect",
+}
+# Умолчания: значение, которое платформа у этого типа не пишет (выброшено при загрузке-выгрузке 8.3.24
+# и ни разу не встречается в корпусе) — тег с ним не пишется
+enum_default_values = {
+    "Attribute.FillCheck": "DontCheck",
+    "AutoCommandBar.GroupHorizontalAlign": "Auto",
+    "AutoCommandBar.GroupVerticalAlign": "Auto",
+    "AutoCommandBar.HorizontalAlign": "Left",
+    "AutoCommandBar.HorizontalStretch": "auto",
+    "AutoCommandBar.ToolTipRepresentation": "Auto",
+    "AutoCommandBar.VerticalStretch": "auto",
+    "Button.GroupHorizontalAlign": "Auto",
+    "Button.GroupVerticalAlign": "Auto",
+    "Button.LocationInCommandBar": "Auto",
+    "Button.OnMainServerUnavalableBehavior": "Auto",
+    "Button.PictureLocation": "Auto",
+    "Button.PlacementArea": "userCmds",
+    "Button.Representation": "Auto",
+    "Button.RepresentationInContextMenu": "Auto",
+    "Button.Shape": "Auto",
+    "Button.ShapeRepresentation": "Auto",
+    "Button.SkipOnInput": "auto",
+    "Button.ToolTipRepresentation": "Auto",
+    "ButtonGroup.GroupHorizontalAlign": "Auto",
+    "ButtonGroup.GroupVerticalAlign": "Auto",
+    "ButtonGroup.HorizontalStretch": "auto",
+    "ButtonGroup.PlacementArea": "userCmds",
+    "ButtonGroup.Representation": "Auto",
+    "ButtonGroup.ToolTipRepresentation": "Auto",
+    "ButtonGroup.VerticalStretch": "auto",
+    "CalendarField.EditMode": "Enter",
+    "CalendarField.FixingInTable": "None",
+    "CalendarField.FooterHorizontalAlign": "Auto",
+    "CalendarField.GroupHorizontalAlign": "Auto",
+    "CalendarField.GroupVerticalAlign": "Auto",
+    "CalendarField.HeaderHorizontalAlign": "Left",
+    "CalendarField.HorizontalAlign": "Auto",
+    "CalendarField.OnMainServerUnavalableBehavior": "Auto",
+    "CalendarField.SelectionMode": "Single",
+    "CalendarField.SkipOnInput": "auto",
+    "CalendarField.TitleLocation": "Auto",
+    "CalendarField.ToolTipRepresentation": "Auto",
+    "CalendarField.VerticalAlign": "Auto",
+    "CalendarField.WarningOnEditRepresentation": "Auto",
+    "ChartField.EditMode": "Enter",
+    "ChartField.FixingInTable": "None",
+    "ChartField.FooterHorizontalAlign": "Auto",
+    "ChartField.GroupHorizontalAlign": "Auto",
+    "ChartField.GroupVerticalAlign": "Auto",
+    "ChartField.HeaderHorizontalAlign": "Left",
+    "ChartField.HorizontalAlign": "Auto",
+    "ChartField.OnMainServerUnavalableBehavior": "Auto",
+    "ChartField.SkipOnInput": "auto",
+    "ChartField.TitleLocation": "Auto",
+    "ChartField.ToolTipRepresentation": "Auto",
+    "ChartField.VerticalAlign": "Auto",
+    "ChartField.WarningOnEditRepresentation": "Auto",
+    "CheckBoxField.EditMode": "Enter",
+    "CheckBoxField.EqualItemsWidth": "auto",
+    "CheckBoxField.FixingInTable": "None",
+    "CheckBoxField.FooterHorizontalAlign": "Auto",
+    "CheckBoxField.GroupHorizontalAlign": "Auto",
+    "CheckBoxField.GroupVerticalAlign": "Auto",
+    "CheckBoxField.HeaderHorizontalAlign": "Left",
+    "CheckBoxField.HorizontalAlign": "Auto",
+    "CheckBoxField.OnMainServerUnavalableBehavior": "Auto",
+    "CheckBoxField.SkipOnInput": "auto",
+    "CheckBoxField.TitleLocation": "Auto",
+    "CheckBoxField.ToolTipRepresentation": "Auto",
+    "CheckBoxField.VerticalAlign": "Auto",
+    "CheckBoxField.WarningOnEditRepresentation": "Auto",
+    "Column.FillCheck": "DontCheck",
+    "ColumnGroup.FixingInTable": "None",
+    "ColumnGroup.Group": "Vertical",
+    "ColumnGroup.GroupHorizontalAlign": "Auto",
+    "ColumnGroup.GroupVerticalAlign": "Auto",
+    "ColumnGroup.HeaderHorizontalAlign": "Auto",
+    "ColumnGroup.HorizontalStretch": "auto",
+    "ColumnGroup.ToolTipRepresentation": "Auto",
+    "ColumnGroup.VerticalStretch": "auto",
+    "Command.CurrentRowUse": "Auto",
+    "Command.Representation": "Auto",
+    "CommandBar.GroupHorizontalAlign": "Auto",
+    "CommandBar.GroupVerticalAlign": "Auto",
+    "CommandBar.HorizontalLocation": "Left",
+    "CommandBar.HorizontalStretch": "auto",
+    "CommandBar.ToolTipRepresentation": "Auto",
+    "CommandBar.VerticalStretch": "auto",
+    "ContextMenu.GroupHorizontalAlign": "Auto",
+    "ContextMenu.GroupVerticalAlign": "Auto",
+    "ContextMenu.HorizontalStretch": "auto",
+    "ContextMenu.ToolTipRepresentation": "Auto",
+    "ContextMenu.VerticalStretch": "auto",
+    "ExtendedTooltip.GroupHorizontalAlign": "Auto",
+    "ExtendedTooltip.GroupVerticalAlign": "Auto",
+    "ExtendedTooltip.HorizontalAlign": "Left",
+    "ExtendedTooltip.HorizontalStretch": "auto",
+    "ExtendedTooltip.OnMainServerUnavalableBehavior": "Auto",
+    "ExtendedTooltip.SkipOnInput": "auto",
+    "ExtendedTooltip.ToolTipRepresentation": "Auto",
+    "ExtendedTooltip.VerticalAlign": "Auto",
+    "ExtendedTooltip.VerticalStretch": "auto",
+    "Form.AutoSaveDataInSettings": "DontUse",
+    "Form.ChildItemsWidth": "Auto",
+    "Form.ChildrenAlign": "Auto",
+    "Form.CollapseItemsByImportanceVariant": "Auto",
+    "Form.CommandBarLocation": "Auto",
+    "Form.ConversationsRepresentation": "Auto",
+    "Form.EnterKeyBehavior": "ControlNavigation",
+    "Form.Group": "Vertical",
+    "Form.HorizontalAlign": "Auto",
+    "Form.HorizontalSpacing": "Auto",
+    "Form.SaveDataInSettings": "DontUse",
+    "Form.ScalingMode": "Auto",
+    "Form.VerticalAlign": "Auto",
+    "Form.VerticalScroll": "auto",
+    "Form.VerticalSpacing": "Auto",
+    "Form.WindowOpeningMode": "Independent",
+    "FormattedDocumentField.EditMode": "Enter",
+    "FormattedDocumentField.FixingInTable": "None",
+    "FormattedDocumentField.FooterHorizontalAlign": "Auto",
+    "FormattedDocumentField.GroupHorizontalAlign": "Auto",
+    "FormattedDocumentField.GroupVerticalAlign": "Auto",
+    "FormattedDocumentField.HeaderHorizontalAlign": "Left",
+    "FormattedDocumentField.HorizontalAlign": "Auto",
+    "FormattedDocumentField.OnMainServerUnavalableBehavior": "Auto",
+    "FormattedDocumentField.Output": "Auto",
+    "FormattedDocumentField.SkipOnInput": "auto",
+    "FormattedDocumentField.TitleLocation": "Auto",
+    "FormattedDocumentField.ToolTipRepresentation": "Auto",
+    "FormattedDocumentField.VerticalAlign": "Auto",
+    "FormattedDocumentField.WarningOnEditRepresentation": "Auto",
+    "GraphicalSchemaField.EditMode": "Enter",
+    "GraphicalSchemaField.FixingInTable": "None",
+    "GraphicalSchemaField.FooterHorizontalAlign": "Auto",
+    "GraphicalSchemaField.GroupHorizontalAlign": "Auto",
+    "GraphicalSchemaField.GroupVerticalAlign": "Auto",
+    "GraphicalSchemaField.HeaderHorizontalAlign": "Left",
+    "GraphicalSchemaField.HorizontalAlign": "Auto",
+    "GraphicalSchemaField.OnMainServerUnavalableBehavior": "Auto",
+    "GraphicalSchemaField.Output": "Auto",
+    "GraphicalSchemaField.SkipOnInput": "auto",
+    "GraphicalSchemaField.TitleLocation": "Auto",
+    "GraphicalSchemaField.ToolTipRepresentation": "Auto",
+    "GraphicalSchemaField.VerticalAlign": "Auto",
+    "GraphicalSchemaField.WarningOnEditRepresentation": "Auto",
+    "HTMLDocumentField.EditMode": "Enter",
+    "HTMLDocumentField.FixingInTable": "None",
+    "HTMLDocumentField.FooterHorizontalAlign": "Auto",
+    "HTMLDocumentField.GroupHorizontalAlign": "Auto",
+    "HTMLDocumentField.GroupVerticalAlign": "Auto",
+    "HTMLDocumentField.HeaderHorizontalAlign": "Left",
+    "HTMLDocumentField.HorizontalAlign": "Auto",
+    "HTMLDocumentField.OnMainServerUnavalableBehavior": "Auto",
+    "HTMLDocumentField.Output": "Auto",
+    "HTMLDocumentField.SkipOnInput": "auto",
+    "HTMLDocumentField.TitleLocation": "Auto",
+    "HTMLDocumentField.ToolTipRepresentation": "Auto",
+    "HTMLDocumentField.VerticalAlign": "Auto",
+    "HTMLDocumentField.WarningOnEditRepresentation": "Auto",
+    "InputField.AutoCapitalizationOnTextInput": "Auto",
+    "InputField.AutoChoiceIncomplete": "auto",
+    "InputField.AutoCorrectionOnTextInput": "Auto",
+    "InputField.AutoMarkIncomplete": "auto",
+    "InputField.AutoShowClearButtonMode": "Auto",
+    "InputField.AutoShowOpenButtonMode": "Auto",
+    "InputField.AutofillHint": "DontUse",
+    "InputField.ChoiceButton": "auto",
+    "InputField.ChoiceButtonRepresentation": "Auto",
+    "InputField.ChoiceFoldersAndItems": "Auto",
+    "InputField.ChoiceHistoryOnInput": "Auto",
+    "InputField.ChoiceListButton": "auto",
+    "InputField.ClearButton": "auto",
+    "InputField.CreateButton": "auto",
+    "InputField.DropListButton": "auto",
+    "InputField.EditMode": "Enter",
+    "InputField.EditTextUpdate": "Auto",
+    "InputField.ExtendedEdit": "auto",
+    "InputField.FixingInTable": "None",
+    "InputField.FooterHorizontalAlign": "Auto",
+    "InputField.GroupHorizontalAlign": "Auto",
+    "InputField.GroupVerticalAlign": "Auto",
+    "InputField.HeaderHorizontalAlign": "Left",
+    "InputField.HeightControlVariant": "Auto",
+    "InputField.HorizontalAlign": "Auto",
+    "InputField.HorizontalStretch": "auto",
+    "InputField.IncompleteChoiceMode": "OnEnterPressed",
+    "InputField.MarkNegatives": "auto",
+    "InputField.MultiLine": "auto",
+    "InputField.MultipleValuePictureShape": "Auto",
+    "InputField.MultipleValuePictureSize": "Auto",
+    "InputField.MultipleValuesHyperlink": "auto",
+    "InputField.OnMainServerUnavalableBehavior": "Auto",
+    "InputField.OnScreenKeyboardReturnKeyText": "Auto",
+    "InputField.OpenButton": "auto",
+    "InputField.PasswordMode": "auto",
+    "InputField.QuickChoice": "auto",
+    "InputField.ShowCheckBoxesInDropList": "auto",
+    "InputField.SkipOnInput": "auto",
+    "InputField.SpecialTextInputMode": "Auto",
+    "InputField.SpellCheckingOnTextInput": "Auto",
+    "InputField.SpinButton": "auto",
+    "InputField.TitleLocation": "Auto",
+    "InputField.ToolTipRepresentation": "Auto",
+    "InputField.VerticalAlign": "Auto",
+    "InputField.VerticalStretch": "auto",
+    "InputField.WarningOnEditRepresentation": "Auto",
+    "LabelDecoration.GroupHorizontalAlign": "Auto",
+    "LabelDecoration.GroupVerticalAlign": "Auto",
+    "LabelDecoration.HorizontalAlign": "Left",
+    "LabelDecoration.HorizontalStretch": "auto",
+    "LabelDecoration.OnMainServerUnavalableBehavior": "Auto",
+    "LabelDecoration.SkipOnInput": "auto",
+    "LabelDecoration.ToolTipRepresentation": "Auto",
+    "LabelDecoration.VerticalAlign": "Auto",
+    "LabelDecoration.VerticalStretch": "auto",
+    "LabelField.EditMode": "Enter",
+    "LabelField.FixingInTable": "None",
+    "LabelField.FooterHorizontalAlign": "Auto",
+    "LabelField.GroupHorizontalAlign": "Auto",
+    "LabelField.GroupVerticalAlign": "Auto",
+    "LabelField.HeaderHorizontalAlign": "Left",
+    "LabelField.HorizontalAlign": "Auto",
+    "LabelField.HorizontalStretch": "auto",
+    "LabelField.MarkNegatives": "auto",
+    "LabelField.OnMainServerUnavalableBehavior": "Auto",
+    "LabelField.PasswordMode": "auto",
+    "LabelField.SkipOnInput": "auto",
+    "LabelField.TitleLocation": "Auto",
+    "LabelField.ToolTipRepresentation": "Auto",
+    "LabelField.VerticalAlign": "Auto",
+    "LabelField.VerticalStretch": "auto",
+    "LabelField.WarningOnEditRepresentation": "Auto",
+    "Page.ChildItemsWidth": "Auto",
+    "Page.ChildrenAlign": "Auto",
+    "Page.Group": "Vertical",
+    "Page.GroupHorizontalAlign": "Auto",
+    "Page.GroupVerticalAlign": "Auto",
+    "Page.HorizontalAlign": "Auto",
+    "Page.HorizontalSpacing": "Auto",
+    "Page.HorizontalStretch": "auto",
+    "Page.ToolTipRepresentation": "Auto",
+    "Page.VerticalAlign": "Auto",
+    "Page.VerticalSpacing": "Auto",
+    "Page.VerticalStretch": "auto",
+    "Pages.CurrentRowUse": "Auto",
+    "Pages.GroupHorizontalAlign": "Auto",
+    "Pages.GroupVerticalAlign": "Auto",
+    "Pages.HorizontalStretch": "auto",
+    "Pages.PagesRepresentation": "Auto",
+    "Pages.ToolTipRepresentation": "Auto",
+    "Pages.VerticalStretch": "auto",
+    "PeriodField.EditMode": "Enter",
+    "PeriodField.FixingInTable": "None",
+    "PeriodField.FooterHorizontalAlign": "Auto",
+    "PeriodField.GroupHorizontalAlign": "Auto",
+    "PeriodField.GroupVerticalAlign": "Auto",
+    "PeriodField.HeaderHorizontalAlign": "Left",
+    "PeriodField.HorizontalAlign": "Auto",
+    "PeriodField.OnMainServerUnavalableBehavior": "Auto",
+    "PeriodField.SkipOnInput": "auto",
+    "PeriodField.TitleLocation": "Auto",
+    "PeriodField.ToolTipRepresentation": "Auto",
+    "PeriodField.VerticalAlign": "Auto",
+    "PeriodField.WarningOnEditRepresentation": "Auto",
+    "PictureDecoration.FileDragMode": "AsFileRef",
+    "PictureDecoration.GroupHorizontalAlign": "Auto",
+    "PictureDecoration.GroupVerticalAlign": "Auto",
+    "PictureDecoration.HorizontalStretch": "auto",
+    "PictureDecoration.OnMainServerUnavalableBehavior": "Auto",
+    "PictureDecoration.PictureSize": "RealSize",
+    "PictureDecoration.SkipOnInput": "auto",
+    "PictureDecoration.ToolTipRepresentation": "Auto",
+    "PictureDecoration.VerticalStretch": "auto",
+    "PictureField.EditMode": "Enter",
+    "PictureField.FileDragMode": "AsFileRef",
+    "PictureField.FixingInTable": "None",
+    "PictureField.FooterHorizontalAlign": "Auto",
+    "PictureField.GroupHorizontalAlign": "Auto",
+    "PictureField.GroupVerticalAlign": "Auto",
+    "PictureField.HeaderHorizontalAlign": "Left",
+    "PictureField.HorizontalAlign": "Auto",
+    "PictureField.OnMainServerUnavalableBehavior": "Auto",
+    "PictureField.PictureSize": "RealSize",
+    "PictureField.SkipOnInput": "auto",
+    "PictureField.TitleLocation": "Auto",
+    "PictureField.ToolTipRepresentation": "Auto",
+    "PictureField.VerticalAlign": "Auto",
+    "PictureField.WarningOnEditRepresentation": "Auto",
+    "PlannerField.EditMode": "Enter",
+    "PlannerField.FixingInTable": "None",
+    "PlannerField.FooterHorizontalAlign": "Auto",
+    "PlannerField.GroupHorizontalAlign": "Auto",
+    "PlannerField.GroupVerticalAlign": "Auto",
+    "PlannerField.HeaderHorizontalAlign": "Left",
+    "PlannerField.HorizontalAlign": "Auto",
+    "PlannerField.OnMainServerUnavalableBehavior": "Auto",
+    "PlannerField.SkipOnInput": "auto",
+    "PlannerField.TitleLocation": "Auto",
+    "PlannerField.ToolTipRepresentation": "Auto",
+    "PlannerField.VerticalAlign": "Auto",
+    "PlannerField.WarningOnEditRepresentation": "Auto",
+    "Popup.GroupHorizontalAlign": "Auto",
+    "Popup.GroupVerticalAlign": "Auto",
+    "Popup.HorizontalStretch": "auto",
+    "Popup.PlacementArea": "userCmds",
+    "Popup.Representation": "Auto",
+    "Popup.Shape": "Auto",
+    "Popup.ShapeRepresentation": "Auto",
+    "Popup.ToolTipRepresentation": "Auto",
+    "Popup.VerticalStretch": "auto",
+    "ProgressBarField.EditMode": "Enter",
+    "ProgressBarField.FixingInTable": "None",
+    "ProgressBarField.FooterHorizontalAlign": "Auto",
+    "ProgressBarField.GroupHorizontalAlign": "Auto",
+    "ProgressBarField.GroupVerticalAlign": "Auto",
+    "ProgressBarField.HeaderHorizontalAlign": "Left",
+    "ProgressBarField.HorizontalAlign": "Auto",
+    "ProgressBarField.OnMainServerUnavalableBehavior": "Auto",
+    "ProgressBarField.Orientation": "Horizontal",
+    "ProgressBarField.Representation": "Smooth",
+    "ProgressBarField.SkipOnInput": "auto",
+    "ProgressBarField.TitleLocation": "Auto",
+    "ProgressBarField.ToolTipRepresentation": "Auto",
+    "ProgressBarField.VerticalAlign": "Auto",
+    "ProgressBarField.WarningOnEditRepresentation": "Auto",
+    "RadioButtonField.EditMode": "Enter",
+    "RadioButtonField.EqualColumnsWidth": "auto",
+    "RadioButtonField.FixingInTable": "None",
+    "RadioButtonField.FooterHorizontalAlign": "Auto",
+    "RadioButtonField.GroupHorizontalAlign": "Auto",
+    "RadioButtonField.GroupVerticalAlign": "Auto",
+    "RadioButtonField.HeaderHorizontalAlign": "Left",
+    "RadioButtonField.HorizontalAlign": "Auto",
+    "RadioButtonField.OnMainServerUnavalableBehavior": "Auto",
+    "RadioButtonField.SkipOnInput": "auto",
+    "RadioButtonField.TitleLocation": "Auto",
+    "RadioButtonField.ToolTipRepresentation": "Auto",
+    "RadioButtonField.VerticalAlign": "Auto",
+    "RadioButtonField.WarningOnEditRepresentation": "Auto",
+    "SearchControlAddition.GroupHorizontalAlign": "Auto",
+    "SearchControlAddition.GroupVerticalAlign": "Auto",
+    "SearchControlAddition.HorizontalStretch": "auto",
+    "SearchControlAddition.PlacementArea": "userCmds",
+    "SearchControlAddition.ToolTipRepresentation": "Auto",
+    "SearchStringAddition.GroupHorizontalAlign": "Auto",
+    "SearchStringAddition.GroupVerticalAlign": "Auto",
+    "SearchStringAddition.HorizontalStretch": "auto",
+    "SearchStringAddition.PlacementArea": "userCmds",
+    "SearchStringAddition.ToolTipRepresentation": "Auto",
+    "Settings.KeyType": "Auto",
+    "SpreadSheetDocumentField.DrawingSelectionShowMode": "Auto",
+    "SpreadSheetDocumentField.EditMode": "Enter",
+    "SpreadSheetDocumentField.FixingInTable": "None",
+    "SpreadSheetDocumentField.FooterHorizontalAlign": "Auto",
+    "SpreadSheetDocumentField.GroupHorizontalAlign": "Auto",
+    "SpreadSheetDocumentField.GroupVerticalAlign": "Auto",
+    "SpreadSheetDocumentField.HeaderHorizontalAlign": "Left",
+    "SpreadSheetDocumentField.HorizontalAlign": "Auto",
+    "SpreadSheetDocumentField.OnMainServerUnavalableBehavior": "Auto",
+    "SpreadSheetDocumentField.Output": "Auto",
+    "SpreadSheetDocumentField.PointerType": "Special",
+    "SpreadSheetDocumentField.SelectionShowMode": "Always",
+    "SpreadSheetDocumentField.SkipOnInput": "auto",
+    "SpreadSheetDocumentField.TitleLocation": "Auto",
+    "SpreadSheetDocumentField.ToolTipRepresentation": "Auto",
+    "SpreadSheetDocumentField.VerticalAlign": "Auto",
+    "SpreadSheetDocumentField.ViewScalingMode": "Auto",
+    "SpreadSheetDocumentField.WarningOnEditRepresentation": "Auto",
+    "Table.AutoAddIncomplete": "auto",
+    "Table.AutoMarkIncomplete": "auto",
+    "Table.BehaviorOnHorizontalCompression": "Auto",
+    "Table.CommandBarLocation": "Auto",
+    "Table.CurrentRowUse": "Auto",
+    "Table.FileDragMode": "AsFileRef",
+    "Table.GroupHorizontalAlign": "Auto",
+    "Table.GroupVerticalAlign": "Auto",
+    "Table.HeightControlVariant": "Auto",
+    "Table.HorizontalScrollBar": "AutoUse",
+    "Table.InitialListView": "Auto",
+    "Table.InitialTreeView": "NoExpand",
+    "Table.OnMainServerUnavalableBehavior": "Auto",
+    "Table.Output": "Auto",
+    "Table.RefreshRequest": "None",
+    "Table.Representation": "HierarchicalList",
+    "Table.RowInputMode": "EndOfList",
+    "Table.RowSelectionMode": "Cell",
+    "Table.SearchControlLocation": "Auto",
+    "Table.SearchOnInput": "Auto",
+    "Table.SearchStringLocation": "Auto",
+    "Table.SelectionMode": "MultiRow",
+    "Table.SkipOnInput": "auto",
+    "Table.TitleLocation": "None",
+    "Table.ToolTipRepresentation": "Auto",
+    "Table.VerticalScrollBar": "AutoUse",
+    "Table.ViewStatusLocation": "Auto",
+    "TextDocumentField.EditMode": "Enter",
+    "TextDocumentField.FixingInTable": "None",
+    "TextDocumentField.FooterHorizontalAlign": "Auto",
+    "TextDocumentField.GroupHorizontalAlign": "Auto",
+    "TextDocumentField.GroupVerticalAlign": "Auto",
+    "TextDocumentField.HeaderHorizontalAlign": "Left",
+    "TextDocumentField.HorizontalAlign": "Auto",
+    "TextDocumentField.OnMainServerUnavalableBehavior": "Auto",
+    "TextDocumentField.Output": "Auto",
+    "TextDocumentField.SkipOnInput": "auto",
+    "TextDocumentField.TitleLocation": "Auto",
+    "TextDocumentField.ToolTipRepresentation": "Auto",
+    "TextDocumentField.VerticalAlign": "Auto",
+    "TextDocumentField.WarningOnEditRepresentation": "Auto",
+    "TrackBarField.EditMode": "Enter",
+    "TrackBarField.FixingInTable": "None",
+    "TrackBarField.FooterHorizontalAlign": "Auto",
+    "TrackBarField.GroupHorizontalAlign": "Auto",
+    "TrackBarField.GroupVerticalAlign": "Auto",
+    "TrackBarField.HeaderHorizontalAlign": "Left",
+    "TrackBarField.HorizontalAlign": "Auto",
+    "TrackBarField.MarkingAppearance": "BottomRight",
+    "TrackBarField.OnMainServerUnavalableBehavior": "Auto",
+    "TrackBarField.Orientation": "Horizontal",
+    "TrackBarField.SkipOnInput": "auto",
+    "TrackBarField.TitleLocation": "Auto",
+    "TrackBarField.ToolTipRepresentation": "Auto",
+    "TrackBarField.VerticalAlign": "Auto",
+    "TrackBarField.WarningOnEditRepresentation": "Auto",
+    "UsualGroup.Behavior": "Auto",
+    "UsualGroup.ChildItemsWidth": "Auto",
+    "UsualGroup.ChildrenAlign": "Auto",
+    "UsualGroup.ControlRepresentation": "TitleHyperlink",
+    "UsualGroup.CurrentRowUse": "Auto",
+    "UsualGroup.Group": "HorizontalIfPossible",
+    "UsualGroup.GroupHorizontalAlign": "Auto",
+    "UsualGroup.GroupVerticalAlign": "Auto",
+    "UsualGroup.HorizontalAlign": "Auto",
+    "UsualGroup.HorizontalSpacing": "Auto",
+    "UsualGroup.HorizontalStretch": "auto",
+    "UsualGroup.Representation": "WeakSeparation",
+    "UsualGroup.ThroughAlign": "Auto",
+    "UsualGroup.ToolTipRepresentation": "Auto",
+    "UsualGroup.VerticalAlign": "Auto",
+    "UsualGroup.VerticalSpacing": "Auto",
+    "UsualGroup.VerticalStretch": "auto",
+    "ViewStatusAddition.GroupHorizontalAlign": "Auto",
+    "ViewStatusAddition.GroupVerticalAlign": "Auto",
+    "ViewStatusAddition.HorizontalLocation": "Auto",
+    "ViewStatusAddition.HorizontalStretch": "auto",
+    "ViewStatusAddition.PlacementArea": "userCmds",
+    "ViewStatusAddition.ToolTipRepresentation": "Auto",
+}
+# Узлы, у которых проверяются и приводятся значения перечислений (тег узла)
+enum_scope_types = {
+    'Attribute',
+    'AutoCommandBar',
+    'Button',
+    'ButtonGroup',
+    'CalendarField',
+    'ChartField',
+    'CheckBoxField',
+    'Column',
+    'ColumnGroup',
+    'Command',
+    'CommandBar',
+    'ContextMenu',
+    'ExtendedTooltip',
+    'Form',
+    'FormattedDocumentField',
+    'GanttChartField',
+    'GraphicalSchemaField',
+    'HTMLDocumentField',
+    'InputField',
+    'LabelDecoration',
+    'LabelField',
+    'Page',
+    'Pages',
+    'PeriodField',
+    'PictureDecoration',
+    'PictureField',
+    'PlannerField',
+    'Popup',
+    'ProgressBarField',
+    'RadioButtonField',
+    'SearchControlAddition',
+    'SearchStringAddition',
+    'Settings',
+    'SpreadSheetDocumentField',
+    'Table',
+    'TextDocumentField',
+    'TrackBarField',
+    'UsualGroup',
+    'ViewStatusAddition',
+}
+# Значение из соседнего перечисления того же свойства → значение этого типа (ввод DSL; в XML — ошибка)
+enum_input_synonyms = {
+    "Command.Representation": {"PictureAndText": "TextPicture"},
+    "Button.Representation": {"TextPicture": "PictureAndText"},
+    "Popup.Representation": {"TextPicture": "PictureAndText"},
+    "Table.SelectionMode": {"Single": "SingleRow", "Multiple": "MultiRow"},
+    "CalendarField.SelectionMode": {"SingleRow": "Single", "MultiRow": "Multiple"},
+}
+# --- /Перечисления свойств формы ---
+obj_type = None
+
+
+def normalize_enum_value(prop_name, value):
+    valid = valid_enum_values.get(f"{obj_type}.{prop_name}") or valid_enum_values.get(prop_name)
+    # 1. Check alias dictionary — silent auto-correct. Словарь общий для всех свойств: у свойства со
+    # списком алиас берётся, только если его результат в списке (иначе «None» дало бы Nonperiodical везде)
+    alias_key = next((k for k in enum_value_aliases if k.lower() == value.lower()), None)
+    if alias_key is not None:
+        aliased = enum_value_aliases[alias_key]
+        if not valid or aliased in valid:
+            return aliased
+    # 2. Case-insensitive match against valid values — silent. Список вида объекта — раньше общего.
+    if valid:
+        for v in valid:
+            if v.lower() == value.lower():
+                return v
+        # 3. Known property, unknown value — error with hint
+        print(f"Invalid value '{value}' for property '{prop_name}'. Valid values: {', '.join(valid)}", file=sys.stderr)
+        sys.exit(1)
+    # 4. Unknown property — pass-through (no validation data)
+    return value
+
+# Значение из соседнего перечисления того же свойства (у кнопки PictureAndText, у команды TextPicture) →
+# значение этого типа. Только ввод DSL: в XML такое значение платформа не загружает
+def resolve_enum_input_synonym(typ, tag, value):
+    syn = enum_input_synonyms.get(f'{typ}.{tag}') or {}
+    return next((b for a, b in syn.items() if a.lower() == value.lower()), value)
+
+
+# Значения перечислений в выводе эмиттера — к каноническому виду (normalize_enum_value): простой тег
+# элемента формы известного типа или корня формы. Регистр и старые имена исправляются молча,
+# неизвестное значение — ошибка с перечнем допустимых. root_type — тип для тегов прямо под корнем
+# фрагмента (свойства формы во фрагменте form-edit). Значение-умолчание типа (enum_default_values) — тег
+# не пишется, как не пишет его платформа; keep_defaults оставляет такие теги (проба set в form-edit).
+def normalize_enum_tags(text, root_type='', keep_defaults=False):
+    global obj_type
+    crlf = '\r\n' in text
+    lines = text.replace('\r\n', '\n').split('\n')
+    stack = []
+    for i, line in enumerate(lines):
+        m = re.fullmatch(r'\t*</([A-Za-z_][\w.:-]*)>', line)
+        if m:
+            if stack and stack[-1][0] == m.group(1):
+                stack.pop()
+            continue
+        m = re.fullmatch(r'(\t*)<([A-Za-z_][\w.:-]*)(\s[^>]*)?>', line)
+        if m and not line.endswith('/>'):
+            stack.append((m.group(2), len(m.group(1)), m.group(3) or ''))
+            continue
+        if not stack:
+            continue
+        m = re.fullmatch(r'(\t*)<([A-Za-z]\w*)>([^<]+)</([A-Za-z]\w*)>', line)
+        if not m or m.group(2) != m.group(4):
+            continue
+        name, ind, attrs = stack[-1]
+        if len(m.group(1)) != ind + 1:
+            continue
+        if len(stack) == 1:
+            ptype = 'Form' if name == 'Form' else root_type
+        else:
+            ptype = name
+        if not ptype or ptype not in enum_scope_types:
+            continue
+        # Settings — только настройки динамического списка (у ValueList/Planner/Chart свои), как в form-validate
+        if ptype == 'Settings' and 'xsi:type="DynamicList"' not in attrs:
+            continue
+        obj_type = ptype
+        tag = m.group(2)
+        v = normalize_enum_value(tag, resolve_enum_input_synonym(ptype, tag, m.group(3)))
+        if not keep_defaults and enum_default_values.get(f'{ptype}.{tag}') == v:
+            lines[i] = None
+            continue
+        if v != m.group(3):
+            lines[i] = f'{m.group(1)}<{tag}>{v}</{tag}>'
+    out = '\n'.join(l for l in lines if l is not None)
+    return out.replace('\n', '\r\n') if crlf else out
+
+
+# --- Канонический порядок дочерних тегов элемента ---
+# В каком порядке платформа пишет свойства и вложенные узлы элемента формы. Построено по корпусу
+# выгрузок (БП и ERP, 8.3.24, 17036 форм): для каждого типа элемента — граф «тег A раньше тега B»,
+# противоречий нет. Эмиттер пишет теги в этом порядке — иначе первая же выгрузка из базы их переставит.
+CHILD_TAG_ORDER = {
+    "AutoCommandBar": "HorizontalAlign Autofill ChildItems",
+    "Button": "Type Visible TitleHeight UserVisible Representation DefaultButton SkipOnInput Enabled DefaultItem Width AutoMaxWidth MaxWidth Height AutoMaxHeight HorizontalStretch MaxHeight VerticalStretch GroupHorizontalAlign Check GroupVerticalAlign CommandName Parameter DataPath TextColor BackColor BorderColor Font Picture Title Shape ToolTipRepresentation RepresentationInContextMenu ShapeRepresentation PictureLocation LocationInCommandBar CommandUniqueness ExtendedTooltip",
+    "ButtonGroup": "EnableContentChange Visible Title GroupVerticalAlign ToolTip HorizontalStretch GroupHorizontalAlign ToolTipRepresentation CommandSource Representation VerticalStretch ExtendedTooltip ChildItems",
+    "CalendarField": "DataPath SkipOnInput Title TitleLocation ToolTip ToolTipRepresentation Width AutoMaxWidth Height HorizontalStretch SelectionMode ShowCurrentDate ShowMonthsPanel WidthInMonths HeightInMonths ContextMenu ExtendedTooltip Events",
+    "ChartField": "DataPath Enabled Title TitleFont Visible TitleLocation GroupHorizontalAlign Width AutoMaxWidth MaxHeight MaxWidth Height AutoMaxHeight HorizontalStretch VerticalStretch ContextMenu ExtendedTooltip Events",
+    "CheckBoxField": "DataPath Visible Enabled UserVisible DefaultItem ReadOnly SkipOnInput Title TitleTextColor TitleFont TitleLocation TitleHeight ToolTip FooterHorizontalAlign HorizontalAlign ToolTipRepresentation Shortcut GroupHorizontalAlign VerticalAlign GroupVerticalAlign WarningOnEditRepresentation WarningOnEdit EditMode AutoCellHeight CellHyperlink FixingInTable ShowInHeader FooterDataPath HeaderPicture HeaderHorizontalAlign ShowInFooter CheckBoxType EditFormat ItemHeight ItemTitleHeight ItemWidth EqualItemsWidth ThreeState ContextMenu ExtendedTooltip Events",
+    "ColumnGroup": "Visible Enabled ReadOnly UserVisible EnableContentChange Title GroupVerticalAlign TitleFont TitleTextColor ToolTip ToolTipRepresentation Width Height HorizontalStretch GroupHorizontalAlign VerticalStretch Group ShowTitle ShowInHeader HeaderDataPath HeaderHorizontalAlign HeaderFormat HeaderPicture FixingInTable ExtendedTooltip ChildItems",
+    "CommandBar": "Enabled Visible EnableContentChange Title ToolTip ToolTipRepresentation Width Height HorizontalStretch VerticalStretch GroupHorizontalAlign GroupVerticalAlign HorizontalLocation CommandSource ExtendedTooltip ChildItems",
+    "FormattedDocumentField": "DataPath DefaultItem Enabled ReadOnly SkipOnInput Title TitleLocation CommandSet Font ToolTip EditMode Width AutoMaxWidth Height AutoMaxHeight BorderColor HorizontalStretch MaxWidth ContextMenu ExtendedTooltip Events",
+    "GanttChartField": "DataPath DefaultItem TitleLocation Width Height HorizontalStretch VerticalStretch ContextMenu ExtendedTooltip Table Events",
+    "GraphicalSchemaField": "DataPath DefaultItem ReadOnly Title TitleLocation WarningOnEditRepresentation Width Height Edit ContextMenu ExtendedTooltip Events",
+    "HTMLDocumentField": "DataPath DefaultItem Enabled ReadOnly SkipOnInput Title TitleTextColor TitleFont TitleLocation ToolTipRepresentation Visible WarningOnEditRepresentation Width AutoMaxWidth MaxWidth Height AutoMaxHeight MaxHeight HorizontalStretch VerticalStretch Output BorderColor ContextMenu ExtendedTooltip Events",
+    "InputField": "DataPath Visible UserVisible DefaultItem Enabled ReadOnly SkipOnInput Title TitleBackColor TitleTextColor TitleFont TitleLocation TitleHeight ToolTip ToolTipRepresentation WarningOnEditRepresentation WarningOnEdit Shortcut HorizontalAlign VerticalAlign GroupHorizontalAlign GroupVerticalAlign EditMode CellHyperlink FixingInTable AutoCellHeight ShowInHeader HeaderHorizontalAlign HeaderPicture ShowInFooter FooterDataPath FooterText FooterTextColor FooterFont FooterHorizontalAlign FooterPicture Width AutoMaxWidth MaxWidth Height AutoMaxHeight MaxHeight HorizontalStretch AllowInputEmptyMultipleValues MultipleValuesFont MultipleValuesTextColor MultipleValuesBackColor VerticalStretch Wrap MarkNegatives PasswordMode MultiLine ExtendedEdit DropListButton ChoiceButton ChoiceButtonRepresentation ClearButton SpinButton OpenButton CreateButton Mask ListChoiceMode ExtendedEditMultipleValues AutoChoiceIncomplete Format MultipleValuePictureShape QuickChoice ChoiceFoldersAndItems EditFormat AutoMarkIncomplete ChooseType AutoShowOpenButtonMode IncompleteChoiceMode ShowCheckBoxesInDropList MultipleValueDataPath MultipleValuePictureDataPath MultipleValuePresentDataPath SpellCheckingOnTextInput TypeDomainEnabled TextEdit AvailableTypes ChoiceForm ChoiceParameterLinks ChoiceParameters EditTextUpdate MinValue ChoiceButtonPicture MaxValue ChoiceList AutoCorrectionOnTextInput AutoShowClearButtonMode ChoiceListButton ChoiceListHeight DropListWidth TextColor BackColor BorderColor Font HeightControlVariant SpecialTextInputMode InputHint ChoiceHistoryOnInput TypeLink ContextMenu ExtendedTooltip Events",
+    "LabelDecoration": "UserVisible Visible Enabled Width AutoMaxWidth MaxWidth Height AutoMaxHeight MaxHeight HorizontalStretch VerticalStretch SkipOnInput TextColor Font Shortcut Title ToolTip ToolTipRepresentation GroupHorizontalAlign GroupVerticalAlign Hyperlink HorizontalAlign VerticalAlign BackColor BorderColor Border TitleHeight ContextMenu ExtendedTooltip Events",
+    "LabelField": "DataPath Visible Enabled UserVisible DefaultItem ReadOnly SkipOnInput Title TitleTextColor TitleFont TitleLocation TitleHeight ToolTip ToolTipRepresentation HorizontalAlign VerticalAlign GroupHorizontalAlign GroupVerticalAlign WarningOnEditRepresentation WarningOnEdit EditMode FixingInTable CellHyperlink AutoCellHeight FooterText ShowInHeader HeaderHorizontalAlign FooterDataPath HeaderPicture ShowInFooter FooterHorizontalAlign Width AutoMaxWidth MaxWidth Height AutoMaxHeight MaxHeight HorizontalStretch MarkNegatives VerticalStretch Format Border BorderColor Hiperlink PasswordMode TextColor BackColor Font ContextMenu ExtendedTooltip Events",
+    "Page": "Visible Enabled ReadOnly EnableContentChange UserVisible Title GroupVerticalAlign Shortcut TitleTextColor TitleFont ToolTip ToolTipRepresentation Width Height HorizontalStretch VerticalStretch ChildrenAlign Picture Format Group ChildItemsWidth HorizontalSpacing VerticalSpacing HorizontalAlign VerticalAlign ShowTitle BackColor TitleDataPath ScrollOnCompress ExtendedTooltip ChildItems",
+    "Pages": "Enabled ReadOnly EnableContentChange UserVisible Visible Title TitleFont ToolTip ToolTipRepresentation Width Height HorizontalStretch VerticalStretch GroupHorizontalAlign GroupVerticalAlign PagesRepresentation CurrentRowUse ExtendedTooltip Events ChildItems",
+    "PeriodField": "DataPath TitleLocation ContextMenu ExtendedTooltip",
+    "PictureDecoration": "Enabled Visible Width AutoMaxWidth MaxWidth Height AutoMaxHeight MaxHeight HorizontalStretch VerticalStretch SkipOnInput TextColor Font Title ToolTip ToolTipRepresentation GroupHorizontalAlign GroupVerticalAlign Hyperlink PictureSize Zoomable ImageScale NonselectedPictureText EnableStartDrag EnableDrag Picture BorderColor Border FileDragMode ContextMenu ExtendedTooltip Events",
+    "PictureField": "DataPath TitleBackColor UserVisible Visible Enabled ReadOnly SkipOnInput Title TitleTextColor TitleLocation TitleHeight ToolTip GroupHorizontalAlign GroupVerticalAlign Shortcut ToolTipRepresentation HorizontalAlign WarningOnEditRepresentation EditMode AutoCellHeight FixingInTable CellHyperlink ShowInHeader FooterDataPath HeaderPicture FooterText HeaderHorizontalAlign ShowInFooter FooterHorizontalAlign Width AutoMaxWidth MaxWidth Height AutoMaxHeight MaxHeight HorizontalStretch VerticalStretch PictureSize Zoomable Hyperlink NonselectedPictureText EnableDrag TextColor ValuesPicture BorderColor Border Font FileDragMode ContextMenu ExtendedTooltip Events",
+    "PlannerField": "DataPath TitleLocation ContextMenu ExtendedTooltip Events",
+    "Popup": "UserVisible Visible EnableContentChange Title Shape TitleTextColor TitleFont ToolTip ToolTipRepresentation VerticalStretch Width HorizontalStretch Picture CommandSource Representation BackColor ShapeRepresentation BorderColor ExtendedTooltip ChildItems",
+    "ProgressBarField": "DataPath Title Visible ReadOnly TitleLocation ToolTip ToolTipRepresentation Width AutoMaxHeight AutoMaxWidth HorizontalStretch MaxValue ShowPercent ContextMenu ExtendedTooltip",
+    "RadioButtonField": "DataPath DefaultItem Enabled SkipOnInput UserVisible Visible ReadOnly Title TitleTextColor TitleFont TitleLocation FooterHorizontalAlign TitleHeight ToolTip ToolTipRepresentation EditMode GroupHorizontalAlign Shortcut VerticalAlign GroupVerticalAlign WarningOnEditRepresentation WarningOnEdit RadioButtonType ItemHeight ItemTitleHeight ItemWidth ColumnsCount EqualColumnsWidth ChoiceList Font TextColor ContextMenu ExtendedTooltip Events",
+    "SpreadSheetDocumentField": "DataPath Enabled ReadOnly SkipOnInput UserVisible Visible DefaultItem Title TitleLocation DrawingSelectionShowMode FooterHorizontalAlign GroupHorizontalAlign ToolTip ToolTipRepresentation CommandSet Width AutoMaxWidth MaxWidth Height AutoMaxHeight MaxHeight HorizontalStretch VerticalStretch ShowGrid ShowHeaders VerticalScrollBar HorizontalScrollBar Protection SelectionShowMode Edit Output PointerType ShowGroups EnableStartDrag EnableDrag BorderColor ShowCellNames ShowRowAndColumnNames ViewScalingMode ContextMenu ExtendedTooltip Events",
+    "Table": "Representation Visible UserVisible TitleLocation CommandBarLocation Autofill Enabled TitleHeight ReadOnly SkipOnInput DefaultItem ChangeRowSet ChangeRowOrder Width AutoMaxWidth MaxWidth Height AutoMaxHeight MaxHeight HeightInTableRows HeightControlVariant AutoMaxRowsCount MaxRowsCount ChoiceMode MultipleChoice RowInputMode SelectionMode RowSelectionMode Header FooterHeight HeaderHeight Footer HorizontalScrollBar VerticalScrollBar HorizontalLines VerticalLines UseAlternationRowColor AutoInsertNewRow AutoAddIncomplete AutoMarkIncomplete SearchOnInput InitialListView InitialTreeView HorizontalStretch Output VerticalStretch EnableStartDrag EnableDrag FileDragMode DataPath Font RowPictureDataPath RowsPicture BackColor BorderColor TextColor Title BehaviorOnHorizontalCompression GroupVerticalAlign Shortcut TitleTextColor TitleFont CommandSet ToolTip ToolTipRepresentation SearchStringLocation ViewStatusLocation SearchControlLocation GroupHorizontalAlign CurrentRowUse RefreshRequest AutoRefresh AutoRefreshPeriod Period ChoiceFoldersAndItems RestoreCurrentRow RowFilter TopLevelParent ShowRoot AllowRootChoice UpdateOnDataChange UserSettingsGroup AllowGettingCurrentRowURL ViewMode SettingsNamedItemDetailedRepresentation ContextMenu AutoCommandBar ExtendedTooltip SearchStringAddition ViewStatusAddition SearchControlAddition Events ChildItems",
+    "TextDocumentField": "DataPath DefaultItem ReadOnly Title TitleFont TitleLocation EditMode ToolTip Width AutoMaxWidth Font MaxWidth Height AutoMaxHeight ContextMenu ExtendedTooltip Events",
+    "TrackBarField": "DataPath Title TitleLocation HorizontalAlign ToolTip ToolTipRepresentation Width AutoMaxWidth HorizontalStretch MaxWidth Height AutoMaxHeight MinValue MarkingAppearance MaxValue LargeStep Step MarkingStep ContextMenu ExtendedTooltip Events",
+    "UsualGroup": "UserVisible Visible Enabled ReadOnly EnableContentChange Title TitleTextColor TitleFont ToolTip ToolTipRepresentation Shortcut Width Height HorizontalStretch VerticalStretch GroupHorizontalAlign GroupVerticalAlign Group ChildrenAlign HorizontalSpacing VerticalSpacing HorizontalAlign VerticalAlign Behavior CollapsedRepresentationTitle Collapsed ControlRepresentation Representation CurrentRowUse Format ShowLeftMargin United ChildItemsWidth ShowTitle BackColor ThroughAlign TitleDataPath ExtendedTooltip Events ChildItems",
+}
+CHILD_RANK = {t: {c: i for i, c in enumerate(v.split(" "))} for t, v in CHILD_TAG_ORDER.items()}
+
+
+def get_child_rank(parent_tag, child_tag):
+    return CHILD_RANK.get(parent_tag, {}).get(child_tag, -1)
+
+
+_TAG_OPEN_RE = re.compile(r'^(\t*)<([A-Za-z_][\w.:-]*)(?=[\s/>])')
+
+
+# Вывод эмиттера (тег на строке, вложенность — табами) — в порядок корпуса: дети каждого элемента
+# переставляются целыми блоками строк, содержимое блоков не меняется. Незнакомый тег идёт за
+# предыдущим знакомым.
+def sort_element_tag_order(text):
+    crlf = '\r\n' in text
+    lines = text.replace('\r\n', '\n').split('\n')
+    _sort_tag_blocks(lines, 0, len(lines), '')
+    out = '\n'.join(lines)
+    return out.replace('\n', '\r\n') if crlf else out
+
+
+def _tag_block_end(lines, i, ind, name):
+    line = lines[i]
+    if line.endswith('/>') and '</' not in line:
+        return i + 1
+    if line.endswith('</' + name + '>'):
+        return i + 1
+    if re.fullmatch(r'\t*<' + re.escape(name) + r'(\s[^>]*)?>', line):
+        close = ind + '</' + name + '>'
+        j = i + 1
+        while j < len(lines) and lines[j] != close:
+            j += 1
+        return j + 1
+    # многострочный текст — до строки, которая кончается закрывающим тегом
+    j = i + 1
+    while j < len(lines) and not lines[j - 1].endswith('</' + name + '>'):
+        j += 1
+    return j
+
+
+def _sort_tag_blocks(lines, lo, hi, parent):
+    ind = None
+    for i in range(lo, hi):
+        m = re.match(r'^(\t*)<[A-Za-z_]', lines[i])
+        if m:
+            ind = m.group(1)
+            break
+    if ind is None:
+        return
+    blocks = []
+    i = lo
+    while i < hi:
+        m = _TAG_OPEN_RE.match(lines[i])
+        if m and m.group(1) == ind:
+            e = _tag_block_end(lines, i, ind, m.group(2))
+            blocks.append((m.group(2), i, e))
+            i = e
+        else:
+            i += 1
+    for name, s, e in blocks:
+        if e - s > 2 and re.fullmatch(r'\t*<' + re.escape(name) + r'(\s[^>]*)?>', lines[s]):
+            _sort_tag_blocks(lines, s + 1, e - 1, name)
+    if len(blocks) < 2 or not parent:
+        return
+    ptag = parent.split(':')[-1]
+    if ptag not in CHILD_TAG_ORDER:
+        return
+    a, z = blocks[0][1], blocks[-1][2]
+    if sum(e - s for _, s, e in blocks) != z - a:
+        return   # между детьми есть посторонние строки — не трогаем
+    last = -1
+    keyed = []
+    for k, (name, s, e) in enumerate(blocks):
+        r = get_child_rank(ptag, name.split(':')[-1])
+        if r < 0:
+            r = last
+        last = r
+        keyed.append(((r + 1) * 100000 + k, k))
+    srt = sorted(keyed)
+    if [k for _, k in srt] == list(range(len(srt))):
+        return
+    seq = []
+    for _, k in srt:
+        _, s, e = blocks[k]
+        seq += lines[s:e]
+    lines[a:z] = seq
+
+
+def emit_element(lines, el, indent, in_cmd_bar=False):
+    # Companion-панели (объект/массив-значение) → commandBar/contextMenu, до тип-синонимов.
+    normalize_panel_synonyms(el)
+
+    # Синонимы типа (XML-имя, русское имя) → канонический ключ DSL
+    normalize_element_type_synonyms(el)
 
     # Синонимы ключей-свойств (русские имена 1С → канон. англ.). Case/space-insensitive.
     # Канон побеждает: если задан и русский, и англ. ключ — англ. остаётся, русский отбрасываем.
@@ -4116,7 +5680,8 @@ def emit_element(lines, el, indent, in_cmd_bar=False):
     for p_name in el.keys():
         if p_name.startswith('_'):
             continue
-        if p_name not in KNOWN_KEYS and p_name not in APPEARANCE_SPEC and p_name not in APPEARANCE_SYNONYMS:
+        if p_name not in KNOWN_KEYS and p_name not in APPEARANCE_SPEC and p_name not in APPEARANCE_SYNONYMS \
+                and p_name not in GENERIC_SCALAR_KEYS:
             print(f"WARNING: Element '{el.get(type_key, '')}': unknown key '{p_name}' -- ignored. Check SKILL.md for valid keys.", file=sys.stderr)
 
     name = get_element_name(el, type_key)
@@ -4184,7 +5749,7 @@ def emit_group(lines, el, name, eid, indent):
         'horizontal': 'Horizontal',
         'vertical': 'Vertical',
         'alwayshorizontal': 'AlwaysHorizontal',
-        'alwaysvertical': 'AlwaysVertical',
+        'alwaysvertical': 'Vertical',  # старое написание; у группы такого значения нет
         'horizontalifpossible': 'HorizontalIfPossible',
         'collapsible': 'Vertical',
     }
@@ -4221,8 +5786,17 @@ def emit_group(lines, el, name, eid, indent):
         lines.append(f'{inner}<CurrentRowUse>{el["currentRowUse"]}</CurrentRowUse>')
 
     # ShowTitle
-    if el.get('showTitle') is not None:
-        lines.append(f'{inner}<ShowTitle>{"true" if el["showTitle"] else "false"}</ShowTitle>')
+    # Обычная группа без showTitle: заголовок показан, если он задан (title или titleDataPath), иначе скрыт — служебная группа
+    # раскладки без заголовка давала бы пустую строку-заголовок (умолчание платформы — показан).
+    # У сворачиваемой/всплывающей заголовок — переключатель: умолчание платформы, пишется лишь явный false.
+    if behavior_val in ('collapsible', 'popup'):
+        if el.get('showTitle') is not None and not el['showTitle']:
+            lines.append(f'{inner}<ShowTitle>false</ShowTitle>')
+    elif el.get('showTitle') is not None:
+        if str(el['showTitle']).lower() != 'true':
+            lines.append(f'{inner}<ShowTitle>false</ShowTitle>')
+    elif not el.get('title') and not el.get('titleDataPath'):
+        lines.append(f'{inner}<ShowTitle>false</ShowTitle>')
     # Заголовок свёрнутого представления (collapsible/popup) — мультиязычный текст
     if el.get('collapsedTitle'):
         emit_mltext(lines, inner, 'CollapsedRepresentationTitle', el['collapsedTitle'])
@@ -4245,6 +5819,7 @@ def emit_group(lines, el, name, eid, indent):
 
     # Companion: ExtendedTooltip
     emit_companion(lines, 'ExtendedTooltip', f'{name}\u0420\u0430\u0441\u0448\u0438\u0440\u0435\u043d\u043d\u0430\u044f\u041f\u043e\u0434\u0441\u043a\u0430\u0437\u043a\u0430', inner, el.get('extendedTooltip'))
+    emit_events(lines, el, name, inner, 'UsualGroup')
 
     # Children
     if el.get('children') and len(el['children']) > 0:
@@ -4259,6 +5834,7 @@ def emit_group(lines, el, name, eid, indent):
 def emit_column_group(lines, el, name, eid, indent):
     lines.append(f'{indent}<ColumnGroup name="{name}" id="{eid}"{di_attr(el)}>')
     inner = f'{indent}\t'
+    warn_events_ignored(el, 'ColumnGroup', name)
 
     emit_title(lines, el, name, inner)
 
@@ -4274,8 +5850,9 @@ def emit_column_group(lines, el, name, eid, indent):
     elif group_val:
         _warn_unrecognized('columnGroup orientation', el.get('columnGroup'), ('vertical', 'horizontal', 'inCell'), name)
 
-    if el.get('showTitle') is not None:
-        lines.append(f'{inner}<ShowTitle>{"true" if el["showTitle"] else "false"}</ShowTitle>')
+    # ShowTitle=true — умолчание платформы (в корпусе только false): пишем лишь false
+    if el.get('showTitle') is not None and not el['showTitle']:
+        lines.append(f'{inner}<ShowTitle>false</ShowTitle>')
     # showInHeader эмитится общим emit_common_element_props (через emit_layout)
 
     emit_common_flags(lines, el, inner)
@@ -4309,8 +5886,7 @@ def emit_input(lines, el, name, eid, indent):
     emit_common_flags(lines, el, inner)
 
     if el.get('titleLocation'):
-        loc_map = {'none': 'None', 'left': 'Left', 'right': 'Right', 'top': 'Top', 'bottom': 'Bottom'}
-        loc = loc_map.get(str(el['titleLocation']), str(el['titleLocation']))
+        loc = map_title_loc(el['titleLocation'])
         lines.append(f'{inner}<TitleLocation>{loc}</TitleLocation>')
 
     if el.get('multiLine') is not None:
@@ -4391,7 +5967,7 @@ def emit_input(lines, el, name, eid, indent):
     emit_companion_panel(lines, 'ContextMenu', f'{name}\u041a\u043e\u043d\u0442\u0435\u043a\u0441\u0442\u043d\u043e\u0435\u041c\u0435\u043d\u044e', inner, el.get('contextMenu'))
     emit_companion(lines, 'ExtendedTooltip', f'{name}\u0420\u0430\u0441\u0448\u0438\u0440\u0435\u043d\u043d\u0430\u044f\u041f\u043e\u0434\u0441\u043a\u0430\u0437\u043a\u0430', inner, el.get('extendedTooltip'))
 
-    emit_events(lines, el, name, inner, 'input')
+    emit_events(lines, el, name, inner, 'InputField')
 
     lines.append(f'{indent}</InputField>')
 
@@ -4442,7 +6018,7 @@ def emit_check(lines, el, name, eid, indent):
     emit_companion_panel(lines, 'ContextMenu', f'{name}\u041a\u043e\u043d\u0442\u0435\u043a\u0441\u0442\u043d\u043e\u0435\u041c\u0435\u043d\u044e', inner, el.get('contextMenu'))
     emit_companion(lines, 'ExtendedTooltip', f'{name}\u0420\u0430\u0441\u0448\u0438\u0440\u0435\u043d\u043d\u0430\u044f\u041f\u043e\u0434\u0441\u043a\u0430\u0437\u043a\u0430', inner, el.get('extendedTooltip'))
 
-    emit_events(lines, el, name, inner, 'check')
+    emit_events(lines, el, name, inner, 'CheckBoxField')
 
     lines.append(f'{indent}</CheckBoxField>')
 
@@ -4480,7 +6056,7 @@ def emit_radio_button_field(lines, el, name, eid, indent):
     emit_companion_panel(lines, 'ContextMenu', f'{name}КонтекстноеМеню', inner, el.get('contextMenu'))
     emit_companion(lines, 'ExtendedTooltip', f'{name}РасширеннаяПодсказка', inner, el.get('extendedTooltip'))
 
-    emit_events(lines, el, name, inner, 'radio')
+    emit_events(lines, el, name, inner, 'RadioButtonField')
 
     lines.append(f'{indent}</RadioButtonField>')
 
@@ -4521,7 +6097,7 @@ def emit_label(lines, el, name, eid, indent):
     emit_companion_panel(lines, 'ContextMenu', f'{name}\u041a\u043e\u043d\u0442\u0435\u043a\u0441\u0442\u043d\u043e\u0435\u041c\u0435\u043d\u044e', inner, el.get('contextMenu'))
     emit_companion(lines, 'ExtendedTooltip', f'{name}\u0420\u0430\u0441\u0448\u0438\u0440\u0435\u043d\u043d\u0430\u044f\u041f\u043e\u0434\u0441\u043a\u0430\u0437\u043a\u0430', inner, el.get('extendedTooltip'))
 
-    emit_events(lines, el, name, inner, 'label')
+    emit_events(lines, el, name, inner, 'LabelDecoration')
 
     lines.append(f'{indent}</LabelDecoration>')
 
@@ -4570,7 +6146,7 @@ def emit_label_field(lines, el, name, eid, indent):
     emit_companion_panel(lines, 'ContextMenu', f'{name}\u041a\u043e\u043d\u0442\u0435\u043a\u0441\u0442\u043d\u043e\u0435\u041c\u0435\u043d\u044e', inner, el.get('contextMenu'))
     emit_companion(lines, 'ExtendedTooltip', f'{name}\u0420\u0430\u0441\u0448\u0438\u0440\u0435\u043d\u043d\u0430\u044f\u041f\u043e\u0434\u0441\u043a\u0430\u0437\u043a\u0430', inner, el.get('extendedTooltip'))
 
-    emit_events(lines, el, name, inner, 'labelField')
+    emit_events(lines, el, name, inner, 'LabelField')
 
     lines.append(f'{indent}</LabelField>')
 
@@ -4721,11 +6297,14 @@ def emit_table(lines, el, name, eid, indent):
     # Columns
     if el.get('columns') and len(el['columns']) > 0:
         lines.append(f'{inner}<ChildItems>')
+        prev_table = _handler_table['name']
+        _handler_table['name'] = name
         for col in el['columns']:
             emit_element(lines, col, f'{inner}\t')
+        _handler_table['name'] = prev_table
         lines.append(f'{inner}</ChildItems>')
 
-    emit_events(lines, el, name, inner, 'table')
+    emit_events(lines, el, name, inner, 'Table', get_table_source(el))
 
     lines.append(f'{indent}</Table>')
 
@@ -4751,7 +6330,7 @@ def emit_pages(lines, el, name, eid, indent):
     # Companion
     emit_companion(lines, 'ExtendedTooltip', f'{name}\u0420\u0430\u0441\u0448\u0438\u0440\u0435\u043d\u043d\u0430\u044f\u041f\u043e\u0434\u0441\u043a\u0430\u0437\u043a\u0430', inner, el.get('extendedTooltip'))
 
-    emit_events(lines, el, name, inner, 'pages')
+    emit_events(lines, el, name, inner, 'Pages')
 
     # Children (pages)
     if el.get('children') and len(el['children']) > 0:
@@ -4766,6 +6345,7 @@ def emit_pages(lines, el, name, eid, indent):
 def emit_page(lines, el, name, eid, indent):
     lines.append(f'{indent}<Page name="{name}" id="{eid}"{di_attr(el)}>')
     inner = f'{indent}\t'
+    warn_events_ignored(el, 'Page', name)
 
     emit_title(lines, el, name, inner, auto=True)
     emit_common_flags(lines, el, inner)
@@ -4779,7 +6359,7 @@ def emit_page(lines, el, name, eid, indent):
             'horizontal': 'Horizontal',
             'vertical': 'Vertical',
             'alwayshorizontal': 'AlwaysHorizontal',
-            'alwaysvertical': 'AlwaysVertical',
+            'alwaysvertical': 'Vertical',  # старое написание; у страницы такого значения нет
             'horizontalifpossible': 'HorizontalIfPossible',
         }
         orientation = orientation_map.get(str(el['group']).lower())
@@ -4787,8 +6367,9 @@ def emit_page(lines, el, name, eid, indent):
             lines.append(f'{inner}<Group>{orientation}</Group>')
         else:
             _warn_unrecognized('page group orientation', el['group'], ('vertical', 'horizontalIfPossible', 'alwaysHorizontal'), name)
-    if el.get('showTitle') is not None:
-        lines.append(f'{inner}<ShowTitle>{"true" if el["showTitle"] else "false"}</ShowTitle>')
+    # ShowTitle=true — умолчание платформы (в корпусе только false): пишем лишь false
+    if el.get('showTitle') is not None and not el['showTitle']:
+        lines.append(f'{inner}<ShowTitle>false</ShowTitle>')
     # Формат значения пути к данным заголовка (<Format>; парный к titleDataPath страницы)
     if el.get('format'):
         emit_mltext(lines, inner, 'Format', el['format'])
@@ -4904,7 +6485,7 @@ def emit_button(lines, el, name, eid, indent, in_cmd_bar=False):
     # Companion
     emit_companion(lines, 'ExtendedTooltip', f'{name}\u0420\u0430\u0441\u0448\u0438\u0440\u0435\u043d\u043d\u0430\u044f\u041f\u043e\u0434\u0441\u043a\u0430\u0437\u043a\u0430', inner, el.get('extendedTooltip'))
 
-    emit_events(lines, el, name, inner, 'button')
+    emit_events(lines, el, name, inner, 'Button')
 
     lines.append(f'{indent}</Button>')
 
@@ -4949,7 +6530,7 @@ def emit_picture_decoration(lines, el, name, eid, indent):
     emit_companion_panel(lines, 'ContextMenu', f'{name}\u041a\u043e\u043d\u0442\u0435\u043a\u0441\u0442\u043d\u043e\u0435\u041c\u0435\u043d\u044e', inner, el.get('contextMenu'))
     emit_companion(lines, 'ExtendedTooltip', f'{name}\u0420\u0430\u0441\u0448\u0438\u0440\u0435\u043d\u043d\u0430\u044f\u041f\u043e\u0434\u0441\u043a\u0430\u0437\u043a\u0430', inner, el.get('extendedTooltip'))
 
-    emit_events(lines, el, name, inner, 'picture')
+    emit_events(lines, el, name, inner, 'PictureDecoration')
 
     lines.append(f'{indent}</PictureDecoration>')
 
@@ -4997,7 +6578,7 @@ def emit_picture_field(lines, el, name, eid, indent):
     emit_companion_panel(lines, 'ContextMenu', f'{name}\u041a\u043e\u043d\u0442\u0435\u043a\u0441\u0442\u043d\u043e\u0435\u041c\u0435\u043d\u044e', inner, el.get('contextMenu'))
     emit_companion(lines, 'ExtendedTooltip', f'{name}\u0420\u0430\u0441\u0448\u0438\u0440\u0435\u043d\u043d\u0430\u044f\u041f\u043e\u0434\u0441\u043a\u0430\u0437\u043a\u0430', inner, el.get('extendedTooltip'))
 
-    emit_events(lines, el, name, inner, 'picField')
+    emit_events(lines, el, name, inner, 'PictureField')
 
     lines.append(f'{indent}</PictureField>')
 
@@ -5036,7 +6617,7 @@ def emit_simple_field(lines, el, name, eid, indent, xml_tag, type_key):
     emit_companion_panel(lines, 'ContextMenu', f'{name}КонтекстноеМеню', inner, el.get('contextMenu'))
     emit_companion(lines, 'ExtendedTooltip', f'{name}РасширеннаяПодсказка', inner, el.get('extendedTooltip'))
 
-    emit_events(lines, el, name, inner, type_key)
+    emit_events(lines, el, name, inner, xml_tag)
 
     lines.append(f'{indent}</{xml_tag}>')
 
@@ -5058,7 +6639,7 @@ def emit_gantt_chart(lines, el, name, eid, indent):
     # Вложенная таблица диаграммы Ганта (стандартный Table — переиспользуем emit_element)
     if el.get('ganttTable'):
         emit_element(lines, el['ganttTable'], inner)
-    emit_events(lines, el, name, inner, 'ganttChart')
+    emit_events(lines, el, name, inner, 'GanttChartField')
     lines.append(f'{indent}</GanttChartField>')
 
 
@@ -5073,8 +6654,7 @@ def emit_calendar(lines, el, name, eid, indent):
     emit_common_flags(lines, el, inner)
 
     if el.get('titleLocation'):
-        loc_map = {'none': 'None', 'left': 'Left', 'right': 'Right', 'top': 'Top', 'bottom': 'Bottom', 'auto': 'Auto'}
-        loc = loc_map.get(str(el['titleLocation']), str(el['titleLocation']))
+        loc = map_title_loc(el['titleLocation'])
         lines.append(f'{inner}<TitleLocation>{loc}</TitleLocation>')
 
     emit_layout(lines, el, inner)
@@ -5098,7 +6678,7 @@ def emit_calendar(lines, el, name, eid, indent):
     emit_companion_panel(lines, 'ContextMenu', f'{name}\u041a\u043e\u043d\u0442\u0435\u043a\u0441\u0442\u043d\u043e\u0435\u041c\u0435\u043d\u044e', inner, el.get('contextMenu'))
     emit_companion(lines, 'ExtendedTooltip', f'{name}\u0420\u0430\u0441\u0448\u0438\u0440\u0435\u043d\u043d\u0430\u044f\u041f\u043e\u0434\u0441\u043a\u0430\u0437\u043a\u0430', inner, el.get('extendedTooltip'))
 
-    emit_events(lines, el, name, inner, 'calendar')
+    emit_events(lines, el, name, inner, 'CalendarField')
 
     lines.append(f'{indent}</CalendarField>')
 
@@ -5106,6 +6686,7 @@ def emit_calendar(lines, el, name, eid, indent):
 def emit_command_bar(lines, el, name, eid, indent):
     lines.append(f'{indent}<CommandBar name="{name}" id="{eid}"{di_attr(el)}>')
     inner = f'{indent}\t'
+    warn_events_ignored(el, 'CommandBar', name)
 
     emit_title(lines, el, name, inner)
 
@@ -5137,6 +6718,7 @@ def emit_command_bar(lines, el, name, eid, indent):
 def emit_popup(lines, el, name, eid, indent):
     lines.append(f'{indent}<Popup name="{name}" id="{eid}"{di_attr(el)}>')
     inner = f'{indent}\t'
+    warn_events_ignored(el, 'Popup', name)
 
     emit_title(lines, el, name, inner, auto=True)
     emit_common_flags(lines, el, inner)
@@ -5169,6 +6751,7 @@ def emit_popup(lines, el, name, eid, indent):
 def emit_button_group(lines, el, name, eid, indent):
     lines.append(f'{indent}<ButtonGroup name="{name}" id="{eid}"{di_attr(el)}>')
     inner = f'{indent}\t'
+    warn_events_ignored(el, 'ButtonGroup', name)
 
     emit_title(lines, el, name, inner)
 
@@ -5324,7 +6907,28 @@ def is_dl_empty_value(v):
     return sv == '' or sv == '_' or sv.lower() == 'null'
 
 
+# Вид значения для ветвлений эмиттеров значений (параметры, пустые значения): примитив любого
+# написания (Число(15,2), numeric, String(10)) → decimal / string / date / dateTime / time, прочее —
+# через синонимы навыка. Квалификаторы значению не нужны и отбрасываются.
+def get_value_kind_type(type_str):
+    if not type_str:
+        return type_str
+    prim = parse_primitive_type(type_str, 0, 0, 0)
+    if prim and not prim.get('error'):
+        if prim['kind'] == 'Number':
+            return 'decimal'
+        if prim['kind'] == 'String':
+            return 'string'
+        if prim['fractions'] == 'Date':
+            return 'date'
+        if prim['fractions'] == 'Time':
+            return 'time'
+        return 'dateTime'
+    return resolve_type_str(type_str)
+
+
 def emit_dl_value(lines, type_str, val, indent, value_list_allowed=False):
+    type_str = get_value_kind_type(type_str)
     if is_dl_empty_value(val):
         # Дин-список: пустое значение платформа ВСЕГДА пишет как xsi:nil (даже при известном типе).
         if value_list_allowed:
@@ -5351,14 +6955,14 @@ def emit_dl_value(lines, type_str, val, indent, value_list_allowed=False):
     elif re.match(r'^string', t):
         lines.append(f'{indent}<dcssch:value xsi:type="xs:string">{esc_xml_text(val_str)}</dcssch:value>')
     elif re.match(r'^(CatalogRef|DocumentRef|EnumRef|ChartOfAccountsRef|ChartOfCharacteristicTypesRef|ChartOfCalculationTypesRef|BusinessProcessRef|TaskRef|ExchangePlanRef)\.', t):
-        lines.append(f'{indent}<dcssch:value xsi:type="dcscor:DesignTimeValue">{esc_xml_text(val_str)}</dcssch:value>')
+        lines.append(f'{indent}<dcssch:value xsi:type="dcscor:DesignTimeValue">{esc_xml_text(normalize_design_time_value(val_str))}</dcssch:value>')
     else:
         if re.match(r'^\d{4}-\d{2}-\d{2}T', val_str):
             lines.append(f'{indent}<dcssch:value xsi:type="xs:dateTime">{esc_xml_text(val_str)}</dcssch:value>')
         elif val_str in ('true', 'false'):
             lines.append(f'{indent}<dcssch:value xsi:type="xs:boolean">{esc_xml_text(val_str)}</dcssch:value>')
         elif re.match(r'^(ПланСчетов|Справочник|Перечисление|Документ|ПланВидовХарактеристик|ПланВидовРасчета|БизнесПроцесс|Задача|РегистрСведений|ПланОбмена)\.', val_str) or re.match(r'^(ChartOfAccounts|Catalog|Enum|Document|ChartOfCharacteristicTypes|ChartOfCalculationTypes|BusinessProcess|Task|InformationRegister|ExchangePlan)\.', val_str):
-            lines.append(f'{indent}<dcssch:value xsi:type="dcscor:DesignTimeValue">{esc_xml_text(val_str)}</dcssch:value>')
+            lines.append(f'{indent}<dcssch:value xsi:type="dcscor:DesignTimeValue">{esc_xml_text(normalize_design_time_value(val_str))}</dcssch:value>')
         else:
             lines.append(f'{indent}<dcssch:value xsi:type="xs:string">{esc_xml_text(val_str)}</dcssch:value>')
 
@@ -5409,7 +7013,7 @@ def emit_dl_input_parameters(lines, ip, indent):
                         elif isinstance(v, (int, float)):
                             lines.append(f'{indent}\t\t\t\t<dcscor:value xsi:type="xs:decimal">{v}</dcscor:value>')
                         else:
-                            lines.append(f'{indent}\t\t\t\t<dcscor:value xsi:type="dcscor:DesignTimeValue">{esc_xml_text(str(v))}</dcscor:value>')
+                            lines.append(f'{indent}\t\t\t\t<dcscor:value xsi:type="dcscor:DesignTimeValue">{esc_xml_text(normalize_design_time_value(v))}</dcscor:value>')
                     lines.append(f'{indent}\t\t\t</dcscor:item>')
                 lines.append(f'{indent}\t\t</dcscor:value>')
         elif 'choiceParameterLinks' in item:
@@ -5458,6 +7062,7 @@ def _test_empty_value(v):
 
 
 def emit_empty_value(lines, type_str, indent, tag_prefix='', value_list_allowed=False):
+    type_str = get_value_kind_type(type_str)
     if value_list_allowed:
         return
     t = type_str or ''
@@ -5534,7 +7139,7 @@ def emit_data_parameters(lines, items, indent, block_view_mode=None):
         if dp.get('use') is False:
             lines.append(f'{indent}\t\t<dcscor:use>false</dcscor:use>')
         lines.append(f'{indent}\t\t<dcscor:parameter>{esc_xml_text(str(dp.get("parameter", "")))}</dcscor:parameter>')
-        vtype = str(dp.get('valueType') or '')
+        vtype = get_value_kind_type(str(dp.get('valueType') or ''))
         val = dp.get('value')
         if isinstance(val, list):
             # Список значений параметра (valueListAllowed) — отдельный <dcscor:value> на каждое.
@@ -5542,9 +7147,10 @@ def emit_data_parameters(lines, items, indent, block_view_mode=None):
             for v in val:
                 v_str = ('true' if v else 'false') if isinstance(v, bool) else str(v)
                 if re.match(r'^[a-zA-Z]+:', avtype):
-                    lines.append(f'{indent}\t\t<dcscor:value xsi:type="{avtype}">{esc_xml_text(v_str)}</dcscor:value>')
+                    av_str = normalize_design_time_value(v_str) if avtype == 'dcscor:DesignTimeValue' else v_str
+                    lines.append(f'{indent}\t\t<dcscor:value xsi:type="{avtype}">{esc_xml_text(av_str)}</dcscor:value>')
                 elif re.match(r'^(ПланСчетов|Справочник|Перечисление|Документ|ПланВидовХарактеристик|ПланВидовРасчета|БизнесПроцесс|Задача|РегистрСведений|ПланОбмена)\.', v_str) or re.match(r'^(ChartOfAccounts|Catalog|Enum|Document|ChartOfCharacteristicTypes|ChartOfCalculationTypes|BusinessProcess|Task|InformationRegister|ExchangePlan)\.', v_str):
-                    lines.append(f'{indent}\t\t<dcscor:value xsi:type="dcscor:DesignTimeValue">{esc_xml_text(v_str)}</dcscor:value>')
+                    lines.append(f'{indent}\t\t<dcscor:value xsi:type="dcscor:DesignTimeValue">{esc_xml_text(normalize_design_time_value(v_str))}</dcscor:value>')
                 else:
                     lines.append(f'{indent}\t\t<dcscor:value xsi:type="xs:string">{esc_xml_text(v_str)}</dcscor:value>')
         elif dp.get('nilValue') is True:
@@ -5587,7 +7193,7 @@ def emit_data_parameters(lines, items, indent, block_view_mode=None):
             elif re.match(r'^string', vtype):
                 lines.append(f'{indent}\t\t<dcscor:value xsi:type="xs:string">{esc_xml_text(str(val))}</dcscor:value>')
             elif re.match(r'^(ПланСчетов|Справочник|Перечисление|Документ|ПланВидовХарактеристик|ПланВидовРасчета|БизнесПроцесс|Задача|РегистрСведений|ПланОбмена)\.', str(val)) or re.match(r'^(ChartOfAccounts|Catalog|Enum|Document|ChartOfCharacteristicTypes|ChartOfCalculationTypes|BusinessProcess|Task|InformationRegister|ExchangePlan)\.', str(val)):
-                lines.append(f'{indent}\t\t<dcscor:value xsi:type="dcscor:DesignTimeValue">{esc_xml_text(str(val))}</dcscor:value>')
+                lines.append(f'{indent}\t\t<dcscor:value xsi:type="dcscor:DesignTimeValue">{esc_xml_text(normalize_design_time_value(val))}</dcscor:value>')
             else:
                 lines.append(f'{indent}\t\t<dcscor:value xsi:type="xs:string">{esc_xml_text(str(val))}</dcscor:value>')
         if dp.get('viewMode'):
@@ -5628,7 +7234,7 @@ def emit_dl_parameter(lines, p, parsed, indent):
     if isinstance(pv, list):
         for v in pv:
             emit_dl_value(lines, parsed.get('type', ''), v, ci, False)
-    elif parsed.get('value_explicit') and pv is not None and str(pv) == '' and (str(parsed.get('type', '')) == '' or re.match(r'^string', str(parsed.get('type', '')))):
+    elif parsed.get('value_explicit') and pv is not None and str(pv) == '' and (str(parsed.get('type', '')) == '' or re.match(r'^string', get_value_kind_type(str(parsed.get('type', ''))))):
         # Явный пустой СТРОКОВЫЙ параметр (value:"" от декомпилятора) → типизированный пустой
         # <dcssch:value xsi:type="xs:string"/>, НЕ nil. Решается ФОРМОЙ value (""→typed-empty,
         # null/отсутствие→nil), независимо от valueListAllowed; декомпилятор различает ""/null.
@@ -6064,17 +7670,39 @@ def emit_commands(lines, cmds, indent):
         if cmd.get('tooltip'):
             emit_mltext(lines, inner, 'ToolTip', cmd['tooltip'])
 
-        # Доступность команды по ролям (после ToolTip, до Action)
+        # Порядок детей — как пишет платформа (XSD FormCommand, корпус без обратных случаев):
+        # Title ToolTip Use Shortcut Picture Action FunctionalOptions Representation ModifiesSavedData
+        # CurrentRowUse AssociatedTableElementId
         if cmd.get('use') is not None:
             emit_xr_flag(lines, 'Use', cmd.get('use'), inner)
 
-        if cmd.get('action'):
-            lines.append(f'{inner}<Action>{cmd["action"]}</Action>')
+        if cmd.get('shortcut'):
+            lines.append(f'{inner}<Shortcut>{cmd["shortcut"]}</Shortcut>')
+
+        emit_command_picture(lines, cmd.get('picture'), cmd.get('loadTransparent'), inner)
+
+        # Обработчик; в расширении — с видом вызова (callType), или несколько: actions [{handler, callType}]
+        if cmd.get('actions'):
+            acts = cmd['actions'] if isinstance(cmd['actions'], list) else [cmd['actions']]
+            for act in acts:
+                ct = normalize_call_type(act.get('callType'), str(cmd.get('name', '')), 'Action')
+                ct_attr = f' callType="{ct}"' if ct else ''
+                lines.append(f'{inner}<Action{ct_attr}>{act.get("handler") if act.get("handler") is not None else ""}</Action>')
+                register_handler(str(act.get('handler')) if act.get('handler') is not None else '', 'command')
+        elif cmd.get('action'):
+            ct = normalize_call_type(cmd.get('callType'), str(cmd.get('name', '')), 'Action')
+            ct_attr = f' callType="{ct}"' if ct else ''
+            lines.append(f'{inner}<Action{ct_attr}>{cmd["action"]}</Action>')
+            register_handler(str(cmd['action']), 'command')
+
+        emit_functional_options(lines, cmd.get('functionalOptions'), inner)
+
+        # Значение — к перечислению команды (Text/Picture/TextPicture/Auto) приводит normalize_enum_tags
+        if cmd.get('representation'):
+            lines.append(f'{inner}<Representation>{cmd["representation"]}</Representation>')
 
         if cmd.get('modifiesSavedData') is True:
             lines.append(f'{inner}<ModifiesSavedData>true</ModifiesSavedData>')
-
-        emit_functional_options(lines, cmd.get('functionalOptions'), inner)
 
         if cmd.get('currentRowUse'):
             lines.append(f'{inner}<CurrentRowUse>{cmd["currentRowUse"]}</CurrentRowUse>')
@@ -6086,14 +7714,6 @@ def emit_commands(lines, cmds, indent):
                      or _cmd_norm.get('используемаятаблица'))
         if cmd_table:
             lines.append(f'{inner}<AssociatedTableElementId xsi:type="xs:string">{esc_xml_text(str(cmd_table))}</AssociatedTableElementId>')
-
-        if cmd.get('shortcut'):
-            lines.append(f'{inner}<Shortcut>{cmd["shortcut"]}</Shortcut>')
-
-        emit_command_picture(lines, cmd.get('picture'), cmd.get('loadTransparent'), inner)
-
-        if cmd.get('representation'):
-            lines.append(f'{inner}<Representation>{cmd["representation"]}</Representation>')
 
         lines.append(f'{indent}\t</Command>')
     lines.append(f'{indent}</Commands>')
@@ -6120,8 +7740,9 @@ def emit_command_interface(lines, ci, indent):
         return
     inner = f'{indent}\t'
     panels = [
-        ('CommandBar', ('commandBar', 'команднаяПанель', 'КоманднаяПанель')),
+        # Порядок панелей — как в выгрузке: панель навигации раньше командной (607 из 607 форм корпуса)
         ('NavigationPanel', ('navigationPanel', 'панельНавигации', 'ПанельНавигации')),
+        ('CommandBar', ('commandBar', 'команднаяПанель', 'КоманднаяПанель')),
     ]
     present = []
     for tag, syns in panels:
@@ -6207,6 +7828,19 @@ PROP_MAP = {
 }
 
 
+# Порядок дочерних тегов корня формы — по корпусу (БП и ERP, 8.3.24, 17036 форм, противоречий нет).
+# Свойства формы пишутся в этом порядке, а не в порядке ввода, — иначе выгрузка из базы их переставит.
+FORM_ROOT_TAG_ORDER = 'Title Width Height WindowOpeningMode EnterKeyBehavior AutoSaveDataInSettings SaveDataInSettings SaveWindowSettings SettingsStorage AutoTitle AutoURL Group HorizontalAlign ChildItemsWidth VerticalAlign HorizontalSpacing VerticalSpacing AutoFillCheck Customizable Enabled ChildrenAlign CommandBarLocation VerticalScroll ScalingMode ConversationsRepresentation MobileDeviceCommandBarContent CommandSet AutoTime UsePostingMode RepostOnWrite ReportResult DetailsData ReportFormType ShowTitle ShowCloseButton GroupList CollapseItemsByImportanceVariant UseForFoldersAndItems VariantAppearance AutoShowState CustomSettingsFolder ReportResultViewMode ViewModeApplicationOnSetReportResult Scale AutoCommandBar Events ChildItems Attributes Commands Parameters CommandInterface BaseForm'
+
+
+# Ранг тега корня формы; незнакомый тег — после всех знакомых свойств (перед AutoCommandBar).
+def get_form_root_rank(tag):
+    order = FORM_ROOT_TAG_ORDER.split(' ')
+    if tag not in order:
+        return order.index('AutoCommandBar') - 0.5
+    return order.index(tag)
+
+
 def emit_properties(lines, props, indent):
     if not props:
         return
@@ -6225,7 +7859,7 @@ def emit_properties(lines, props, indent):
             val = 'true' if p_value else 'false'
         else:
             val = str(p_value)
-        lines.append(f'{indent}<{xml_name}>{val}</{xml_name}>')
+        lines.append(f'{indent}<{xml_name}>{esc_xml_text(val)}</{xml_name}>')
 
 
 
@@ -6259,6 +7893,42 @@ def format_rank(ver):
     """"2.20" → 220, "2.9" → 209. Строковое сравнение неверно ("2.9" > "2.17")."""
     m = re.match(r'^(\d+)\.(\d+)$', ver or '')
     return int(m.group(1)) * 100 + int(m.group(2)) if m else 0
+
+
+def detect_compatibility_mode(d):
+    """Режим совместимости конфигурации (None — не определён). От него зависит xmlns:dcssch в шапке:
+    при режиме < 8.3.19 платформа не объявляет его никогда и не выгружает поля/параметры динамического
+    списка (в базе они хранятся). Подъём останавливается на корне внешней обработки/отчёта: её форму
+    режим базы не меняет, а Configuration.xml выше по дереву (src/cf рядом с src/epf) — чужой.
+    <CompatibilityMode> лежит ~11-12 КБ от начала — читаем 64 КБ."""
+    while d:
+        ext_path = d + ".xml"
+        if os.path.isfile(ext_path):
+            with open(ext_path, "r", encoding="utf-8-sig") as f:
+                ext_head = f.read(2000)
+            if re.search(r'<(ExternalDataProcessor|ExternalReport)[ >]', ext_head):
+                return None
+        cfg_path = os.path.join(d, "Configuration.xml")
+        if os.path.isfile(cfg_path):
+            with open(cfg_path, "r", encoding="utf-8-sig") as f:
+                head = f.read(65536)
+            m = re.search(r'<CompatibilityMode>([^<]+)</CompatibilityMode>', head)
+            # Расширение: своего CompatibilityMode нет, форму ведёт его собственный режим. В основной
+            # конфигурации этот тег — режим для её расширений, не её собственный: только для расширения.
+            if not m and '<ConfigurationExtensionPurpose>' in head:
+                m = re.search(r'<ConfigurationExtensionCompatibilityMode>([^<]+)</ConfigurationExtensionCompatibilityMode>', head)
+            return m.group(1).strip() if m else None
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return None
+
+
+def compat_mode_rank(mode):
+    """"Version8_3_27" → 80327, "Version8_5_1" → 80501."""
+    m = re.match(r'^Version(\d+)_(\d+)(?:_(\d+))?$', mode or '')   # и двухчастный Version8_1
+    return int(m.group(1)) * 10000 + int(m.group(2)) * 100 + int(m.group(3) or 0) if m else 0
 
 
 def _normalize_elements(defn):
@@ -6350,6 +8020,92 @@ def _normalize_elements(defn):
     return defn
 
 
+def object_child_order():
+    """Порядок групп в <ChildObjects> объекта по виду. Это xs:sequence <Вид>ChildObjects из MDClasses XSD,
+    сверенный выгрузкой платформы: выгрузка сама ставит группы в этот порядок, так что вставка не на место
+    даёт дифф при следующей выгрузке. Единого порядка нет — у документа Form стоит до TabularSection."""
+    return {
+        "Catalog":                    ["Attribute", "TabularSection", "Form", "Template", "Command"],
+        "Document":                   ["Attribute", "Form", "TabularSection", "Template", "Command"],
+        "ExchangePlan":               ["Attribute", "TabularSection", "Form", "Template", "Command"],
+        "ChartOfCharacteristicTypes": ["Attribute", "TabularSection", "Form", "Template", "Command"],
+        "ChartOfAccounts":            ["Attribute", "TabularSection", "AccountingFlag", "ExtDimensionAccountingFlag", "Form", "Template", "Command"],
+        "ChartOfCalculationTypes":    ["Attribute", "TabularSection", "Form", "Template", "Command"],
+        "BusinessProcess":            ["Attribute", "TabularSection", "Form", "Template", "Command"],
+        "Task":                       ["Attribute", "TabularSection", "Form", "Template", "AddressingAttribute", "Command"],
+        "DataProcessor":              ["Attribute", "TabularSection", "Form", "Template", "Command"],
+        "Report":                     ["Attribute", "TabularSection", "Form", "Template", "Command"],
+        "ExternalDataProcessor":      ["Attribute", "TabularSection", "Form", "Template"],
+        "ExternalReport":             ["Attribute", "TabularSection", "Form", "Template"],
+        "Enum":                       ["EnumValue", "Form", "Template", "Command"],
+        "InformationRegister":        ["Resource", "Attribute", "Dimension", "Form", "Template", "Command"],
+        "AccumulationRegister":       ["Resource", "Attribute", "Dimension", "Form", "Template", "Command"],
+        "AccountingRegister":         ["Dimension", "Resource", "Attribute", "Form", "Template", "Command"],
+        "CalculationRegister":        ["Resource", "Attribute", "Dimension", "Recalculation", "Form", "Template", "Command"],
+        "DocumentJournal":            ["Column", "Form", "Template", "Command"],
+        "Table":                      ["Field", "Form", "Command", "Template"],
+        "ExternalDataSource":         ["Table", "Cube", "Function"],
+        "Cube":                       ["DimensionTable", "Dimension", "Resource", "Form", "Command", "Template"],
+        "DimensionTable":             ["Field", "Form", "Command", "Template"],
+        "FilterCriterion":            ["Form", "Command"],
+        "SettingsStorage":            ["Form", "Template"],
+        "TabularSection":             ["Attribute"],
+    }
+
+
+def insert_into_own_child_objects_by_canon(text, fragment, tag, obj_type):
+    """Вставка ОДНОГО узла <tag> (fragment — с отступом прямого ребёнка) в СОБСТВЕННЫЙ <ChildObjects>
+    объекта на место по канону вида — как find_child_anchor, только по тексту: за последним своим тегом,
+    иначе перед первой группой, идущей по канону позже, иначе перед закрывающим тегом. Свой контейнер
+    открывается первым (свойства объекта <ChildObjects> не содержат) и закрывается последним: вложенные
+    <ChildObjects> табличных частей лежат внутри него, поиск «первого </ChildObjects>» уводил вставку в ТЧ.
+    Прямые дети — по глубине вложенности, не по отступу. Строку с одним тегом дополняем целой строкой,
+    перевод строки — из самого файла. None — своего <ChildObjects> у объекта нет."""
+    eol = "\r\n" if "\r\n" in text else "\n"
+    frag = fragment.rstrip().lstrip("\r\n").replace("\r\n", "\n").replace("\n", eol)
+    m_open = re.search(r'<ChildObjects\b[^>]*?(/?)>', text)
+    if not m_open:
+        return None
+
+    def line_indent(p):
+        # Отступ строки до позиции p; None — перед p на строке есть что-то кроме пробелов
+        ls = text.rfind("\n", 0, p) + 1
+        return text[ls:p] if not text[ls:p].strip() else None
+
+    if m_open.group(1):
+        # Контейнер самозакрытый — детей у него нет, раскрыть с единственным узлом
+        ind = line_indent(m_open.start()) or ""
+        return text[:m_open.start()] + "<ChildObjects>" + eol + frag + eol + ind + "</ChildObjects>" + text[m_open.end():]
+    m_close = None
+    for m_close in re.finditer(r'</ChildObjects\s*>', text):
+        pass
+    if m_close is None or m_close.start() < m_open.end():
+        return None
+    starts = []
+    depth = 0
+    for m in re.finditer(r'<(/?)([\w:.-]+)[^>]*?(/?)>', text[m_open.end():m_close.start()]):
+        if m.group(1):
+            depth -= 1
+            continue
+        if depth == 0:
+            starts.append((m_open.end() + m.start(), m.group(2).rsplit(':', 1)[-1]))
+        if not m.group(3):
+            depth += 1
+    pos = m_close.start()
+    last_idx = max((i for i, s in enumerate(starts) if s[1] == tag), default=-1)
+    order = object_child_order().get(obj_type) or []
+    if last_idx >= 0:
+        if last_idx + 1 < len(starts):
+            pos = starts[last_idx + 1][0]
+    elif tag in order:
+        later = order[order.index(tag) + 1:]
+        pos = next((p for p, t in starts if t in later), pos)
+    if line_indent(pos) is not None:
+        ls = text.rfind("\n", 0, pos) + 1
+        return text[:ls] + frag + eol + text[ls:]
+    return text[:pos] + frag.lstrip() + text[pos:]
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
@@ -6399,6 +8155,14 @@ def main():
     out_path_resolved = args.OutputPath if os.path.isabs(args.OutputPath) else os.path.join(os.getcwd(), args.OutputPath)
     assert_edit_allowed(out_path_resolved, "editable")
     format_version = detect_format_version(os.path.dirname(out_path_resolved))
+    global _format_version, _ext_name_prefix
+    _format_version = format_version
+    _ext_name_prefix = get_extension_name_prefix(os.path.dirname(out_path_resolved))
+    compat_mode = detect_compatibility_mode(os.path.dirname(out_path_resolved))
+    # Режим ниже 8.3.19: dcssch в шапке — только при использовании, поля/параметры списка не выгружаются.
+    # Нераспознанный режим (DontUse и т.п. — ранг 0) — как текущая платформа, то есть не старый.
+    compat_rank = compat_mode_rank(compat_mode)
+    is_compat_pre_8319 = 0 < compat_rank < 80319
 
     # Объявления пространств имён — одной переменной: место эмиссии её только подставляет.
     # Правки шапки (как xmlns:pal в формате 2.21) делаются здесь, в одном месте.
@@ -6531,6 +8295,9 @@ def main():
         global QUERY_BASE_DIR
         QUERY_BASE_DIR = os.path.dirname(os.path.abspath(json_path))
 
+    global _defn
+    _defn = defn
+
     # --- 1b. Pre-pass: synonyms, main attribute inference, heuristics, autoCmdBar extraction ---
     def _normalize_synonyms(el):
         if not isinstance(el, dict):
@@ -6573,10 +8340,10 @@ def main():
                     return True
         return False
 
-    def _apply_dlist_table_heuristic(el, list_name, has_main_table):
+    def _apply_dlist_table_heuristic(el, list_name, has_main_table, has_key_type=False):
         if not isinstance(el, dict):
             return
-        if el.get('table') is not None and str(el.get('path', '')) == list_name:
+        if el.get('table') is not None and str(el.get('path', '')).lower() == list_name.lower():
             # Маркер дин-список-таблицы → emit_table эмитит блок свойств
             el['_dynList'] = True
             if 'tableAutofill' not in el:
@@ -6586,11 +8353,13 @@ def main():
             # RowPictureDataPath: умный дефолт <Список>.DefaultPicture, если ключ ОТСУТСТВУЕТ.
             # Декомпилятор опускает при rpdp == smart-default; реальное отсутствие → ""-маркер (не
             # перезатирается). Гейт has_main_table снят: дин-список без mainTable тоже несёт RowPictureDataPath.
-            if 'rowPictureDataPath' not in el:
+            # Но не при явном keyType: строка без ссылки, DefaultPicture платформа отвергает («Неверный путь
+            # к данным»); в корпусе у таких списков RowPictureDataPath нет ни разу.
+            if 'rowPictureDataPath' not in el and not has_key_type:
                 el['rowPictureDataPath'] = f'{list_name}.DefaultPicture'
         if isinstance(el.get('children'), list):
             for child in el['children']:
-                _apply_dlist_table_heuristic(child, list_name, has_main_table)
+                _apply_dlist_table_heuristic(child, list_name, has_main_table, has_key_type)
 
     def _is_object_like_type(t):
         if not t:
@@ -6658,8 +8427,12 @@ def main():
                 continue
             settings = attr.get('settings') or {}
             has_mt = bool(isinstance(settings, dict) and settings.get('mainTable'))
+            # Явный ключ набора (FieldValue/RowKey/RowNumber) без основной таблицы: ссылки в строке нет —
+            # нет и DefaultPicture. С mainTable ссылка остаётся.
+            key_type = str(settings.get('keyType') or '') if isinstance(settings, dict) else ''
+            has_key_type = key_type != '' and key_type.lower() != 'auto' and not has_mt
             for el in defn['elements']:
-                _apply_dlist_table_heuristic(el, attr.get('name', ''), has_mt)
+                _apply_dlist_table_heuristic(el, attr.get('name', ''), has_mt, has_key_type)
 
     # 1b.5: Compute main AutoCommandBar Autofill (B3)
     def _compute_main_acb_autofill():
@@ -6698,6 +8471,10 @@ def main():
     for k, v in props_src.items():
         if k != 'title':
             props_clone[k] = v
+    # Шапка корня (свойства, CommandSet, MobileDeviceCommandBarContent) собирается блоками и пишется
+    # в порядке корпуса: свойства из ввода идут вперемешку с CommandSet
+    main_lines = lines
+    lines = []
     emit_properties(lines, props_clone, '\t')
 
     # CommandSet (excluded commands)
@@ -6723,6 +8500,18 @@ def main():
                 lines.append(f'\t\t\t<xr:Value xsi:type="xs:string">{esc_xml_text(str(nm))}</xr:Value>')
             lines.append('\t\t</xr:Item>')
         lines.append('\t</MobileDeviceCommandBarContent>')
+    hdr_blocks = []
+    for ln in '\n'.join(lines).split('\n'):
+        if ln == '':
+            continue
+        m = re.match(r'^\t<([A-Za-z]+)', ln)
+        if m:
+            hdr_blocks.append({'Tag': m.group(1), 'Lines': [ln]})
+        else:
+            hdr_blocks[-1]['Lines'].append(ln)
+    lines = main_lines
+    for b in sorted(hdr_blocks, key=lambda b: get_form_root_rank(b['Tag'])):
+        lines.extend(b['Lines'])
 
     # AutoCommandBar (always present, id=-1)
     acb_autofill = _compute_main_acb_autofill()
@@ -6756,13 +8545,24 @@ def main():
         lines.append(f'\t<AutoCommandBar name="{acb_name}" id="-1"{acb_di_attr}/>')
 
     # Events
+    # Values as for elements; None — the conventional name (ПриСозданииНаСервере)
     if defn.get('events'):
-        for evt_name in defn['events']:
-            if evt_name not in KNOWN_FORM_EVENTS:
-                print(f"[WARN] Unknown form event '{evt_name}'. Known: {', '.join(KNOWN_FORM_EVENTS)}")
+        for evt_name, val in defn['events'].items():
+            if get_event_entry('Form', evt_name):
+                continue
+            for v in (val if isinstance(val, list) else [val]):
+                h = ('' if v.get('handler') is None else str(v.get('handler'))) if isinstance(v, dict) else ('' if v is None else str(v))
+                if not h:
+                    print(f"[ERROR] Form event '{evt_name}': specify the handler name — there is no naming convention for this event", file=sys.stderr)
+                    sys.exit(1)
+        pairs = get_event_pairs(defn, '', 'Form')
+        test_event_pairs(pairs, 'Form', '')
+        for evt_name, evt_handler, _ in pairs:
+            register_handler(evt_handler, 'form', 'Form', evt_name)
         lines.append('\t<Events>')
-        for evt_name, evt_handler in defn['events'].items():
-            lines.append(f'\t\t<Event name="{evt_name}">{evt_handler}</Event>')
+        for evt_name, evt_handler, call_type in pairs:
+            ct_attr = f' callType="{call_type}"' if call_type else ''
+            lines.append(f'\t\t<Event name="{evt_name}"{ct_attr}>{evt_handler}</Event>')
         lines.append('\t</Events>')
 
     # ChildItems (elements)
@@ -6775,11 +8575,11 @@ def main():
     # Attributes
     emit_attributes(lines, defn.get('attributes'), '\t', conditional_appearance=defn.get('conditionalAppearance'))
 
+    # Commands (по корпусу — раньше Parameters)
+    emit_commands(lines, defn.get('commands'), '\t')
+
     # Parameters
     emit_parameters(lines, defn.get('parameters'), '\t')
-
-    # Commands
-    emit_commands(lines, defn.get('commands'), '\t')
 
     # CommandInterface (командный интерфейс формы — последний дочерний Form)
     emit_command_interface(lines, defn.get('commandInterface'), '\t')
@@ -6795,8 +8595,25 @@ def main():
     if out_dir and not os.path.exists(out_dir):
         os.makedirs(out_dir, exist_ok=True)
 
-    content = '\r\n'.join(lines)
+    content = sort_element_tag_order(normalize_enum_tags('\r\n'.join(lines)))
+    # Режим ниже 8.3.19: платформа объявляет dcssch только там, где он есть в теле. Тело собрано —
+    # теперь видно, нужен ли он; иначе снимаем объявление из корня (как сделала бы выгрузка).
+    if is_compat_pre_8319:
+        root_start = content.find('<Form ')
+        root_end = content.find('>', root_start) if root_start >= 0 else -1
+        if root_end >= 0 and content.find('dcssch:', root_end) < 0:
+            content = content[:root_end].replace(
+                ' xmlns:dcssch="http://v8.1c.ru/8.1/data-composition-system/schema"', '') + content[root_end:]
     write_utf8_bom(out_path, content)
+
+    # Режим ниже 8.3.19: поля, вычисляемые поля и параметры динамического списка платформа хранит в
+    # базе, но в выгрузку XML не пишет. Загрузка их принимает молча — предупреждаем здесь.
+    if is_compat_pre_8319:
+        dyn_rx = (r'(?s)<Attribute name="([^"]+)"(?:(?!</Attribute>|<Attribute ).)*?'
+                  r'<Settings xsi:type="DynamicList">(?:(?!</Settings>).)*?<(?:Field|CalculatedField|Parameter)[ >]')
+        for m in re.finditer(dyn_rx, content):
+            print(f"[WARN] Dynamic list '{m.group(1)}': Field/CalculatedField/Parameter under compatibility "
+                  f"mode {compat_mode} (< 8.3.19) are kept in the infobase but not written to the XML dump")
 
     # --- 4. Auto-register form in parent object XML ---
     # Infer parent from OutputPath: .../TypePlural/ObjectName/Forms/FormName/Ext/Form.xml
@@ -6817,26 +8634,16 @@ def main():
             # схлопнется в LF при чтении и файл будет переписан в LF (#44/#46/#47).
             with open(object_xml_path, 'r', encoding='utf-8-sig', newline='') as f:
                 raw_text = f.read()
-            # Перевод строки вставки берём из самого файла, а не из канона:
-            # правка существующего файла сохраняет его стиль.
-            eol = '\r\n' if '\r\n' in raw_text else '\n'
-
             # Check if already registered
             if f'<Form>{form_name}</Form>' not in raw_text:
-                # Insert before </ChildObjects>
-                if '</ChildObjects>' in raw_text:
-                    # Отступ вставки берём у закрывающего тега +1 уровень: подстановка
-                    # по голому '</ChildObjects>' удваивала бы уже присутствующий отступ
-                    # строки (получалось 5 табов вместо 3 — PS-порт через DOM даёт 3).
-                    raw_text = re.sub(r'([ \t]*)</ChildObjects>',
-                                      lambda m: m.group(1) + '\t' + f'<Form>{form_name}</Form>' + eol + m.group(1) + '</ChildObjects>',
-                                      raw_text, count=1)
-                elif '<ChildObjects/>' in raw_text:
-                    replacement = ('<ChildObjects>' + eol + f'\t\t\t<Form>{form_name}</Form>' + eol + '\t\t</ChildObjects>')
-                    raw_text = raw_text.replace('<ChildObjects/>', replacement, 1)
-
-                write_utf8_bom(object_xml_path, raw_text)
-                print(f"     Registered: <Form>{form_name}</Form> in {object_name}.xml")
+                # В свой ChildObjects объекта (не во вложенный у ТЧ), на место по канону вида;
+                # перевод строки вставки — из самого файла
+                m_kind = re.search(r'<MetaDataObject\b[^>]*>\s*<(\w+)', raw_text)
+                new_text = insert_into_own_child_objects_by_canon(
+                    raw_text, f'\t\t\t<Form>{form_name}</Form>', 'Form', m_kind.group(1) if m_kind else '')
+                if new_text is not None and new_text != raw_text:
+                    write_utf8_bom(object_xml_path, new_text)
+                    print(f"     Registered: <Form>{form_name}</Form> in {object_name}.xml")
 
     # --- 5. Summary ---
     el_count = _next_id
@@ -6848,6 +8655,8 @@ def main():
         print(f"     Commands: {len(defn['commands'])}")
     if defn.get('parameters'):
         print(f"     Parameters: {len(defn['parameters'])}")
+    for line in update_form_module(out_path, args.OutputPath):
+        print(line)
 
 
 if __name__ == '__main__':

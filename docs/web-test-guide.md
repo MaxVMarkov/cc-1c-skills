@@ -12,7 +12,7 @@
 
 - База опубликована через Apache (`/web-publish`)
 - Node.js 18+ установлен
-- Зависимости установлены: `cd .claude/skills/web-test/scripts && npm install`
+- Зависимости и браузер установлены: `cd .claude/skills/web-test/scripts && npm install && npx playwright install chromium`
 
 ## Рабочий цикл
 
@@ -131,6 +131,12 @@ Claude пишет `.js` файл со сценарием и запускает �
 ```
 Стек извлекается автоматически — через OpenReport (платформенные исключения) или "О программе" → "Информация для техподдержки" (ВызватьИсключение).
 
+Время сценария ограничено (по умолчанию 30 минут): `--timeout=<мс>`, `--timeout-min=<мин>` или переменная `WEB_TEST_EXEC_TIMEOUT_MS`. Ограничение касается сценария, а не запуска 1С. Зависший сценарий обрывается, браузер закрывается, вывод до зависания сохраняется:
+```json
+{ "ok": false, "error": "Script timed out after 600000ms (--timeout)", "output": "...", "timedOut": true }
+```
+Код выхода `run`: `0` — успех, `1` — ошибка сценария, `2` — таймаут.
+
 ### Интерактивный режим (start/exec/stop)
 
 Браузер остаётся открытым между командами. Состояние (открытые вкладки, формы) сохраняется.
@@ -233,18 +239,20 @@ console.log('Расшифровка:', JSON.stringify(drilldown.rows));
 | `readSpreadsheet()` | Результат отчёта | `{ title?, headers?, data?, totals?, total }` |
 | `getSections()` | Разделы и команды | `{ activeSection, sections, commands }` |
 | `getPageState()` | Разделы + открытые вкладки | `{ activeSection, activeTab, sections, tabs }` |
+| `getHtmlFrame(name?)` | Вход во фрейм поля HTML-документа активной формы | Playwright `FrameLocator` |
 
 #### getFormState — подробнее
 
 Основной способ «увидеть» что на экране:
 
 - **form** — номер активной формы, `null` когда ничего не открыто (десктоп)
-- **formCount** — количество открытых форм. `0` = десктоп. Работает даже если панель открытых окон скрыта
+- **formCount** — количество открытых форм. Работает даже если панель открытых окон скрыта
 - **openForms** — `[0, 1, 2]` — номера всех открытых форм в DOM
 - **modal** — `true` когда активная форма — модальный диалог, блокирующий интерфейс
 - **openTabs** — `[{ name, active? }]` из панели открытых окон (только когда панель включена в настройках 1С)
 - **fields** — `[{ name, value, label?, actions?, required? }]`. `actions` = select/clear/open. `required: true` = незаполненное обязательное поле
 - **table** — `{ name, columns, rowCount }` (метаданные; для данных — `readTable()`)
+- **htmlFields** — поля HTML-документа на экране: `[{ name, label? }]`. Поле на неактивной закладке, в свёрнутой группе или скрытое формой появится в списке, когда станет видно
 - **reportSettings** — DCS-фильтры в читаемом виде: `[{ name: "Склад", enabled: true, value: "..." }]`
 - **errorModal** — 1С показала ошибку
 - **confirmation** — диалог Да/Нет, вызовите `clickElement('Да')` или `clickElement('Нет')`
@@ -330,6 +338,19 @@ await clickElement(
 - `scroll: true` идёт только **вниз** (PageDown). Для вверх — `page.keyboard.press('Home')` через `getPage()` или сначала `filterList`.
 - На дубликаты при фильтре — первая подходящая строка. Уточняйте фильтр для disambiguation.
 
+#### Поле HTML-документа
+
+Внутри `ПолеHTMLДокумента` — собственная страница приложения (HTML, React), функции навыка её не читают. `getHtmlFrame` даёт вход по имени или заголовку поля из `htmlFields`, дальше — обычный Playwright. Имя можно не указывать, если HTML-поле на форме одно:
+
+```js
+const app = await getHtmlFrame('Чат');
+await app.getByTestId('chat-message').filter({ visible: true }).fill('текст');  // скрытые дубли
+await app.getByRole('button', { name: 'Отправить' }).click();
+```
+
+- Действия Playwright не ловят ошибки 1С автоматически: после действия, которое обращается к серверу 1С, проверьте `getFormState().errors`.
+- Если поверх формы открылось модальное окно, фреймом не пользуйтесь — клики попадут в окно.
+
 ### Действия
 
 Все action-функции возвращают **плоский form state** (как `getFormState()`) с action-specific extras (`clicked`, `focused`, `selected`, `filled`, `notFilled`, `closed`, `opened`, `navigated`, `deleted`, `filtered`, `unfiltered`). Errors всегда на верхнем уровне `.errors` — exec-wrapper автоматически throw'ает на soft validation errors (`modal`/`balloon`).
@@ -409,6 +430,9 @@ await page.keyboard.press('F4');           // открыть форму выбо
 | `fillFields: N of M field(s) failed` | Текст ошибки содержит список проблемных полей и доступные варианты |
 | `fillTableRow` вернул item с `ok: false` | См. поле `error` — `composite_type` → retry с `{value, type}`; `column_not_found` → проверьте имя поля через `readTable`; `not_found` → уточните значение поиска |
 | Пустой `readSpreadsheet()` | Увеличьте `await wait(N)` перед чтением |
+| `getHtmlFrame`: `is not visible` | Поле на неактивной закладке или в свёрнутой группе — откройте закладку или разверните группу |
+| `getHtmlFrame`: `pass a name` | На форме несколько HTML-полей — укажите имя из `htmlFields` |
+| `run` завершился с кодом 2 | Сценарий упёрся в `--timeout`: вывод до зависания — в `output` |
 
 ## Особенности
 

@@ -1,4 +1,4 @@
-// web-test cli/commands/test v1.9 — regression test runner
+// web-test cli/commands/test v1.13 — regression test runner
 // Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 import { existsSync, writeFileSync, mkdirSync, renameSync, copyFileSync, unlinkSync } from 'fs';
 import { resolve, dirname, basename, relative } from 'path';
@@ -127,6 +127,17 @@ export async function cmdTest(rawArgs) {
           `Pass the suite root (e.g. tests/myapp/) and narrow with --grep= / --tags=, or give --url=.`);
     }
     contextSpecs.default = { url: fallbackUrl };
+    if (config.user !== undefined) Object.assign(contextSpecs.default, { user: config.user, password: config.password });
+  }
+  // Login fields that would be dropped silently: the run would go as the publication's user.
+  if (config.contexts && Object.keys(config.contexts).length && (config.user !== undefined || config.password !== undefined)) {
+    die('webtest.config.mjs: top-level user/password apply only without "contexts" — set them per context');
+  }
+  if (config.password !== undefined && config.user === undefined) die('webtest.config.mjs: password without user');
+  if (config.user === '') die('webtest.config.mjs: user is empty');
+  for (const [n, spec] of Object.entries(contextSpecs)) {
+    if (spec.user === '') die(`webtest.config.mjs: context "${n}": user is empty`);
+    if (spec.password !== undefined && spec.user === undefined) die(`webtest.config.mjs: context "${n}": password without user`);
   }
   if (!contextSpecs[defaultContextName]) {
     die(`defaultContext "${defaultContextName}" not found in contexts: [${Object.keys(contextSpecs).join(', ')}]`);
@@ -252,13 +263,6 @@ export async function cmdTest(rawArgs) {
     if (grep && !grep.test(t.name)) return false;
     return true;
   });
-
-  // Load hooks
-  const hooksPath = resolve(suiteRoot, '_hooks.mjs');
-  let hooks = {};
-  if (existsSync(hooksPath)) {
-    hooks = await import('file:///' + hooksPath.replace(/\\/g, '/'));
-  }
 
   // Human-readable report goes to stdout (test-runner convention: jest/pytest/playwright).
   // In `--report -` mode the machine JSON/XML takes over stdout, so progress moves to stderr.
@@ -387,6 +391,43 @@ export async function cmdTest(rawArgs) {
     }
   }
 
+  const declaredContextsOf = (t) => t.contexts && t.contexts.length ? t.contexts : [t.context || defaultContextName];
+  function recordSkipped(t) {
+    const reason = typeof t.skip === 'string' ? t.skip : '';
+    W.write(`  ○ ${t.name}${reason ? ` (skip: ${reason})` : ' (skip)'}\n`);
+    recordResult({ name: t.name, file: t.file, tags: t.tags, param: t.param, contexts: declaredContextsOf(t), status: 'skipped', duration: 0, attempts: 0, steps: [], output: '', error: null, screenshot: null });
+    skipCount++;
+  }
+
+  // Nothing to run → refuse BEFORE `_hooks.mjs` is imported and prepare() rebuilds the stand.
+  // A run where no test executed must not look green: the exit code is what the caller reads.
+  // Exit 5 (pytest's "no tests collected") keeps it apart from 1 = red tests. An all-skipped
+  // selection gets 5 too — stricter than pytest on purpose: `skip` is static, so a selection that
+  // skips everything is a suite mistake far more often than an intended state.
+  if (!filtered.some(t => !t.skip)) {
+    if (!filtered.length) {
+      const by = [];
+      if (hasOnly) by.push('only');
+      if (tags) by.push(`--tags=${tags.join(',')}${ownArgs.some(a => a.startsWith('--tags=')) ? '' : ' (from webtest.config.mjs)'}`);
+      if (grep) by.push(`--grep=${grep.source}`);
+      W.write(`No tests to run: ${by.join(' + ') || 'the filters'} matched none of ${tests.length} discovered tests\n`);
+    } else {
+      W.write(`No tests to run: all ${filtered.length} selected tests are skipped\n`);
+      for (const t of filtered) recordSkipped(t);
+    }
+    W.write(`\n${passCount} passed, ${failCount} failed, ${skipCount} skipped (${formatDuration(0)})\n\n`);
+    writeFinalReport('empty');
+    // exitCode + return, not exit(): a report piped out via `--report=-` gets to drain first.
+    process.exitCode = 5;
+    return;
+  }
+
+  const hooksPath = resolve(suiteRoot, '_hooks.mjs');
+  let hooks = {};
+  if (existsSync(hooksPath)) {
+    hooks = await import('file:///' + hooksPath.replace(/\\/g, '/'));
+  }
+
   const hookLog = (...a) => W.write(`[hooks] ${a.map(String).join(' ')}\n`);
   const hookEnv = { hookArgs, log: hookLog, config };
   // Deliberately unbounded and allowed to throw: prepare() rebuilds the stand (db-create +
@@ -432,7 +473,7 @@ export async function cmdTest(rawArgs) {
     if (browser.hasContext(name)) return;
     const spec = contextSpecs[name];
     if (!spec) throw new Error(`Unknown context "${name}". Defined: [${Object.keys(contextSpecs).join(', ')}]`);
-    await browser.createContext(name, spec.url, { isolation: spec.isolation || defaultIsolation });
+    await browser.createContext(name, spec.url, { isolation: spec.isolation || defaultIsolation, user: spec.user, password: spec.password });
     if (hooks.afterOpenContext && hookCtx) {
       try { await hooks.afterOpenContext(hookCtx, name, spec); }
       catch (e) { hookLog(`afterOpenContext("${name}") threw: ${e.message.split('\n')[0]}`); }
@@ -493,16 +534,11 @@ export async function cmdTest(rawArgs) {
       testIdx++;
       // Buffer this test's diagnostics; they are flushed under its own result line below.
       diagSink = [];
-      const declaredContexts = t.contexts && t.contexts.length
-        ? t.contexts
-        : [t.context || defaultContextName];
+      const declaredContexts = declaredContextsOf(t);
 
       if (t.skip) {
-        const reason = typeof t.skip === 'string' ? t.skip : '';
-        W.write(`  ○ ${t.name}${reason ? ` (skip: ${reason})` : ' (skip)'}\n`);
+        recordSkipped(t);
         flushDiag();
-        recordResult({ name: t.name, file: t.file, tags: t.tags, contexts: declaredContexts, status: 'skipped', duration: 0, attempts: 0, steps: [], output: '', error: null, screenshot: null });
-        skipCount++;
         continue;
       }
 
@@ -550,7 +586,7 @@ export async function cmdTest(rawArgs) {
       } catch (e) {
         W.write(`  ✗ ${t.name} (context setup failed: ${e.message})\n`);
         flushDiag();
-        recordResult({ name: t.name, file: t.file, tags: t.tags, contexts: declaredContexts, status: 'failed', duration: 0, attempts: 0, steps: [], output: '', error: { message: e.message }, screenshot: null });
+        recordResult({ name: t.name, file: t.file, tags: t.tags, param: t.param, contexts: declaredContexts, status: 'failed', duration: 0, attempts: 0, steps: [], output: '', error: { message: e.message }, screenshot: null });
         failCount++;
         if (opts.bail) break;
         continue;
@@ -576,7 +612,11 @@ export async function cmdTest(rawArgs) {
           attempt,
           maxAttempts,
           param: t.param,
-          contexts: Object.fromEntries(testContextNames.map(n => [n, contextSpecs[n]])),
+          // The password stays out: testInfo is test-visible and may end up in logs or reports.
+          contexts: Object.fromEntries(testContextNames.map(n => {
+            const { password, ...spec } = contextSpecs[n];
+            return [n, spec];
+          })),
           primaryContext: testContextNames[0],
         };
         ctx.testResult = null;
@@ -661,7 +701,7 @@ export async function cmdTest(rawArgs) {
             await bounded(browser.stopRecording(), D.stopRecording, 'stopRecording');
           }
           const dur = elapsed(t0);
-          testResult = { name: t.name, file: t.file, tags: t.tags, contexts: testContextNames, severity: t.severity, status: 'passed', duration: dur, attempts: attempt, start: t0, stop: Date.now(), steps, output: output.join('\n'), error: null, screenshot: null, video: videoFile };
+          testResult = { name: t.name, file: t.file, tags: t.tags, param: t.param, contexts: testContextNames, severity: t.severity, status: 'passed', duration: dur, attempts: attempt, start: t0, stop: Date.now(), steps, output: output.join('\n'), error: null, screenshot: null, video: videoFile };
           lastError = null;
           break;
 
@@ -754,7 +794,7 @@ export async function cmdTest(rawArgs) {
           }
           lastError = errInfo;
           const dur = elapsed(t0);
-          testResult = { name: t.name, file: t.file, tags: t.tags, contexts: testContextNames, severity: t.severity, status: 'failed', duration: dur, attempts: attempt, start: t0, stop: Date.now(), steps, output: output.join('\n'), error: errInfo, screenshot: shotFile, video: videoFile };
+          testResult = { name: t.name, file: t.file, tags: t.tags, param: t.param, contexts: testContextNames, severity: t.severity, status: 'failed', duration: dur, attempts: attempt, start: t0, stop: Date.now(), steps, output: output.join('\n'), error: errInfo, screenshot: shotFile, video: videoFile };
 
           // A wedged renderer is not flakiness — retrying just buys another full timeout
           // plus another abort. Stop after the first hang.
@@ -837,12 +877,18 @@ export async function cmdTest(rawArgs) {
     if (hooks.cleanup) await bounded(hooks.cleanup(hookEnv), D.hooks, 'hooks.cleanup');
   }
 
+  // Unreachable while `skip` is static (the guard above catches it) — kept so no future path
+  // can turn "nothing passed" into a green exit. Same verdict and report state as the guard.
+  const empty = passCount === 0 && failCount === 0;
+  if (empty) W.write(`No test passed — treating the run as empty\n`);
+
   const totalDuration = results.reduce((s, r) => s + r.duration, 0);
   W.write(`\n${passCount} passed, ${failCount} failed, ${skipCount} skipped (${formatDuration(totalDuration)})\n\n`);
 
-  writeFinalReport('complete');
+  writeFinalReport(empty ? 'empty' : 'complete');
 
   if (failCount > 0) process.exit(1);
+  if (empty) process.exitCode = 5;
 
   /**
    * Allure results are already on disk (recordResult writes each test as it finishes), so this
