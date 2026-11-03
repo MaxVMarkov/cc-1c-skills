@@ -37,17 +37,17 @@
     Записать результат в файл UTF-8 (консоль Windows в cp866 ломает кириллицу в выводе).
 
 .EXAMPLE
-    .\db-sql-read.ps1 -Command tables -InfoBaseRef ut11-test
+    .\db-sql-read.ps1 -Command tables -InfoBaseRef demo-base
 
 .EXAMPLE
-    .\db-sql-read.ps1 -Command find-table -InfoBaseRef ut11-test -NumberTail 000758
+    .\db-sql-read.ps1 -Command find-table -InfoBaseRef demo-base -NumberTail 000758
 
 .EXAMPLE
-    .\db-sql-read.ps1 -Command diff -InfoBaseRef ut11-test -Table _DocumentJournal15829 `
+    .\db-sql-read.ps1 -Command diff -InfoBaseRef demo-base -Table _DocumentJournal15829 `
         -Number "КАТН-000758" -Number2 "КАТН-000781" -Out result.txt
 
 .EXAMPLE
-    .\db-sql-read.ps1 -Command sql -InfoBaseRef ut11-test -Sql "SELECT COUNT(*) FROM _Document667"
+    .\db-sql-read.ps1 -Command sql -InfoBaseRef demo-base -Sql "SELECT COUNT(*) FROM _Document667"
 #>
 
 [CmdletBinding(PositionalBinding=$false)]

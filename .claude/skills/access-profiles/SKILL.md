@@ -25,10 +25,10 @@ allowed-tools:
 ## Usage
 
 ```
-/access-profiles profiles -Role БазовыеПраваБСП -InfoBaseRef ut11
-/access-profiles roles    -Profile БухгалтерОсновной -InfoBaseRef ut11
-/access-profiles list     -InfoBaseRef ut11 -Profile "*номенклатур*"
-/access-profiles profiles -Role ИЗ10_БазовыеПраваБСП -InfoBaseRef ut11 -NoCom   # только SQL-путь
+/access-profiles profiles -Role БазовыеПраваБСП -InfoBaseRef demo-base
+/access-profiles roles    -Profile БухгалтерОсновной -InfoBaseRef demo-base
+/access-profiles list     -InfoBaseRef demo-base -Profile "*номенклатур*"
+/access-profiles profiles -Role МоеРасширение_БазовыеПраваБСП -InfoBaseRef demo-base -NoCom   # только SQL-путь
 ```
 
 ## Параметры подключения
@@ -66,9 +66,9 @@ powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/access-profiles.ps1
 подключиться не удалось — читает **напрямую из MS SQL** (когда у базы в `.v8-project.json`
 есть `dbms.kind = MSSQLServer`). `-NoCom` форсирует SQL-путь. Первая строка отчёта
 показывает, каким путём получены данные: `источник: COM (V85.COMConnector)` или
-`источник: SQL localhost/ut11-test`.
+`источник: SQL localhost/demo-base`.
 
-Оба пути дают одинаковый результат (сверено на `ut11-test`: 7441 пара, 949 ролей у
+Оба пути дают одинаковый результат (сверено на `demo-base`: 7441 пара, 949 ролей у
 «БухгалтерОсновной», 40 профилей у `БазовыеПраваБСП` — совпадение построчно).
 
 Прямое чтение работает через `System.Data.SqlClient`; реквизиты — из `dbms`-блока записи
@@ -164,7 +164,7 @@ Start-Process regsvr32 -ArgumentList '/s','comcntr.dll' `
 ## Пример вывода
 
 ```
-источник: SQL localhost/ut11-test
+источник: SQL localhost/demo-base
 
 === Роль: БазовыеПраваБСП — Базовые права БСП (Роль) ===
   профилей: 40

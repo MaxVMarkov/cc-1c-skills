@@ -24,10 +24,10 @@
     Профиль для roles. Шаблон: подстрока без * и ? или маска с * и ?.
 
 .EXAMPLE
-    .\access-profiles.ps1 profiles -Role БазовыеПраваБСП -InfoBaseRef ut11-test -OutFile out.txt
+    .\access-profiles.ps1 profiles -Role БазовыеПраваБСП -InfoBaseRef demo-base -OutFile out.txt
 
 .EXAMPLE
-    .\access-profiles.ps1 roles -Profile БухгалтерОсновной -InfoBaseRef ut11-test -NoCom -OutFile out.txt
+    .\access-profiles.ps1 roles -Profile БухгалтерОсновной -InfoBaseRef demo-base -NoCom -OutFile out.txt
 #>
 
 [CmdletBinding(PositionalBinding=$false)]

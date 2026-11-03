@@ -50,7 +50,7 @@ python <skill>/scripts/check_bsl.py <каталог-bsl>
    `addin`), запускает тонкий клиент с `assets/Assambler.epf` и ждёт `_report.log`.
    Логин/пароль берутся из `HKCU\Environment` (`V8_DB_USER`, `V8_DB_PASS`), если
    не переданы параметрами — в чат их не выводи. База подойдёт **любая
-   управляемая** (`bp_dku`, `ut11-test`): конфигурация обработки самодостаточна.
+   управляемая** (`demo-base-2`, `demo-base`): конфигурация обработки самодостаточна.
    Строки отчёта: `OK|номер|длина-текста|путь-bsl`, `ERR|номер|путь-bsl|ошибка`.
    Копии `boot.log`, `addin.log` и `report.log` — в `<WorkDir>` (по умолчанию
    `.tmp/deobf-run`).

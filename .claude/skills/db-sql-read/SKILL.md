@@ -44,7 +44,7 @@ allowed-tools:
 ## Команда
 
 ```powershell
-powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/db-sql-read.ps1" -Command tables -InfoBaseRef ut11-test
+powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/db-sql-read.ps1" -Command tables -InfoBaseRef demo-base
 ```
 
 | Параметр | Описание |
@@ -59,7 +59,7 @@ powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/db-sql-read.ps1" -C
 | `-MapFile`, `-Object`, `-Field` | карта хранения (см. ниже) и что из неё показать |
 | `-Out` | записать вывод в UTF-8 файл (консоль в cp866 кириллицу портит) |
 
-## Раскладка таблиц 1С в MSSQL (замерено на УТ 11, база `ut11-test`)
+## Раскладка таблиц 1С в MSSQL (замерено на УТ 11, база `demo-base`)
 
 **Имена таблиц** — технические, кириллицы нет вообще (проверено по `sys.tables`, 8581
 таблица, 0 с кириллической первой буквой):
