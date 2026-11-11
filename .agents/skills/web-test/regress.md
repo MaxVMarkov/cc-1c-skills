@@ -145,7 +145,7 @@ assert.*                   // see "Assertions" below
   attempt,          // 1..maxAttempts (1-based)
   maxAttempts,      // 1 + retry
   param,            // { ... } | undefined (only when export const params is set)
-  contexts: {       // mirrors config.contexts; includes custom fields like displayName
+  contexts: {       // mirrors config.contexts (custom fields like displayName too), minus password
     clerk:   { url, isolation, displayName, ... },
     manager: { ... },
   },
@@ -210,6 +210,15 @@ export default {
   //   manager: { url: 'http://localhost:9191/myapp-manager/ru_RU', displayName: 'Менеджер' },
   // },
   // defaultContext: 'clerk',
+
+  // Who logs in. Default — the publication's user (one publication per role, as above).
+  // Alternative when the set of users changes from task to task: one publication without a user,
+  // and user/password per context (or top-level next to `url`). The given user wins over the
+  // publication's. Never commit a real password — read it from the environment:
+  // contexts: {
+  //   clerk:   { url: 'http://localhost:9191/myapp/ru_RU', user: 'Кладовщик' },          // empty password
+  //   manager: { url: 'http://localhost:9191/myapp/ru_RU', user: 'Менеджер', password: process.env.MANAGER_PWD },
+  // },
 
   // Context-pool / 1C license management (all optional; omit = no cap, default stays open).
   // maxContexts: 2,            // cap on simultaneous 1C sessions; omit for unlimited
@@ -365,7 +374,7 @@ export default async function({ fillFields, getFormState, assert }, { type, fiel
 }
 ```
 
-Each `params` entry becomes its own test in the report. `{key}` placeholders in `name` get substituted; without placeholders, a `[index]` suffix is added. `ctx.testInfo.param` carries the current row.
+Each `params` entry becomes its own test in the report. `{key}` placeholders in `name` get substituted; without placeholders, a `[index]` suffix is added. `ctx.testInfo.param` carries the current row. In Allure the row's values show as the test's parameters; a test's history is keyed by file + name + row values, so renaming a test or editing a row starts a new history line for it (reordering rows does not).
 
 ## Running
 
@@ -388,7 +397,8 @@ context and destroys whatever is wedged, so the run always moves on. The failure
 (browser alive, renderer's JS thread blocked; the context is aborted, its 1C seance released from Node, and
 the next test recreates it) versus `slow`/`slow-network` (nothing is broken — raise `export const timeout`).
 A `hang` is never retried. Exit codes: `1` red tests, `2` `--global-timeout` fired (report written, seances
-released), `3` the shutdown itself wedged. Allure results are written per test as it finishes, so a hang
+released), `3` the shutdown itself wedged, `5` nothing ran — the filters matched no test, or every selected
+test is skipped (check `--grep` / `--tags` / `only` / `skip`; the stand is left untouched, report written). Allure results are written per test as it finishes, so a hang
 cannot destroy the results collected before it — no external watchdog needed.
 
 **Output contract.** `test` behaves like a test runner: by default the human report (with the summary as the last line) goes to **stdout** — read the tail of stdout + exit code. The machine report is opt-in via `--report`: `--report=path` writes it to a file (default JSON; XML for `--format=junit`), `--report=-` writes it to stdout while progress moves to stderr. Allure needs `--format=allure` + a directory (`-` is invalid for allure). For detailed triage use `--report=path` or `--report=-`. **In `--report=-` mode never use `2>&1`** — it merges stderr progress into the stdout JSON. (In the default mode there is no JSON in stdout, so `… | tail` is safe.)

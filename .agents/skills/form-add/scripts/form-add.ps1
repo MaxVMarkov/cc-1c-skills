@@ -1,4 +1,4 @@
-﻿# form-add v1.29 — Add managed form to 1C config object
+﻿# form-add v1.34 — Add managed form to 1C config object
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 [CmdletBinding(PositionalBinding=$false)]
 param(
@@ -64,16 +64,20 @@ function Find-V8Project([string]$startDir) {
 }
 function Get-EditMode([string]$cfgDir) {
 	try {
-		$pj = Find-V8Project (Get-Location).Path
-		if (-not $pj) { $pj = Find-V8Project $cfgDir }
+		$pj = Find-V8Project (Get-Location).ProviderPath
+		if (-not $pj) { $pj = Find-V8Project ([System.IO.Path]::GetFullPath($cfgDir)) }
 		if (-not $pj) { return 'deny' }
-		$proj = Get-Content -Raw $pj | ConvertFrom-Json
+		# UTF-8 явно: PS 5.1 читает файл без BOM как ANSI, и configSrc с кириллицей не совпал бы
+		$proj = Get-Content -Raw -Encoding UTF8 $pj | ConvertFrom-Json
+		# configSrc — от каталога .v8-project.json, а не от рабочего каталога: иначе из подкаталога
+		# проекта база не сопоставляется и берётся правило проекта.
+		$projDir = [System.IO.Path]::GetDirectoryName($pj)
 		$cfgFull = [System.IO.Path]::GetFullPath($cfgDir).TrimEnd('\', '/')
 		if ($proj.databases) {
 			foreach ($db in $proj.databases) {
 				if ($db.configSrc) {
-					$src = [System.IO.Path]::GetFullPath($db.configSrc).TrimEnd('\', '/')
-					if ($cfgFull -eq $src -or $cfgFull.StartsWith($src + [System.IO.Path]::DirectorySeparatorChar)) {
+					$src = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($projDir, $db.configSrc)).TrimEnd('\', '/')
+					if ($cfgFull -eq $src -or $cfgFull.StartsWith($src + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
 						if ($db.editingAllowedCheck) { return $db.editingAllowedCheck }
 					}
 				}
@@ -86,7 +90,7 @@ function Get-EditMode([string]$cfgDir) {
 function Assert-EditAllowed([string]$targetPath, [string]$require) {
 	try {
 		$rp = $targetPath
-		try { $rp = (Resolve-Path $targetPath -ErrorAction Stop).Path } catch {}
+		try { $rp = (Resolve-Path $targetPath -ErrorAction Stop).ProviderPath } catch {}
 		# Autonomous external object (EPF/ERF): never part of a config on support (issue #39).
 		if (Test-ExternalObjectRoot $rp) { return }
 		$elemUuid = Get-RootUuid $rp
@@ -192,11 +196,49 @@ function Get-FormatRank([string]$ver) {
 	return 0
 }
 
+# Режим совместимости конфигурации ($null — не определён). От него зависит xmlns:dcssch в шапке
+# формы: при режиме < 8.3.19 платформа объявляет его только при использовании, иначе — всегда.
+# Подъём останавливается на корне внешней обработки/отчёта: её форму режим базы не меняет, а
+# Configuration.xml выше по дереву (src/cf рядом с src/epf) — чужой. Читаем 64 КБ: тег ~11-12 КБ.
+function Detect-CompatibilityMode([string]$dir) {
+	$d = $dir
+	while ($d) {
+		$extPath = "$d.xml"
+		if (Test-Path -LiteralPath $extPath) {
+			$extText = [System.IO.File]::ReadAllText($extPath, [System.Text.Encoding]::UTF8)
+			$extHead = $extText.Substring(0, [Math]::Min(2000, $extText.Length))
+			if ($extHead -match '<(ExternalDataProcessor|ExternalReport)[ >]') { return $null }
+		}
+		$cfgPath = Join-Path $d "Configuration.xml"
+		if (Test-Path -LiteralPath $cfgPath) {
+			$text = [System.IO.File]::ReadAllText($cfgPath, [System.Text.Encoding]::UTF8)
+			$head = $text.Substring(0, [Math]::Min(65536, $text.Length))
+			if ($head -match '<CompatibilityMode>([^<]+)</CompatibilityMode>') { return $Matches[1].Trim() }
+			# Расширение: своего CompatibilityMode нет, форму ведёт его собственный режим. В основной
+			# конфигурации этот тег — режим для её расширений, не её собственный: только для расширения.
+			if ($head -match '<ConfigurationExtensionPurpose>' -and $head -match '<ConfigurationExtensionCompatibilityMode>([^<]+)</ConfigurationExtensionCompatibilityMode>') { return $Matches[1].Trim() }
+			return $null
+		}
+		$parent = Split-Path $d -Parent
+		if ($parent -eq $d) { break }
+		$d = $parent
+	}
+	return $null
+}
+
+# Номер режима совместимости для сравнений: "Version8_3_27" → 80327, "Version8_5_1" → 80501.
+function Get-CompatModeRank([string]$mode) {
+	if ($mode -match '^Version(\d+)_(\d+)(?:_(\d+))?$') {   # и двухчастный Version8_1
+		return [int]$Matches[1] * 10000 + [int]$Matches[2] * 100 + [int]$Matches[3]
+	}
+	return 0
+}
+
 # --- Фаза 1: Определение типа объекта ---
 
 # Resolve ObjectPath (directory → .xml)
 if (-not [System.IO.Path]::IsPathRooted($ObjectPath)) {
-	$ObjectPath = Join-Path (Get-Location).Path $ObjectPath
+	$ObjectPath = Join-Path (Get-Location).ProviderPath $ObjectPath
 }
 if (Test-Path $ObjectPath -PathType Container) {
 	$dirName = Split-Path $ObjectPath -Leaf
@@ -212,14 +254,14 @@ if (-not (Test-Path $ObjectPath)) {
 }
 
 $objectXmlFull = Resolve-Path $ObjectPath
-Assert-EditAllowed $objectXmlFull.Path 'editable'
+Assert-EditAllowed $objectXmlFull.ProviderPath 'editable'
 # Версию берём прежде всего из корня самого объекта — он её несёт всегда, а у автономной
 # внешней обработки/отчёта подниматься к Configuration.xml просто некуда.
 $script:formatVersion = $null
-$objHead = [System.IO.File]::ReadAllText($objectXmlFull.Path, [System.Text.Encoding]::UTF8)
+$objHead = [System.IO.File]::ReadAllText($objectXmlFull.ProviderPath, [System.Text.Encoding]::UTF8)
 $objHead = $objHead.Substring(0, [Math]::Min(2000, $objHead.Length))
 if ($objHead -match '<MetaDataObject[^>]+version="(\d+\.\d+)"') { $script:formatVersion = $Matches[1] }
-if (-not $script:formatVersion) { $script:formatVersion = Detect-FormatVersion (Split-Path $objectXmlFull.Path -Parent) }
+if (-not $script:formatVersion) { $script:formatVersion = Detect-FormatVersion (Split-Path $objectXmlFull.ProviderPath -Parent) }
 
 # Объявления пространств имён — одной переменной на корень: места эмиссии их только
 # интерполируют. Правки шапки (как xmlns:pal в формате 2.21) делаются здесь, в одном месте.
@@ -234,9 +276,19 @@ if ((Get-FormatRank $script:formatVersion) -ge 221) {
 	$script:formNsDecl = $script:formNsDecl -replace ' xmlns:style=', ' xmlns:pal="http://v8.1c.ru/8.1/data/ui/colors/palette" xmlns:style='
 }
 
+# xmlns:dcssch платформа пишет в шапку формы всегда — кроме режима совместимости ниже 8.3.19, где
+# объявляет его только при использовании (пустая форма его не использует). Внешняя обработка и
+# нераспознанный режим (DontUse — ранг 0) — как текущая платформа. Старт подъёма — «каталог» самого
+# объекта: так первым проверяется его же X.xml, и корень внешней обработки узнаётся сразу.
+$script:compatMode = Detect-CompatibilityMode ($objectXmlFull.ProviderPath -replace '\.xml$', '')
+$compatRank = Get-CompatModeRank $script:compatMode
+if (-not ($compatRank -gt 0 -and $compatRank -lt 80319)) {
+	$script:formNsDecl = $script:formNsDecl -replace ' xmlns:dcsset=', ' xmlns:dcssch="http://v8.1c.ru/8.1/data-composition-system/schema" xmlns:dcsset='
+}
+
 $xmlDoc = New-Object System.Xml.XmlDocument
 $xmlDoc.PreserveWhitespace = $true
-$xmlDoc.Load($objectXmlFull.Path)
+$xmlDoc.Load($objectXmlFull.ProviderPath)
 
 $nsMgr = New-Object System.Xml.XmlNamespaceManager($xmlDoc.NameTable)
 $nsMgr.AddNamespace("md", "http://v8.1c.ru/8.3/MDClasses")
@@ -438,10 +490,10 @@ Write-Host ""
 $objectQualifiedName = $objectName
 $objectRef = "$objectType.$objectName"
 if ($objectType -eq "Table") {
-	$tablesDir = Split-Path -Parent $objectXmlFull.Path
+	$tablesDir = Split-Path -Parent $objectXmlFull.ProviderPath
 	$edsSource = Split-Path -Leaf (Split-Path -Parent $tablesDir)
 	if (-not $edsSource -or (Split-Path -Leaf $tablesDir) -ne "Tables") {
-		Write-Error "Таблица внешнего источника ожидается по пути ExternalDataSources/<Источник>/Tables/<Таблица>.xml, а не '$($objectXmlFull.Path)'"
+		Write-Error "Таблица внешнего источника ожидается по пути ExternalDataSources/<Источник>/Tables/<Таблица>.xml, а не '$($objectXmlFull.ProviderPath)'"
 		exit 1
 	}
 	$objectQualifiedName = "$edsSource.$objectName"
@@ -530,7 +582,7 @@ if ($purposeRule.MainAttr -and -not $purposeRule.AttrName) {
 
 # --- Фаза 3: Создание файлов ---
 
-$objectDir = [System.IO.Path]::ChangeExtension($objectXmlFull.Path, $null).TrimEnd('.')
+$objectDir = [System.IO.Path]::ChangeExtension($objectXmlFull.ProviderPath, $null).TrimEnd('.')
 $formsDir = Join-Path $objectDir "Forms"
 $formMetaPath = Join-Path $formsDir "$FormName.xml"
 
@@ -654,39 +706,86 @@ if (Test-Path $formXmlPath) {
 
 # --- 3c. Module.bsl ---
 
+# Пустой модуль формы. Табличных областей нет: имя таблицы при создании формы неизвестно.
+function Get-FormModuleTemplate {
+	$out = @()
+	foreach ($r in @('ОбработчикиСобытийФормы', 'ОбработчикиСобытийЭлементовШапкиФормы', 'ОбработчикиКомандФормы', 'ОбработчикиОповещений', 'СлужебныеПроцедурыИФункции')) {
+		if ($out.Count -gt 0) { $out += '' }
+		$out += @("#Область $r", '', '#КонецОбласти')
+	}
+	return $out
+}
+
 $modulePath = Join-Path $formModuleDir "Module.bsl"
 
-$moduleBsl = @"
-#Область ОбработчикиСобытийФормы
-
-#КонецОбласти
-
-#Область ОбработчикиСобытийЭлементовФормы
-
-#КонецОбласти
-
-#Область ОбработчикиКомандФормы
-
-#КонецОбласти
-
-#Область ОбработчикиОповещений
-
-#КонецОбласти
-
-#Область СлужебныеПроцедурыИФункции
-
-#КонецОбласти
-"@
+$moduleBsl = (Get-FormModuleTemplate) -join "`n"
 
 if (Test-Path $modulePath) {
 	Write-Host "[SKIP] Module.bsl already exists: $modulePath — not overwriting"
 } else {
 	# Модуль пишем в каноне платформы: CRLF в разделителях строк (корпус: 2643 CRLF,
 	# чисто-LF 0 из 3001). Хвостовой перевод НЕ навязываем — у платформы он
-	# неканоничен (1235 модулей с ним, 766 без). Шаблон берёт переводы строк из
-	# самого скрипта, а он в репозитории хранится с LF.
+	# неканоничен (1235 модулей с ним, 766 без).
 	$moduleBsl = ($moduleBsl -replace "`r`n", "`n") -replace "`n", "`r`n"
 	[System.IO.File]::WriteAllText($modulePath, $moduleBsl, $encBom)
+}
+
+# Порядок групп в <ChildObjects> объекта по виду. Это xs:sequence <Вид>ChildObjects из MDClasses XSD,
+# сверенный выгрузкой платформы: выгрузка сама ставит группы в этот порядок, так что вставка не на место
+# даёт дифф при следующей выгрузке. Единого порядка нет — у документа Form стоит до TabularSection.
+function Get-ObjectChildOrder {
+	return @{
+		"Catalog"                    = @("Attribute", "TabularSection", "Form", "Template", "Command")
+		"Document"                   = @("Attribute", "Form", "TabularSection", "Template", "Command")
+		"ExchangePlan"               = @("Attribute", "TabularSection", "Form", "Template", "Command")
+		"ChartOfCharacteristicTypes" = @("Attribute", "TabularSection", "Form", "Template", "Command")
+		"ChartOfAccounts"            = @("Attribute", "TabularSection", "AccountingFlag", "ExtDimensionAccountingFlag", "Form", "Template", "Command")
+		"ChartOfCalculationTypes"    = @("Attribute", "TabularSection", "Form", "Template", "Command")
+		"BusinessProcess"            = @("Attribute", "TabularSection", "Form", "Template", "Command")
+		"Task"                       = @("Attribute", "TabularSection", "Form", "Template", "AddressingAttribute", "Command")
+		"DataProcessor"              = @("Attribute", "TabularSection", "Form", "Template", "Command")
+		"Report"                     = @("Attribute", "TabularSection", "Form", "Template", "Command")
+		"ExternalDataProcessor"      = @("Attribute", "TabularSection", "Form", "Template")
+		"ExternalReport"             = @("Attribute", "TabularSection", "Form", "Template")
+		"Enum"                       = @("EnumValue", "Form", "Template", "Command")
+		"InformationRegister"        = @("Resource", "Attribute", "Dimension", "Form", "Template", "Command")
+		"AccumulationRegister"       = @("Resource", "Attribute", "Dimension", "Form", "Template", "Command")
+		"AccountingRegister"         = @("Dimension", "Resource", "Attribute", "Form", "Template", "Command")
+		"CalculationRegister"        = @("Resource", "Attribute", "Dimension", "Recalculation", "Form", "Template", "Command")
+		"DocumentJournal"            = @("Column", "Form", "Template", "Command")
+		"Table"                      = @("Field", "Form", "Command", "Template")
+		"ExternalDataSource"         = @("Table", "Cube", "Function")
+		"Cube"                       = @("DimensionTable", "Dimension", "Resource", "Form", "Command", "Template")
+		"DimensionTable"             = @("Field", "Form", "Command", "Template")
+		"FilterCriterion"            = @("Form", "Command")
+		"SettingsStorage"            = @("Form", "Template")
+		"TabularSection"             = @("Attribute")
+	}
+}
+
+# Элемент <ChildObjects>, ПЕРЕД которым встаёт новый <tag>; $null — дописать в конец.
+# Сразу за последним элементом своего тега, иначе перед первым элементом группы, идущей
+# по канону вида позже. Вид или тег вне канона — $null, как раньше.
+function Find-ChildAnchor($container, [string]$tag, [string]$objType) {
+	$children = New-Object System.Collections.Generic.List[object]
+	foreach ($c in $container.ChildNodes) { if ($c.NodeType -eq 'Element') { $children.Add($c) } }
+	$lastIdx = -1
+	for ($i = 0; $i -lt $children.Count; $i++) {
+		if ($children[$i].LocalName -ceq $tag) { $lastIdx = $i }
+	}
+	if ($lastIdx -ge 0) {
+		if ($lastIdx + 1 -lt $children.Count) { return $children[$lastIdx + 1] }
+		return $null
+	}
+	$order = (Get-ObjectChildOrder)[$objType]
+	if (-not $order) { return $null }
+	$tagIdx = [array]::IndexOf([string[]]$order, $tag)
+	if ($tagIdx -lt 0) { return $null }
+	$later = @($order | Select-Object -Skip ($tagIdx + 1))
+	foreach ($c in $children) {
+		if ($later -ccontains $c.LocalName) { return $c }
+	}
+	return $null
 }
 
 # --- Фаза 4: Регистрация в родительском объекте ---
@@ -704,38 +803,13 @@ if (-not $alreadyRegistered) {
 $formElem = $xmlDoc.CreateElement("Form", "http://v8.1c.ru/8.3/MDClasses")
 $formElem.InnerText = $FormName
 
-# Ищем первый <Template> для вставки перед ним
-$firstTemplate = $childObjects.SelectSingleNode("md:Template", $nsMgr)
-# Ищем первую <TabularSection> для вставки перед ней (если нет Template)
-$firstTabular = $childObjects.SelectSingleNode("md:TabularSection", $nsMgr)
-
-# Определяем точку вставки: перед Template, перед TabularSection, или в конец
-$insertBefore = $null
-if ($firstTemplate) {
-	$insertBefore = $firstTemplate
-} elseif ($firstTabular) {
-	$insertBefore = $firstTabular
-}
+# Место — по канону вида: порядок групп у видов разный (у документа форма до ТЧ)
+$insertBefore = Find-ChildAnchor $childObjects "Form" $objectType
 
 if ($insertBefore) {
-	# Вставить перед найденным элементом, с переносом строки
-	$whitespace = $xmlDoc.CreateWhitespace("`n`t`t`t")
+	# Отступ перед insertBefore уже стоит и достаётся форме; свой перевод строки — после неё
 	$childObjects.InsertBefore($formElem, $insertBefore) | Out-Null
-	$childObjects.InsertBefore($whitespace, $formElem) | Out-Null
-	# Переставляем: whitespace перед formElem — неправильный порядок
-	# Правильно: formElem, затем whitespace перед insertBefore
-	# InsertBefore возвращает вставленный узел, порядок: ... formElem whitespace insertBefore ...
-	# На самом деле нам нужно: ... \n\t\t\tformElem \n\t\t\tinsertBefore
-	# Удалим и вставим правильно
-	$childObjects.RemoveChild($whitespace) | Out-Null
-	$childObjects.RemoveChild($formElem) | Out-Null
-
-	$childObjects.InsertBefore($formElem, $insertBefore) | Out-Null
-	# Whitespace нужен ДО formElem (перенос строки + отступ)
-	# Но перед insertBefore уже должен быть whitespace от предыдущего элемента
-	# Нам нужно добавить whitespace ПОСЛЕ formElem (перед insertBefore)
-	$ws = $xmlDoc.CreateWhitespace("`n`t`t`t")
-	$childObjects.InsertBefore($ws, $insertBefore) | Out-Null
+	$childObjects.InsertBefore($xmlDoc.CreateWhitespace("`n`t`t`t"), $insertBefore) | Out-Null
 } else {
 	# Добавить в конец ChildObjects
 	if ($childObjects.ChildNodes.Count -eq 0) {
@@ -806,14 +880,14 @@ $xmlText = $xmlText.Replace('encoding="utf-8"', 'encoding="UTF-8"')
 $xmlText = [regex]::Replace($xmlText, '(?s)<!\[CDATA\[.*?\]\]>|<!--.*?-->|(?<=\S) />', { param($m) if ($m.Value -eq ' />') { '/>' } else { $m.Value } })
 # Целевой перевод строки: стиль файла-назначения — правка наследует его (#44/#46/#47),
 # новый файл получает канон выгрузки CRLF. Зеркало _detect_xml_style в py-порту.
-$targetEol = if ((Test-Path -LiteralPath $objectXmlFull.Path) -and ([System.IO.File]::ReadAllText($objectXmlFull.Path) -notmatch "`r`n")) { "`n" } else { "`r`n" }
+$targetEol = if ((Test-Path -LiteralPath $objectXmlFull.ProviderPath) -and ([System.IO.File]::ReadAllText($objectXmlFull.ProviderPath) -notmatch "`r`n")) { "`n" } else { "`r`n" }
 $xmlText = ($xmlText -replace "`r`n", "`n") -replace "`n", $targetEol
-[System.IO.File]::WriteAllText($objectXmlFull.Path, $xmlText, $encBom)
+[System.IO.File]::WriteAllText($objectXmlFull.ProviderPath, $xmlText, $encBom)
 
 # --- Фаза 5: Вывод ---
 
 # Относительные пути для вывода
-$basePath = Split-Path $objectXmlFull.Path -Parent
+$basePath = Split-Path $objectXmlFull.ProviderPath -Parent
 # Определяем корень (ищем родительский каталог типа Documents, Catalogs и т.д.)
 $relFormMeta = $formMetaPath.Replace($basePath, "").TrimStart("\", "/")
 $relFormXml = $formXmlPath.Replace($basePath, "").TrimStart("\", "/")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# meta-edit v1.59 — Edit existing 1C metadata object XML
+# meta-edit v1.75 — Edit existing 1C metadata object XML
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 
 import argparse
@@ -182,15 +182,19 @@ def _sg_find_v8project(start_dir):
 
 def _sg_get_edit_mode(cfg_dir):
     try:
-        pj = _sg_find_v8project(os.getcwd()) or _sg_find_v8project(cfg_dir)
+        pj = _sg_find_v8project(os.getcwd()) or _sg_find_v8project(os.path.abspath(cfg_dir))
         if not pj:
             return "deny"
         proj = json.loads(open(pj, encoding="utf-8-sig").read())
-        cfg_full = os.path.normcase(os.path.abspath(cfg_dir)).rstrip("\\/")
+        # configSrc — от каталога .v8-project.json, а не от рабочего каталога: иначе из подкаталога
+        # проекта база не сопоставляется и берётся правило проекта. Пути — настоящие (realpath):
+        # на macOS /var — ссылка на /private/var, и getcwd с путём аргумента иначе не совпадут.
+        proj_dir = os.path.dirname(pj)
+        cfg_full = os.path.normcase(os.path.realpath(cfg_dir)).rstrip("\\/")
         for db in proj.get("databases", []):
             src = db.get("configSrc")
             if src:
-                src_full = os.path.normcase(os.path.abspath(src)).rstrip("\\/")
+                src_full = os.path.normcase(os.path.realpath(os.path.join(proj_dir, src))).rstrip("\\/")
                 if cfg_full == src_full or cfg_full.startswith(src_full + os.sep):
                     if db.get("editingAllowedCheck"):
                         return db["editingAllowedCheck"]
@@ -424,7 +428,7 @@ enum_value_aliases = {
     # DefaultPresentation
     'ВВидеНаименования': 'AsDescription', 'ВВидеКода': 'AsCode',
     # FillChecking
-    'НеПроверять': 'DontCheck', 'Ошибка': 'ShowError', 'Предупреждение': 'ShowWarning',
+    'НеПроверять': 'DontCheck', 'Ошибка': 'ShowError',
     # Indexing
     'НеИндексировать': 'DontIndex', 'Индексировать': 'Index',
     'ИндексироватьСДопУпорядочиванием': 'IndexWithAdditionalOrder',
@@ -437,12 +441,16 @@ valid_enum_values = {
     'RegisterType': ['Balance', 'Turnovers'],
     'WriteMode': ['Independent', 'RecorderSubordinate'],
     'InformationRegisterPeriodicity': ['Nonperiodical', 'Second', 'Day', 'Month', 'Quarter', 'Year', 'RecorderPosition'],
-    'DependenceOnCalculationTypes': ['DontUse', 'OnActionPeriod'],
+    'DependenceOnCalculationTypes': ['DontUse', 'OnActionPeriod', 'OnRegistrationPeriod'],
     # AutomaticAndManaged — только у внешнего источника данных и его таблиц.
     'DataLockControlMode': ['Automatic', 'Managed', 'AutomaticAndManaged'],
     'FullTextSearch': ['Use', 'DontUse'],
     'DataHistory': ['Use', 'DontUse'],
     'DefaultPresentation': ['AsDescription', 'AsCode'],
+    # Уточнение по виду объекта («Вид.Свойство») — проверяется раньше общего списка. AsNumber
+    # («в виде номера») есть только у задачи: у справочника и прочих платформа его отвергает
+    # («Неверное значение перечисления», 8.3.24 и 8.5.1).
+    'Task.DefaultPresentation': ['AsDescription', 'AsNumber'],
     'Posting': ['Allow', 'Deny'],
     'RealTimePosting': ['Allow', 'Deny'],
     'EditType': ['InDialog', 'InList', 'BothWays'],
@@ -452,20 +460,70 @@ valid_enum_values = {
     'NumberType': ['String', 'Number'],
     'NumberAllowedLength': ['Variable', 'Fixed'],
     'RegisterRecordsDeletion': ['AutoDelete', 'AutoDeleteOnUnpost', 'AutoDeleteOff'],
-    'RegisterRecordsWritingOnPost': ['WriteModified', 'WriteSelected', 'WriteAll'],
+    'RegisterRecordsWritingOnPost': ['WriteModified', 'WriteSelected'],
     'ReturnValuesReuse': ['DontUse', 'DuringRequest', 'DuringSession'],
     'ReuseSessions': ['DontUse', 'Use', 'AutoUse'],
-    'FillChecking': ['DontCheck', 'ShowError', 'ShowWarning'],
+    'FillChecking': ['DontCheck', 'ShowError'],
     'Indexing': ['DontIndex', 'Index', 'IndexWithAdditionalOrder'],
+    # Значения — по XSD платформы; не встреченные в выгрузках БП/УНФ/ERP подтверждены загрузкой и
+    # выгрузкой на 8.3.24 и 8.5.1. Имя с разным смыслом у разных владельцев — только ключом «Контекст.Свойство».
+    'ChoiceFoldersAndItems': ['Items', 'Folders', 'FoldersAndItems'],
+    'NumberPeriodicity': ['Nonperiodical', 'Year', 'Quarter', 'Month', 'Day'],
+    'ParameterUseMode': ['Single', 'Multiple'],
+    'Representation': ['Auto', 'Text', 'Picture', 'PictureAndText'],
+    'OnMainServerUnavalableBehavior': ['Auto', 'MakeDisable', 'DontChangeBehavior'],
+    'FormType': ['Managed', 'Ordinary'],
+    'MoveBoundaryOnPosting': ['DontMove', 'Move'],
+    'SequenceFilling': ['AutoFill', 'AutoFillOff'],
+    'TaskNumberAutoPrefix': ['BusinessProcessNumber', 'DontUse'],
+    'AutoUse': ['DontUse', 'Use'],
+    'DataSeparation': ['DontUse', 'Separate'],
+    'UsersSeparation': ['DontUse', 'Separate'],
+    'AuthenticationSeparation': ['DontUse', 'Separate'],
+    'ConfigurationExtensionsSeparation': ['DontUse', 'Separate'],
+    'SeparatedDataUse': ['Independently', 'IndependentlyAndSimultaneously'],
+    'TemplateType': ['SpreadsheetDocument', 'BinaryData', 'ActiveDocument', 'HTMLDocument', 'TextDocument', 'GeographicalSchema', 'GraphicalSchema', 'DataCompositionSchema', 'DataCompositionAppearanceTemplate', 'AddIn'],
+    'UseInInterfaceCompatibilityMode': ['Any', 'Taxi', 'Version85'],
+    'TypeReductionMode': ['TransformValues', 'DeleteData', 'Deny'],
+    'TransactionsIsolationLevel': ['Auto', 'ReadUncommitted', 'ReadCommitted', 'RepeatableRead', 'Serializable'],
+    'TableType': ['Table', 'Expression'],
+    'TableDataType': ['NonobjectData', 'ObjectData'],
+    'ChoiceDataGetModeOnInputByString': ['Directly', 'Background'],
+    'HTTPMethod': ['GET', 'HEAD', 'PUT', 'POST', 'DELETE', 'PATCH', 'MERGE', 'OPTIONS', 'TRACE', 'CONNECT', 'PROPFIND', 'PROPPATCH', 'MOVE', 'COPY', 'LOCK', 'UNLOCK', 'MKCOL', 'Any'],
+    'TransferDirection': ['In', 'Out', 'InOut'],
+    'ValueChange': ['Clear', 'DontChange'],
+    # QuickChoice у справочника и других ссылочных — булево; перечислением он бывает здесь:
+    'Constant.QuickChoice': ['Auto', 'Use', 'DontUse'],
+    'CommonAttribute.QuickChoice': ['Auto', 'Use', 'DontUse'],
+    'Attribute.QuickChoice': ['Auto', 'Use', 'DontUse'],
+    # Use: у реквизита и ТЧ — для групп/элементов; у состава общего реквизита — Auto/Use/DontUse;
+    # у регламентного задания — булево, у параметра функциональных опций — список (общего ключа нет).
+    'Attribute.Use': ['ForItem', 'ForFolder', 'ForFolderAndItem'],
+    'TabularSection.Use': ['ForItem', 'ForFolder', 'ForFolderAndItem'],
+    'CommonAttributeContent.Use': ['Auto', 'Use', 'DontUse'],
+    # Свойства объекта, которые модель меняет через modify-property и свойства реквизита — как в meta-compile
+    'Category': ['NavigationPanel', 'ActionsPanel', 'FormCommandBar', 'FormNavigationPanel'],
+    'ChoiceHistoryOnInput': ['Auto', 'DontUse'],
+    'ChoiceMode': ['BothWays', 'QuickChoice', 'FromForm'],
+    'CodeSeries': ['WholeCatalog', 'WithinSubordination', 'WithinOwnerSubordination', 'WholeCharacteristicKind', 'WholeChartOfAccounts'],
+    'CreateOnInput': ['Auto', 'Use', 'DontUse'],
+    'FullTextSearchOnInputByString': ['Use', 'DontUse'],
+    'PredefinedDataUpdate': ['Auto', 'DontAutoUpdate', 'AutoUpdate'],
+    'SearchStringModeOnInputByString': ['Begin', 'AnyPart'],
+    'SubordinationUse': ['ToItems', 'ToFolders', 'ToFoldersAndItems'],
 }
 
 
 def normalize_enum_value(prop_name, value):
-    # 1. Check alias dictionary — silent auto-correct
-    if value in enum_value_aliases:
-        return enum_value_aliases[value]
-    # 2. Case-insensitive match against valid values — silent
-    valid = valid_enum_values.get(prop_name)
+    valid = valid_enum_values.get(f"{obj_type}.{prop_name}") or valid_enum_values.get(prop_name)
+    # 1. Check alias dictionary — silent auto-correct. Словарь общий для всех свойств: у свойства со
+    # списком алиас берётся, только если его результат в списке (иначе «None» дало бы Nonperiodical везде)
+    alias_key = next((k for k in enum_value_aliases if k.lower() == value.lower()), None)
+    if alias_key is not None:
+        aliased = enum_value_aliases[alias_key]
+        if not valid or aliased in valid:
+            return aliased
+    # 2. Case-insensitive match against valid values — silent. Список вида объекта — раньше общего.
     if valid:
         for v in valid:
             if v.lower() == value.lower():
@@ -475,6 +533,44 @@ def normalize_enum_value(prop_name, value):
         sys.exit(1)
     # 4. Unknown property — pass-through (no validation data)
     return value
+
+
+def get_enum_field(obj, field, prop_name):
+    """Значение перечисления из поля объекта DSL (реквизит, таблица внешнего источника…). Не задано —
+    только null или пустая строка: false — значение, его проверит список, а не молча заменит умолчание."""
+    if obj is None:
+        return ''
+    v = obj.get(field)
+    if v is None or str(v) == '':
+        return ''
+    return normalize_enum_value(prop_name, str(v))
+
+
+def quick_choice_from_bool(v):
+    """QuickChoice-перечисление (реквизит, константа, общий реквизит) из булева: true → Use, false → DontUse;
+    строки "true"/"false" — так же (строчная форма). Иначе None — значение идёт обычной нормализацией."""
+    if isinstance(v, bool):
+        return 'Use' if v else 'DontUse'
+    if str(v).lower() == 'true':
+        return 'Use'
+    if str(v).lower() == 'false':
+        return 'DontUse'
+    return None
+
+
+def get_child_prop_value(xml_tag, change_prop, change_value):
+    """Значение свойства реквизита/измерения/ресурса/ТЧ. QuickChoice здесь — перечисление (Auto/Use/
+    DontUse): булево — Use/DontUse, как в meta-compile (литерал true/false платформа не примет). Список —
+    контекстный («Attribute.QuickChoice», «TabularSection.Use»), если он есть, иначе общий по свойству."""
+    if change_prop == 'QuickChoice':
+        qcb = quick_choice_from_bool(change_value)
+        if qcb:
+            return qcb
+    if isinstance(change_value, bool):
+        return "true" if change_value else "false"
+    ctx = 'TabularSection' if xml_tag == 'TabularSection' else 'Attribute'
+    enum_key = f"{ctx}.{change_prop}" if f"{ctx}.{change_prop}" in valid_enum_values else change_prop
+    return normalize_enum_value(enum_key, str(change_value))
 
 
 def new_uuid():
@@ -596,7 +692,7 @@ type_synonyms = {
     # который является авторитетом. Расхождение держит tests/skills/check-type-synonyms.mjs.
     "время": "Time",
     "time": "Time",
-    "base64binary": "ValueStorage",
+    "base64binary": "BinaryData",
     "binarydata": "BinaryData",
     "двоичныеданные": "BinaryData",
     "хранилищезначений": "ValueStorage",
@@ -684,6 +780,69 @@ def resolve_type_str(type_str):
     if resolved:
         return resolved
     return type_str
+# Разбор примитивного типа DSL: Number / String / Date / DateTime / Time — с синонимами
+# (decimal, numeric, Число, Строка, Дата …), в любом регистре, с пробелами в скобках.
+# Тело общее у всех навыков-компиляторов (семья в check-inline-drift); умолчание для голого типа
+# зависит от места (хранимый реквизит — 10,0 и 10, СКД — без ограничения) и приходит аргументами.
+# Возврат: None — не примитив (ссылки, Boolean, …); {'error'} — база примитива узнана, а
+# параметры нет (вызывающий сообщает ошибку своим способом); иначе описание квалификаторов.
+def parse_primitive_type(type_str, def_digits, def_fraction, def_length):
+    m = re.match(r'^\s*([^\s(]+)\s*(\(.*)?$', type_str or '')
+    if not m:
+        return None
+    rest = m.group(2) or ''
+    kind = {
+        'number': 'Number', 'decimal': 'Number', 'numeric': 'Number', 'число': 'Number',
+        'string': 'String', 'строка': 'String',
+        'date': 'Date', 'дата': 'Date', 'datetime': 'DateTime', 'датавремя': 'DateTime',
+        'time': 'Time', 'время': 'Time',
+    }.get(m.group(1).lower())
+    if not kind:
+        return None
+    bad = {'error': (f"Invalid type '{type_str}'. Expected Number, Number(D), Number(D,F), Number(D,F,nonneg), "
+                     "String, String(N), String(N,fixed), Date, DateTime, Time")}
+    parts = []
+    if rest:
+        m2 = re.match(r'^\((.*)\)\s*$', rest)
+        if not m2:
+            return bad
+        parts = [p.strip().lower() for p in m2.group(1).split(',')]
+    if kind == 'Number':
+        sign = 'Any'
+        if parts and (parts[-1] == 'nonneg' or parts[-1] == 'any'):
+            if parts[-1] == 'nonneg':
+                sign = 'Nonnegative'
+            parts = parts[:-1]
+        if len(parts) > 2:
+            return bad
+        for p in parts:
+            if not re.match(r'^[0-9]{1,9}$', p):
+                return bad
+        d = int(parts[0]) if len(parts) >= 1 else def_digits
+        f = int(parts[1]) if len(parts) >= 2 else (0 if len(parts) == 1 else def_fraction)
+        # Дробная часть у числа без ограничения (0,F) платформа молча обнуляет — это ошибка ввода
+        if d > 38 or f > d:
+            return bad
+        return {'kind': 'Number', 'digits': d, 'fraction': f, 'sign': sign}
+    if kind == 'String':
+        allowed = 'Variable'
+        if len(parts) == 2:
+            if parts[1] == 'fixed' or parts[1] == 'fix':
+                allowed = 'Fixed'
+            elif parts[1] != 'variable':
+                return bad
+        if len(parts) > 2 or (len(parts) >= 1 and not re.match(r'^[0-9]{1,9}$', parts[0])):
+            return bad
+        length = int(parts[0]) if len(parts) >= 1 else def_length
+        # Фиксированную длину у неограниченной строки платформа молча снимает — это ошибка ввода
+        if allowed == 'Fixed' and length == 0:
+            return bad
+        return {'kind': 'String', 'length': length, 'allowed': allowed}
+    if parts:
+        return bad
+    return {'kind': 'Date', 'fractions': kind}
+
+
 def build_type_content_xml(indent, type_str):
     if not type_str:
         return ""
@@ -706,67 +865,36 @@ def build_type_content_xml(indent, type_str):
         lines.append(f"{indent}<v8:Type>xs:boolean</v8:Type>")
         return "\r\n".join(lines)
 
-    # ValueStorage
+    # ValueStorage (ХранилищеЗначения) — v8:ValueStorage. xs:base64Binary платформа читает как ДвоичныеДанные.
     if type_str == "ValueStorage":
-        lines.append(f"{indent}<v8:Type>xs:base64Binary</v8:Type>")
+        lines.append(f"{indent}<v8:Type>v8:ValueStorage</v8:Type>")
         return "\r\n".join(lines)
 
-    # String or String(N)
-    m = re.match(r"^String(\((\d+)\))?$", type_str)
-    if m:
-        length = m.group(2) if m.group(2) else "10"
-        lines.append(f"{indent}<v8:Type>xs:string</v8:Type>")
-        lines.append(f"{indent}<v8:StringQualifiers>")
-        lines.append(f"{indent}\t<v8:Length>{length}</v8:Length>")
-        lines.append(f"{indent}\t<v8:AllowedLength>Variable</v8:AllowedLength>")
-        lines.append(f"{indent}</v8:StringQualifiers>")
-        return "\r\n".join(lines)
-
-    # Number(D,F) or Number(D,F,nonneg)
-    m = re.match(r"^Number\((\d+),(\d+)(,nonneg)?\)$", type_str)
-    if m:
-        digits = m.group(1)
-        fraction = m.group(2)
-        sign = "Nonnegative" if m.group(3) else "Any"
-        lines.append(f"{indent}<v8:Type>xs:decimal</v8:Type>")
-        lines.append(f"{indent}<v8:NumberQualifiers>")
-        lines.append(f"{indent}\t<v8:Digits>{digits}</v8:Digits>")
-        lines.append(f"{indent}\t<v8:FractionDigits>{fraction}</v8:FractionDigits>")
-        lines.append(f"{indent}\t<v8:AllowedSign>{sign}</v8:AllowedSign>")
-        lines.append(f"{indent}</v8:NumberQualifiers>")
-        return "\r\n".join(lines)
-
-    # Number without params -> Number(10,0)
-    if type_str == "Number":
-        lines.append(f"{indent}<v8:Type>xs:decimal</v8:Type>")
-        lines.append(f"{indent}<v8:NumberQualifiers>")
-        lines.append(f"{indent}\t<v8:Digits>10</v8:Digits>")
-        lines.append(f"{indent}\t<v8:FractionDigits>0</v8:FractionDigits>")
-        lines.append(f"{indent}\t<v8:AllowedSign>Any</v8:AllowedSign>")
-        lines.append(f"{indent}</v8:NumberQualifiers>")
-        return "\r\n".join(lines)
-
-    # Date / DateTime
-    if type_str == "Date":
-        lines.append(f"{indent}<v8:Type>xs:dateTime</v8:Type>")
-        lines.append(f"{indent}<v8:DateQualifiers>")
-        lines.append(f"{indent}\t<v8:DateFractions>Date</v8:DateFractions>")
-        lines.append(f"{indent}</v8:DateQualifiers>")
-        return "\r\n".join(lines)
-
-    if type_str == "DateTime":
-        lines.append(f"{indent}<v8:Type>xs:dateTime</v8:Type>")
-        lines.append(f"{indent}<v8:DateQualifiers>")
-        lines.append(f"{indent}\t<v8:DateFractions>DateTime</v8:DateFractions>")
-        lines.append(f"{indent}</v8:DateQualifiers>")
-        return "\r\n".join(lines)
-
-    # Time — третья доля даты, наравне с Date/DateTime.
-    if type_str == "Time":
-        lines.append(f"{indent}<v8:Type>xs:dateTime</v8:Type>")
-        lines.append(f"{indent}<v8:DateQualifiers>")
-        lines.append(f"{indent}\t<v8:DateFractions>Time</v8:DateFractions>")
-        lines.append(f"{indent}</v8:DateQualifiers>")
+    # Примитивы: String / Number / Date / DateTime / Time. Голый тип хранимого реквизита — String(10)
+    # и Number(10,0), как в meta-compile.
+    prim = parse_primitive_type(type_str, 10, 0, 10)
+    if prim:
+        if prim.get('error'):
+            print(prim['error'], file=sys.stderr)
+            sys.exit(1)
+        if prim['kind'] == 'String':
+            lines.append(f"{indent}<v8:Type>xs:string</v8:Type>")
+            lines.append(f"{indent}<v8:StringQualifiers>")
+            lines.append(f"{indent}\t<v8:Length>{prim['length']}</v8:Length>")
+            lines.append(f"{indent}\t<v8:AllowedLength>{prim['allowed']}</v8:AllowedLength>")
+            lines.append(f"{indent}</v8:StringQualifiers>")
+        elif prim['kind'] == 'Number':
+            lines.append(f"{indent}<v8:Type>xs:decimal</v8:Type>")
+            lines.append(f"{indent}<v8:NumberQualifiers>")
+            lines.append(f"{indent}\t<v8:Digits>{prim['digits']}</v8:Digits>")
+            lines.append(f"{indent}\t<v8:FractionDigits>{prim['fraction']}</v8:FractionDigits>")
+            lines.append(f"{indent}\t<v8:AllowedSign>{prim['sign']}</v8:AllowedSign>")
+            lines.append(f"{indent}</v8:NumberQualifiers>")
+        else:
+            lines.append(f"{indent}<v8:Type>xs:dateTime</v8:Type>")
+            lines.append(f"{indent}<v8:DateQualifiers>")
+            lines.append(f"{indent}\t<v8:DateFractions>{prim['fractions']}</v8:DateFractions>")
+            lines.append(f"{indent}</v8:DateQualifiers>")
         return "\r\n".join(lines)
 
     # UUID
@@ -860,16 +988,24 @@ def build_fill_value_xml(indent, type_str):
 
 
 def build_mltext_xml(indent, tag, text):
-    if not text:
+    # Строка → один язык (ru); словарь { "ru": ..., "en": ... } → по элементу на язык.
+    if isinstance(text, dict):
+        pairs = [(str(k), str(v)) for k, v in text.items()]
+    elif text is not None and str(text):
+        pairs = [("ru", str(text))]
+    else:
+        pairs = []
+    if not pairs:
         return f"{indent}<{tag}/>"
-    lines = [
-        f"{indent}<{tag}>",
-        f"{indent}\t<v8:item>",
-        f"{indent}\t\t<v8:lang>ru</v8:lang>",
-        f"{indent}\t\t<v8:content>{esc_xml_text(text)}</v8:content>",
-        f"{indent}\t</v8:item>",
-        f"{indent}</{tag}>",
-    ]
+    lines = [f"{indent}<{tag}>"]
+    for lang, content in pairs:
+        lines += [
+            f"{indent}\t<v8:item>",
+            f"{indent}\t\t<v8:lang>{lang}</v8:lang>",
+            f"{indent}\t\t<v8:content>{esc_xml_text(content)}</v8:content>",
+            f"{indent}\t</v8:item>",
+        ]
+    lines.append(f"{indent}</{tag}>")
     return "\r\n".join(lines)
 
 
@@ -992,21 +1128,6 @@ def find_element_by_name(container, elem_local_name, name_value):
     return None
 
 
-def find_last_element_of_type(container, local_name):
-    last = None
-    for child in container:
-        if localname(child) == local_name:
-            last = child
-    return last
-
-
-def find_first_element_of_type(container, local_name):
-    for child in container:
-        if localname(child) == local_name:
-            return child
-    return None
-
-
 def ensure_child_objects_open():
     """Ensure ChildObjects element exists and is open (not self-closing empty)."""
     global child_objects_el
@@ -1074,6 +1195,16 @@ def collapse_child_objects_if_empty():
 # ============================================================
 
 
+# Флаг nonneg — то же, что хвост ,nonneg у числового типа; к нечисловому типу не применяется.
+def add_nonneg_flag(type_str, flags):
+    if not type_str or 'nonneg' not in [str(f).lower() for f in (flags or [])]:
+        return type_str
+    prim = parse_primitive_type(resolve_type_str(type_str), 10, 0, 10)
+    if prim and prim.get('kind') == 'Number':
+        return f"Number({prim['digits']},{prim['fraction']},nonneg)"
+    return type_str
+
+
 def parse_attribute_shorthand(val):
     """Parse attribute definition from string shorthand or dict object."""
     if isinstance(val, str):
@@ -1106,6 +1237,7 @@ def parse_attribute_shorthand(val):
         parsed["name"] = colon_parts[0].strip()
         if len(colon_parts) > 1:
             parsed["type"] = colon_parts[1].strip()
+        parsed["type"] = add_nonneg_flag(parsed["type"], parsed["flags"])
 
         parsed["synonym"] = split_camel_case(parsed["name"])
         return parsed
@@ -1128,6 +1260,7 @@ def parse_attribute_shorthand(val):
         "allowNull": val.get("allowNull") is True,
     }
     # Map flags to properties
+    result["type"] = add_nonneg_flag(result["type"], result["flags"])
     if "req" in result["flags"] and not result["fillChecking"]:
         result["fillChecking"] = "ShowError"
     if "index" in result["flags"] and not result["indexing"]:
@@ -1193,6 +1326,33 @@ RESERVED_ATTR_NAMES_RU = {
     'Счет', 'ТипЗначения', 'ПериодДействияБазовый',
 }
 
+
+def reserved_command_names():
+    """Имена стандартных команд вида — англ. и рус., в нижнем регистре: команда объекта с таким именем
+    не загрузится («Имя команды не может совпадать с именем стандартной команды»; регистр не важен, от
+    UseStandardCommands не зависит — замер 8.3.24/8.3.27). Вида нет в карте — ограничения нет
+    (перечисление, план обмена; критерий отбора и таблица внешнего источника не замерены)."""
+    open_list = {"openlist", "открытьсписок"}
+    create = {"create", "создать"}
+    folder = {"createfolder", "создатьгруппу"}
+    by_value = {"openbyvalue", "открытьпозначению"}
+    based_on = {"createbasedon", "создатьнаосновании"}
+    return {
+        "Catalog":                    open_list | create | folder | by_value | based_on,
+        "ChartOfCharacteristicTypes": open_list | create | folder | based_on,
+        "Task":                       open_list | create | by_value | based_on,
+        "Document":                   open_list | create | based_on,
+        "BusinessProcess":            open_list | create | based_on,
+        "ChartOfAccounts":            open_list | create | based_on,
+        "ChartOfCalculationTypes":    open_list | create | based_on,
+        "InformationRegister":        open_list | create | by_value,
+        "AccumulationRegister":       open_list,
+        "AccountingRegister":         open_list,
+        "CalculationRegister":        open_list,
+        "DocumentJournal":            open_list,
+        "DataProcessor":              {"open", "открыть"},
+        "Report":                     {"open", "открыть"},
+    }
 
 # Стандартные реквизиты по типу объекта (EN + RU). Совпадение имени реквизита с ними платформа
 # не позволит — жёсткий отказ. Контексты вне карты → предупреждение по плоскому списку.
@@ -1716,13 +1876,58 @@ valid_child_types = {
     "Table": ["fields", "forms", "templates", "commands"],
 }
 
-# Canonical child order in ChildObjects
-child_order = [
-    "Resource", "Dimension", "Attribute", "TabularSection", "Field", "Table", "Function",
-    "AccountingFlag", "ExtDimensionAccountingFlag",
-    "EnumValue", "Column", "AddressingAttribute", "Recalculation",
-    "Form", "Template", "Command",
-]
+def object_child_order():
+    """Порядок групп в <ChildObjects> объекта по виду. Это xs:sequence <Вид>ChildObjects из MDClasses XSD,
+    сверенный выгрузкой платформы: выгрузка сама ставит группы в этот порядок, так что вставка не на место
+    даёт дифф при следующей выгрузке. Единого порядка нет — у документа Form стоит до TabularSection."""
+    return {
+        "Catalog":                    ["Attribute", "TabularSection", "Form", "Template", "Command"],
+        "Document":                   ["Attribute", "Form", "TabularSection", "Template", "Command"],
+        "ExchangePlan":               ["Attribute", "TabularSection", "Form", "Template", "Command"],
+        "ChartOfCharacteristicTypes": ["Attribute", "TabularSection", "Form", "Template", "Command"],
+        "ChartOfAccounts":            ["Attribute", "TabularSection", "AccountingFlag", "ExtDimensionAccountingFlag", "Form", "Template", "Command"],
+        "ChartOfCalculationTypes":    ["Attribute", "TabularSection", "Form", "Template", "Command"],
+        "BusinessProcess":            ["Attribute", "TabularSection", "Form", "Template", "Command"],
+        "Task":                       ["Attribute", "TabularSection", "Form", "Template", "AddressingAttribute", "Command"],
+        "DataProcessor":              ["Attribute", "TabularSection", "Form", "Template", "Command"],
+        "Report":                     ["Attribute", "TabularSection", "Form", "Template", "Command"],
+        "ExternalDataProcessor":      ["Attribute", "TabularSection", "Form", "Template"],
+        "ExternalReport":             ["Attribute", "TabularSection", "Form", "Template"],
+        "Enum":                       ["EnumValue", "Form", "Template", "Command"],
+        "InformationRegister":        ["Resource", "Attribute", "Dimension", "Form", "Template", "Command"],
+        "AccumulationRegister":       ["Resource", "Attribute", "Dimension", "Form", "Template", "Command"],
+        "AccountingRegister":         ["Dimension", "Resource", "Attribute", "Form", "Template", "Command"],
+        "CalculationRegister":        ["Resource", "Attribute", "Dimension", "Recalculation", "Form", "Template", "Command"],
+        "DocumentJournal":            ["Column", "Form", "Template", "Command"],
+        "Table":                      ["Field", "Form", "Command", "Template"],
+        "ExternalDataSource":         ["Table", "Cube", "Function"],
+        "Cube":                       ["DimensionTable", "Dimension", "Resource", "Form", "Command", "Template"],
+        "DimensionTable":             ["Field", "Form", "Command", "Template"],
+        "FilterCriterion":            ["Form", "Command"],
+        "SettingsStorage":            ["Form", "Template"],
+        "TabularSection":             ["Attribute"],
+    }
+
+
+def find_child_anchor(container, tag, obj_type):
+    """Элемент <ChildObjects>, ПЕРЕД которым встаёт новый <tag>; None — дописать в конец.
+    Сразу за последним элементом своего тега, иначе перед первым элементом группы, идущей
+    по канону вида позже. Вид или тег вне канона — None, как раньше."""
+    children = [c for c in container if isinstance(c.tag, str)]
+    last_idx = -1
+    for i, c in enumerate(children):
+        if c.tag.rsplit('}', 1)[-1] == tag:
+            last_idx = i
+    if last_idx >= 0:
+        return children[last_idx + 1] if last_idx + 1 < len(children) else None
+    order = object_child_order().get(obj_type)
+    if not order or tag not in order:
+        return None
+    later = order[order.index(tag) + 1:]
+    for c in children:
+        if c.tag.rsplit('}', 1)[-1] in later:
+            return c
+    return None
 
 # Map from DSL child type to XML element name
 child_type_to_xml_tag = {
@@ -1890,7 +2095,7 @@ def emit_eds_table_properties(indent, src_name, table_name, t, char_xml, default
     else:
         X(f'{i}<Comment/>')
 
-    table_type = str(t.get('tableType') or 'Table')
+    table_type = normalize_enum_value('TableType', str(t['tableType'])) if t.get('tableType') else 'Table'
     X(f'{i}<TableType>{table_type}</TableType>')
     # Имя в источнике по умолчанию равно имени объекта — так поступает и платформа.
     if t.get('nameInDataSource'):
@@ -1902,7 +2107,7 @@ def emit_eds_table_properties(indent, src_name, table_name, t, char_xml, default
     X(f'{i}<NameInDataSource>{esc_xml_text(nids)}</NameInDataSource>' if nids else f'{i}<NameInDataSource/>')
     expr = str(t.get('expressionInDataSource') or t.get('expression') or '')
     X(f'{i}<ExpressionInDataSource>{esc_xml_text(expr)}</ExpressionInDataSource>' if expr else f'{i}<ExpressionInDataSource/>')
-    X(f'{i}<TableDataType>{t.get("tableDataType") or "NonobjectData"}</TableDataType>')
+    X(f'{i}<TableDataType>{normalize_enum_value("TableDataType", str(t["tableDataType"])) if t.get("tableDataType") else "NonobjectData"}</TableDataType>')
 
     emit_eds_field_ref_list(i, 'KeyFields', t.get('keyFields'), src_name, table_name)
     emit_eds_field_ref_scalar(i, 'PresentationField', t.get('presentationField'), src_name, table_name)
@@ -1932,10 +2137,10 @@ def emit_eds_table_properties(indent, src_name, table_name, t, char_xml, default
     else:
         ibs = None
     emit_eds_field_ref_list(i, 'InputByString', ibs, src_name, table_name)
-    X(f'{i}<CreateOnInput>{t.get("createOnInput") or "Auto"}</CreateOnInput>')
-    X(f'{i}<SearchStringModeOnInputByString>{t.get("searchStringModeOnInputByString") or "Begin"}</SearchStringModeOnInputByString>')
-    X(f'{i}<ChoiceDataGetModeOnInputByString>{t.get("choiceDataGetModeOnInputByString") or "Directly"}</ChoiceDataGetModeOnInputByString>')
-    X(f'{i}<ChoiceHistoryOnInput>{t.get("choiceHistoryOnInput") or "Auto"}</ChoiceHistoryOnInput>')
+    X(f'{i}<CreateOnInput>{get_enum_field(t, "createOnInput", "CreateOnInput") or "Auto"}</CreateOnInput>')
+    X(f'{i}<SearchStringModeOnInputByString>{get_enum_field(t, "searchStringModeOnInputByString", "SearchStringModeOnInputByString") or "Begin"}</SearchStringModeOnInputByString>')
+    X(f'{i}<ChoiceDataGetModeOnInputByString>{normalize_enum_value("ChoiceDataGetModeOnInputByString", str(t["choiceDataGetModeOnInputByString"])) if t.get("choiceDataGetModeOnInputByString") else "Directly"}</ChoiceDataGetModeOnInputByString>')
+    X(f'{i}<ChoiceHistoryOnInput>{get_enum_field(t, "choiceHistoryOnInput", "ChoiceHistoryOnInput") or "Auto"}</ChoiceHistoryOnInput>')
 
     # Пустая строка — четыре слота всё равно обязаны быть: в свойствах таблицы их ровно 38.
     if default_forms_xml:
@@ -1949,9 +2154,9 @@ def emit_eds_table_properties(indent, src_name, table_name, t, char_xml, default
         emit_mltext(i, pres_tag, t.get(key))
     X(f'{i}<IncludeHelpInContents>{"true" if t.get("includeHelpInContents") is True else "false"}</IncludeHelpInContents>')
     X(f'{i}<ReadOnly>{"true" if t.get("readOnly") is True else "false"}</ReadOnly>')
-    X(f'{i}<TransactionsIsolationLevel>{t.get("transactionsIsolationLevel") or "Auto"}</TransactionsIsolationLevel>')
+    X(f'{i}<TransactionsIsolationLevel>{normalize_enum_value("TransactionsIsolationLevel", str(t["transactionsIsolationLevel"])) if t.get("transactionsIsolationLevel") else "Auto"}</TransactionsIsolationLevel>')
     emit_eds_field_ref_scalar(i, 'DataVersionField', t.get('dataVersionField'), src_name, table_name)
-    X(f'{i}<EditType>{t.get("editType") or "InDialog"}</EditType>')
+    X(f'{i}<EditType>{get_enum_field(t, "editType", "EditType") or "InDialog"}</EditType>')
     emit_md_ref_list(i, 'BasedOn', t.get('basedOn'))
     emit_eds_field_ref_list(i, 'DataLockFields', t.get('dataLockFields'), src_name, table_name)
     X(f'{i}<DataLockControlMode>{t.get("dataLockControlMode") or "Automatic"}</DataLockControlMode>')
@@ -2237,8 +2442,9 @@ def convert_inline_to_definition(operation, value):
 # ============================================================
 
 
-def find_insertion_point(xml_tag, parsed):
-    """Find reference node for insertion. Returns element or None (meaning append)."""
+def find_insertion_point(xml_tag, parsed, kind=None):
+    """Find reference node for insertion. Returns element or None (meaning append).
+    kind — вид владельца контейнера для канона (по умолчанию вид объекта; для ТЧ — TabularSection)."""
     if child_objects_el is None:
         return None
 
@@ -2249,44 +2455,23 @@ def find_insertion_point(xml_tag, parsed):
     if after_name:
         after_el = find_element_by_name(child_objects_el, xml_tag, after_name)
         if after_el is not None:
-            # Insert after = insert before the next element sibling
+            # Insert after = insert before the next element sibling, какого бы вида он ни был:
+            # за последним элементом группы идёт уже следующая группа, а не конец ChildObjects
             nxt = after_el.getnext()
             while nxt is not None and not isinstance(nxt.tag, str):
                 nxt = nxt.getnext()
-            if nxt is not None and localname(nxt) == xml_tag:
-                return nxt
-            return None  # append
+            return nxt
         else:
-            warn(f"after='{after_name}': element '{after_name}' not found in {xml_tag}, appending")
+            warn(f"after='{after_name}': element '{after_name}' not found in {xml_tag}, using default position")
 
     if before_name:
         before_el = find_element_by_name(child_objects_el, xml_tag, before_name)
         if before_el is not None:
             return before_el
-        warn(f"before='{before_name}': element '{before_name}' not found in {xml_tag}, appending")
+        warn(f"before='{before_name}': element '{before_name}' not found in {xml_tag}, using default position")
 
-    # Default: after last element of this type, or in canonical position
-    last_of_type = find_last_element_of_type(child_objects_el, xml_tag)
-    if last_of_type is not None:
-        nxt = last_of_type.getnext()
-        while nxt is not None and not isinstance(nxt.tag, str):
-            nxt = nxt.getnext()
-        return nxt  # None means append (correct: after last of type)
-
-    # No elements of this type yet -- find canonical position
-    if xml_tag in child_order:
-        tag_idx = child_order.index(xml_tag)
-    else:
-        return None
-
-    # Find first element of any type that comes AFTER in the canonical order
-    for i in range(tag_idx + 1, len(child_order)):
-        next_tag = child_order[i]
-        first_of_next = find_first_element_of_type(child_objects_el, next_tag)
-        if first_of_next is not None:
-            return first_of_next
-
-    return None  # append at end
+    # Default: after last element of this type, or in canonical position of the owner kind
+    return find_child_anchor(child_objects_el, xml_tag, kind or obj_type)
 
 
 def process_add(add_def):
@@ -2513,6 +2698,8 @@ def process_add(add_def):
                 if item_name in existing_names:
                     warn(f"Command '{item_name}' already exists, skipping")
                     continue
+                if item_name.lower() in reserved_command_names().get(obj_type, set()):
+                    die(f"meta-edit: имя команды '{item_name}' совпадает со стандартной командой объекта '{obj_type}'. Выберите другое имя.")
                 # У команды есть модуль обработчика (Commands/<Имя>/Ext/CommandModule.bsl) — в корпусе
                 # он есть у всех команд без исключения. Пишем ту же заготовку, что и meta-compile.
                 cmd_ext_dir = os.path.join(os.path.dirname(resolved_path), obj_name, "Commands", item_name, "Ext")
@@ -2610,6 +2797,20 @@ def modify_properties(props_def):
             else:
                 die(f"Property '{prop_name}': could not create element")
 
+        # Многоязычная строка (синоним, представления, пояснение…): простой текст в таком теге платформа
+        # не загружает. Узел заменяется целиком — и пустой, и уже заполненный.
+        if prop_name in local_string_object_props:
+            ml_nodes = import_fragment(build_mltext_xml(get_child_indent(properties_el), prop_name, prop_value))
+            if ml_nodes:
+                idx = list(properties_el).index(prop_el)
+                ml_nodes[0].tail = prop_el.tail
+                properties_el.insert(idx + 1, ml_nodes[0])
+                remove_node_with_whitespace(prop_el)
+                shown = '; '.join(f"{k}: {v}" for k, v in prop_value.items()) if isinstance(prop_value, dict) else str(prop_value)
+                info(f"Modified property: {prop_name} = {shown}")
+                modify_count += 1
+            continue
+
         # Handle boolean values
         value_str = str(prop_value)
         if isinstance(prop_value, bool):
@@ -2639,7 +2840,9 @@ def modify_properties(props_def):
         # Значение свойства-перечисления приводим к канону (как это делает meta-compile): иначе
         # в XML уезжает то, что дала модель, и платформа отвергает выгрузку уже при загрузке.
         # Неизвестное свойство функция пропускает как есть, неизвестное значение — отвергает.
-        value_str = normalize_enum_value(prop_name, value_str)
+        # QuickChoice константы и общего реквизита — перечисление: булево → Use/DontUse, как в meta-compile.
+        qcb = quick_choice_from_bool(prop_value) if prop_name == 'QuickChoice' and f"{obj_type}.QuickChoice" in valid_enum_values else None
+        value_str = qcb or normalize_enum_value(prop_name, value_str)
 
         # Set inner text — clear children first, set text
         for ch in list(prop_el):
@@ -2647,6 +2850,18 @@ def modify_properties(props_def):
         prop_el.text = value_str
         info(f"Modified property: {prop_name} = {value_str}")
         modify_count += 1
+
+        # Код/номер нулевой длины не может стоять во вводе по строке: платформа отвергает загрузку —
+        # «Указано неверное поле для ввода по строке: Код/Номер». Убираем поле вслед за длиной.
+        if prop_name in ('CodeLength', 'NumberLength') and value_str.strip() == '0':
+            std_attr = 'Code' if prop_name == 'CodeLength' else 'Number'
+            ib_el = next((c for c in properties_el if isinstance(c.tag, str) and localname(c) == 'InputByString'), None)
+            if ib_el is not None:
+                cur = [(c.text or '').strip() for c in ib_el if isinstance(c.tag, str)]
+                keep = [v for v in cur if not v.endswith(f'.StandardAttribute.{std_attr}')]
+                if len(keep) < len(cur):
+                    set_complex_property('InputByString', keep)
+                    info(f"InputByString: removed StandardAttribute.{std_attr} ({prop_name}=0 — a zero-length field cannot be an input-by-string field)")
 
 
 def modify_child_elements(modify_def, child_type):
@@ -2659,7 +2874,13 @@ def modify_child_elements(modify_def, child_type):
     for elem_name, changes in modify_def.items():
         el = find_element_by_name(child_objects_el, xml_tag, elem_name)
         if el is None:
-            die(f"{xml_tag} '{elem_name}' not found for modify")
+            # ТЧ заимствованного объекта появляется в расширении только заимствованием — подсказать как
+            hint = ""
+            belonging = find_property_element("ObjectBelonging")
+            if xml_tag == "TabularSection" and belonging is not None and (belonging.text or "") == "Adopted":
+                hint = (f" — in an extension, borrow it first: cfe-borrow -Object "
+                        f"{obj_type}.{obj_name}.TabularSection.{elem_name}")
+            die(f"{xml_tag} '{elem_name}' not found for modify{hint}")
 
         # Find Properties inside the element
         props_el = None
@@ -2702,7 +2923,7 @@ def modify_child_elements(modify_def, child_type):
                         nodes = import_fragment(fragment_xml)
                         saved_co = child_objects_el
                         child_objects_el = ts_child_obj_el
-                        ref_node = find_insertion_point("Attribute", parsed)
+                        ref_node = find_insertion_point("Attribute", parsed, "TabularSection")
                         child_objects_el = saved_co
                         for node in nodes:
                             insert_before_element(ts_child_obj_el, node, ref_node, ts_attr_indent)
@@ -2744,6 +2965,8 @@ def modify_child_elements(modify_def, child_type):
                 if name_el is not None:
                     old_name = (name_el.text or "").strip()
                     new_name = str(change_value)
+                    if xml_tag == "Command" and new_name.lower() in reserved_command_names().get(obj_type, set()):
+                        die(f"meta-edit: имя команды '{new_name}' совпадает со стандартной командой объекта '{obj_type}'. Выберите другое имя.")
                     name_el.text = new_name
 
                     # Update Synonym if it was auto-generated
@@ -2891,11 +3114,7 @@ def modify_child_elements(modify_def, child_type):
                         scalar_el = gc
                         break
                 if scalar_el is not None:
-                    value_str = str(change_value)
-                    if isinstance(change_value, bool):
-                        value_str = "true" if change_value else "false"
-                    else:
-                        value_str = normalize_enum_value(change_prop, value_str)
+                    value_str = get_child_prop_value(xml_tag, change_prop, change_value)
                     # Clear children and set text
                     for ch in list(scalar_el):
                         scalar_el.remove(ch)
@@ -2907,11 +3126,7 @@ def modify_child_elements(modify_def, child_type):
                     if change_prop not in known_child_props:
                         print(f"meta-edit: modify: неизвестное свойство '{change_prop}' у {xml_tag} '{elem_name}' (опечатка?)", file=sys.stderr)
                         sys.exit(1)
-                    value_str = str(change_value)
-                    if isinstance(change_value, bool):
-                        value_str = "true" if change_value else "false"
-                    else:
-                        value_str = normalize_enum_value(change_prop, value_str)
+                    value_str = get_child_prop_value(xml_tag, change_prop, change_value)
                     new_nodes = import_fragment(f"<{change_prop}>{esc_xml_text(value_str)}</{change_prop}>")
                     if new_nodes:
                         insert_property_in_order(props_el, new_nodes[0], attr_prop_order, change_prop)
@@ -3030,6 +3245,13 @@ child_modify_keys = [
     "add", "remove", "modify", "name", "type", "synonym", "Format", "EditFormat", "ToolTip", "ChoiceForm", "MinValue",
     "MaxValue", "LinkByType", "ChoiceParameterLinks", "ChoiceParameters", "FillValue",
 ]
+
+# Свойства объекта типа LocalStringType (XSD MDClasses) — modify-property пишет их многоязычной строкой.
+local_string_object_props = {
+    'Synonym', 'ToolTip', 'Explanation', 'ObjectPresentation', 'ExtendedObjectPresentation', 'ListPresentation',
+    'ExtendedListPresentation', 'RecordPresentation', 'ExtendedRecordPresentation', 'ExtendedPresentation',
+    'Format', 'EditFormat',
+}
 
 known_child_props = {
     'AccountingFlag', 'Balance', 'BaseDimension', 'ChoiceFoldersAndItems', 'ChoiceForm', 'ChoiceHistoryOnInput',
@@ -3203,7 +3425,7 @@ def build_choice_parameter_links_xml(indent, cpl):
             elif re.match(r'^(dontchange|неизменять|неменять|нет)$', low):
                 vc = 'DontChange'
             else:
-                vc = str(vc_raw)
+                vc = normalize_enum_value('ValueChange', str(vc_raw))
         parts.append(f"{indent}\t<xr:Link>")
         parts.append(f"{indent}\t\t<xr:Name>{esc_xml_text(str(name) if name is not None else '')}</xr:Name>")
         parts.append(f'{indent}\t\t<xr:DataPath xsi:type="xs:string">{esc_xml_text(str(dp) if dp is not None else "")}</xr:DataPath>')
@@ -3400,19 +3622,19 @@ def esc_xml_text(s):
 
 def get_fill_type_category(type_str):
     if not type_str:
-        return 'String'
+        return 'String'          # реквизит без типа → неквалифиц. строка
     if '+' in type_str:
-        return 'Other'
+        return 'Other'           # составной тип → nil-дефолт
     t = resolve_type_str(type_str)
     if re.match(r'^Boolean$', t):
         return 'Boolean'
-    if re.match(r'^String(\(|$)', t):
-        return 'String'
-    if re.match(r'^Number(\(|$)', t):
-        return 'Number'
-    if re.match(r'^(Date|DateTime)$', t):
-        return 'Date'
-    return 'Other'
+    prim = parse_primitive_type(t, 10, 0, 10)
+    if prim and not prim.get('error'):
+        if prim['kind'] != 'Date':
+            return prim['kind']
+        if prim['fractions'] != 'Time':
+            return 'Date'
+    return 'Other'               # ссылки, TypeSet, ValueStorage, … → nil-дефолт
 
 
 def expand_fill_short_ref(s, type_str):

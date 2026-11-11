@@ -1,4 +1,4 @@
-﻿# subsystem-validate v1.6 — Validate 1C subsystem XML structure
+﻿# subsystem-validate v1.8 — Validate 1C subsystem XML structure
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 [CmdletBinding(PositionalBinding=$false)]
 param(
@@ -56,7 +56,7 @@ function Find-DumpAnchor([string]$startDir) {
 
 # --- Resolve path ---
 if (-not [System.IO.Path]::IsPathRooted($SubsystemPath)) {
-	$SubsystemPath = Join-Path (Get-Location).Path $SubsystemPath
+	$SubsystemPath = Join-Path (Get-Location).ProviderPath $SubsystemPath
 }
 if (Test-Path $SubsystemPath -PathType Container) {
 	$dirName = Split-Path $SubsystemPath -Leaf
@@ -82,7 +82,7 @@ if (-not (Test-Path $SubsystemPath)) {
 	Write-Host "[ERROR] File not found: $SubsystemPath"
 	exit 1
 }
-$resolvedPath = (Resolve-Path $SubsystemPath).Path
+$resolvedPath = (Resolve-Path $SubsystemPath).ProviderPath
 
 # --- Output infrastructure ---
 $script:errors = 0
@@ -413,6 +413,7 @@ if ($script:errors -eq 0 -and $script:warnings -eq 0 -and -not $Detailed) {
 	$result = "=== Validation OK: Subsystem.$subName ($checks checks) ==="
 } else {
 	Out-Line ""
+	if ($script:stopped -and $script:errors -ge $MaxErrors) { Out-Line "Stopped after $MaxErrors errors. Fix and re-run." }
 	Out-Line "=== Result: $($script:errors) errors, $($script:warnings) warnings ($checks checks) ==="
 	$result = $script:output.ToString()
 }
@@ -421,7 +422,7 @@ Write-Host $result
 
 if ($OutFile) {
 	if (-not [System.IO.Path]::IsPathRooted($OutFile)) {
-		$OutFile = Join-Path (Get-Location).Path $OutFile
+		$OutFile = Join-Path (Get-Location).ProviderPath $OutFile
 	}
 	$utf8Bom = New-Object System.Text.UTF8Encoding($true)
 	[System.IO.File]::WriteAllText($OutFile, $result, $utf8Bom)

@@ -1,4 +1,4 @@
-﻿# epf-validate v1.8 — Validate 1C external data processor / report structure
+﻿# epf-validate v1.12 — Validate 1C external data processor / report structure
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 # Works for both EPF (ExternalDataProcessor) and ERF (ExternalReport) — auto-detects
 [CmdletBinding(PositionalBinding=$false)]
@@ -20,7 +20,7 @@ $ErrorActionPreference = "Stop"
 # --- Resolve path ---
 
 if (-not [System.IO.Path]::IsPathRooted($ObjectPath)) {
-	$ObjectPath = Join-Path (Get-Location).Path $ObjectPath
+	$ObjectPath = Join-Path (Get-Location).ProviderPath $ObjectPath
 }
 
 if (Test-Path $ObjectPath -PathType Container) {
@@ -57,7 +57,7 @@ if (-not (Test-Path $ObjectPath)) {
 	exit 1
 }
 
-$resolvedPath = (Resolve-Path $ObjectPath).Path
+$resolvedPath = (Resolve-Path $ObjectPath).ProviderPath
 $srcDir = Split-Path $resolvedPath -Parent
 
 # --- Output infrastructure ---
@@ -100,6 +100,7 @@ $finalize = {
 		$result = "=== Validation OK: $shortType.$objName ($checks checks) ==="
 	} else {
 		Out-Line ""
+		if ($script:stopped -and $script:errors -ge $MaxErrors) { Out-Line "Stopped after $MaxErrors errors. Fix and re-run." }
 		Out-Line "=== Result: $($script:errors) errors, $($script:warnings) warnings ($checks checks) ==="
 		$result = $script:output.ToString()
 	}
@@ -162,7 +163,7 @@ $childTypeOrder = @{
 }
 
 $validPropertyValues = @{
-	"FillChecking" = @("DontCheck","ShowError","ShowWarning")
+	"FillChecking" = @("DontCheck","ShowError")
 	"Indexing"     = @("DontIndex","Index","IndexWithAdditionalOrder")
 }
 
@@ -426,7 +427,7 @@ if ($childObjNode) {
 		$childTag = $child.LocalName
 
 		if ($childTag -eq "Command") {
-			Report-Error "4. ChildObjects: Command — у внешней обработки/отчёта команд объекта нет, платформа выбросит его при сборке"
+			Report-Error "4. ChildObjects: Command — external data processors/reports have no object commands; the platform drops it on build"
 			$check4Ok = $false
 			continue
 		}
@@ -799,7 +800,7 @@ if (Test-Path $objModule) {
 # Модуля менеджера у внешней обработки/отчёта нет: платформа выбрасывает файл без сообщения.
 $mgrModule = Join-Path (Join-Path $objDir "Ext") "ManagerModule.bsl"
 if (Test-Path $mgrModule) {
-	Report-Error "9. Ext/ManagerModule.bsl — у внешней обработки/отчёта нет модуля менеджера, платформа выбросит его молча"
+	Report-Error "9. Ext/ManagerModule.bsl — external data processors/reports have no manager module; the platform drops it silently"
 	$check9Ok = $false
 }
 

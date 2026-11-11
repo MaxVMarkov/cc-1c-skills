@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# web-publish v1.12 — Publish 1C infobase via Apache (+_version_dir/_version_key: общий эталон db-семейства)
+# web-publish v1.17 — Publish 1C infobase via Apache (+_version_dir/_version_key: общий эталон db-семейства)
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 
 """
@@ -74,6 +74,62 @@ def same_path(a, b):
         return False
 
 
+def clean_path(value, param=""):
+    """Forgive what is unambiguous in a path the caller passed: surrounding whitespace,
+    surrounding quotes that survived shell parsing, a trailing separator. A quote left
+    inside afterwards cannot be part of a real path — reject it by name instead of letting
+    1C answer with its opaque "Неверные или отсутствующие параметры соединения"."""
+    if not value:
+        return value
+    v = value.strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+        v = v[1:-1].strip()
+    # «C:x» — от текущего каталога диска C, своего у каждого процесса: смысл не угадать, почти
+    # всегда это опечатка в «C:\x». Отказ с подсказкой, а не путь «где-то» у платформы.
+    if os.name == "nt" and re.match(r"^[A-Za-z]:(?![\\/])", v):
+        drive = v[:2]
+        print(f"Error: {param or 'path'} is relative to the current directory of drive {drive} ({value})"
+              f" - use {drive}\\{v[2:]} or a path without a drive")
+        sys.exit(1)
+    if len(v) > 3 and v[-1] in "\\/":
+        v = v[:-1]
+    if '"' in v:
+        print(f"Error: {param or 'path'} contains a quote character: {value}")
+        sys.exit(1)
+    return v
+
+
+def resolve_infobase_path(path):
+    """Относительный путь к базе — от корня проекта (каталог .v8-project.json, вверх от рабочего
+    каталога), как configSrc; без файла проекта — от рабочего каталога. Платформе уходит только
+    абсолютный: ibcmd считает относительный --db-path от каталога --data, а он у навыков временный."""
+    if not path:
+        return path
+    # Абсолютный на Windows — только с диском и разделителем или UNC, как в PS-порте; «\\x» берёт
+    # диск базового каталога (os.path.join); «C:x» отклоняет ещё clean_path. На POSIX — os.path.isabs.
+    absolute = re.match(r"^([A-Za-z]:[\\/]|[\\/]{2})", path) if os.name == "nt" else os.path.isabs(path)
+    if not absolute:
+        cwd = os.getcwd()
+        base = cwd
+        d = cwd
+        for _ in range(20):
+            if not d:
+                break
+            if os.path.isfile(os.path.join(d, ".v8-project.json")):
+                base = d
+                break
+            parent = os.path.dirname(d)
+            if parent == d:
+                break
+            d = parent
+        path = os.path.abspath(os.path.join(base, path))
+    # Хвостовые разделители срезаются, но корень («C:\\», на POSIX «/») остаётся корнем
+    seps, keep = ("\\/", 3) if os.name == "nt" else ("/", 1)
+    while len(path) > keep and path[-1] in seps:
+        path = path[:-1]
+    return path
+
+
 def find_project_database(args):
     """Запись базы в реестре, соответствующая переданному соединению. None, если не найдена."""
     pf = _sg_find_v8project(os.getcwd())
@@ -85,7 +141,7 @@ def find_project_database(args):
     except Exception:
         return None
     for db in proj.get("databases") or []:
-        if args.InfoBasePath and db.get("path") and same_path(db["path"], args.InfoBasePath):
+        if args.InfoBasePath and db.get("path") and same_path(os.path.join(os.path.dirname(pf), db["path"]), args.InfoBasePath):
             return db
         if args.InfoBaseServer and args.InfoBaseRef and db.get("server") and db.get("ref"):
             if (db["server"].lower() == args.InfoBaseServer.lower()
@@ -185,6 +241,8 @@ def main():
     parser.add_argument('-Port', type=int, default=8081, help='Port (default: 8081)')
     parser.add_argument('-Manual', action='store_true', help='Do not download Apache — only check and give instructions')
     args = ci_parse_args(parser)
+    args.InfoBasePath = clean_path(args.InfoBasePath, "-InfoBasePath")
+    args.InfoBasePath = resolve_infobase_path(args.InfoBasePath)
 
     # --- Resolve V8Path ---
     v8_path = args.V8Path

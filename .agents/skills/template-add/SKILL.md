@@ -87,5 +87,5 @@ python ".agents/skills/template-add/scripts/add-template.py" -ObjectName "Отч
 
 ## Что модифицируется
 
-- `<SrcDir>/<ObjectName>.xml` — добавляется `<Template>` в конец `ChildObjects`
+- `<SrcDir>/<ObjectName>.xml` — добавляется `<Template>` в `ChildObjects`
 - Для ExternalReport/Report: может обновляться `MainDataCompositionSchema`

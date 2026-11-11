@@ -1,4 +1,4 @@
-// web-test dom shared v1.10 — embedded JS function constants
+// web-test dom shared v1.13 — embedded JS function constants
 // Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 /**
  * Shared function strings embedded into page.evaluate() generators.
@@ -106,6 +106,23 @@ export const TEXT_CLICK_POINT_FN = `function textClickPoint(el) {
  * @param base  element id prefix without suffix, e.g. `form1_ГруппаТовары`
  * @returns `true` collapsed, `false` expanded, `null` when the layout is unrecognised.
  */
+/**
+ * HTML document fields (ПолеHTMLДокумента) of the form with prefix p → [{ name, label?, visible }].
+ * Rendered as `<div id="form{N}_{Имя}" class="htmlDocContainer"><iframe>`; a spreadsheet field is
+ * `.moxelContainer` with iframes of its own, so the class is what tells them apart. The iframe is
+ * created only when the field is first shown (inactive page, collapsed group, Видимость=Ложь)
+ * and stays, 0×0, after it is hidden again — visible = iframe present and non-zero size.
+ */
+export const HTML_FIELDS_FN = `function htmlFields(p) {
+  return [...document.querySelectorAll('[id^="' + p + '"].htmlDocContainer')].map(c => {
+    const name = c.id.slice(p.length);
+    const t = document.getElementById(c.id + '#title_text');
+    const label = t ? (t.innerText || '').trim().replace(/:\\s*$/, '').replace(/\\u00a0/g, ' ') : '';
+    const visible = !!c.querySelector(':scope > iframe') && c.offsetWidth > 0 && c.offsetHeight > 0;
+    return label ? { name, label, visible } : { name, visible };
+  });
+}`;
+
 export const GROUP_STATE_FN = `function groupCollapsed(base) {
   const panelDiv = document.getElementById(base + '#panel_div');
   if (panelDiv) return getComputedStyle(panelDiv).display === 'none';
@@ -433,7 +450,7 @@ function resolveColumnByName(model, name) {
 // детектировалась (form=null). ANY_SEL добавляет контентные/интерактивные классы декораций, чтобы
 // такие формы регистрировались. form0 (рабочий стол, тоже полон гиперссылок) исключается фильтром n>0.
 const FORM_DETECT_EDIT_SEL = 'input.editInput[id], textarea[id], a.press[id]';
-const FORM_DETECT_ANY_SEL = FORM_DETECT_EDIT_SEL + ', .staticTextHyper[id], .frameButton[id], .checkbox[id], .radio[id], .tumblerItem[id], .grid[id]';
+const FORM_DETECT_ANY_SEL = FORM_DETECT_EDIT_SEL + ', .staticTextHyper[id], .frameButton[id], .checkbox[id], .radio[id], .tumblerItem[id], .grid[id], .htmlDocContainer[id]';
 
 /** Detect active form number. Picks form with most visible elements, skipping form0.
  *  When modalSurface is visible — prefer the highest-numbered form (modal dialog). */
@@ -468,23 +485,24 @@ function detectForm() {
   return pool.reduce((best, n) => metric[n] > metric[best] ? n : best);
 }`;
 
-/** Detect all open forms + modal state. Returns { activeForm, allForms, formCount, modal }.
- *  Works even when the open-windows tab bar is hidden. */
+/** Detect all open forms + modal state. Returns { allForms, formCount, modal }.
+ *  Works even when the open-windows tab bar is hidden.
+ *  Counted by presence, not visibility: a form on a background tab is hidden whole, yet open.
+ *  Every form has exactly one `form{N}_container` node, and the platform removes it on close
+ *  (measured: the set of containers matched the open forms at every step — tabs, modal,
+ *  lock-owner window, home page, closing). */
 export const DETECT_FORMS_FN = HAS_VISIBLE_MODAL_FN + `
 function detectForms() {
-  const anySel = ${JSON.stringify(FORM_DETECT_ANY_SEL)};
-  const counts = {};
-  document.querySelectorAll(anySel).forEach(el => {
-    if (el.offsetWidth === 0) return;
-    const m = el.id.match(/^form(\\d+)_/);
-    if (m) counts[m[1]] = (counts[m[1]] || 0) + 1;
+  const nums = [];
+  document.querySelectorAll('[id^="form"][id$="_container"]').forEach(el => {
+    const m = el.id.match(/^form(\\d+)_container$/);
+    if (m) nums.push(Number(m[1]));
   });
-  const nums = Object.keys(counts).map(Number);
   return { allForms: nums.sort((a, b) => a - b), formCount: nums.length, modal: hasVisibleModal() };
 }`;
 
-/** Read form state given prefix p. Returns { fields, buttons, tabs, texts, hyperlinks, table, iframes }. */
-export const READ_FORM_FN = HEADERLESS_GRID_FN + GROUP_STATE_FN + `
+/** Read form state given prefix p. Returns { fields, buttons, tabs, texts, hyperlinks, table, htmlFields }. */
+export const READ_FORM_FN = HEADERLESS_GRID_FN + GROUP_STATE_FN + HTML_FIELDS_FN + `
 function readForm(p) {
   const result = {};
   const fields = [];
@@ -807,12 +825,9 @@ function readForm(p) {
     }
   }
 
-  // Iframes
-  let iframeCount = 0;
-  document.querySelectorAll('[id^="' + p + '"] iframe, iframe[id^="' + p + '"]').forEach(el => {
-    if (el.offsetWidth > 0 && el.offsetHeight > 0) iframeCount++;
-  });
-  if (iframeCount) result.iframes = iframeCount;
+  // HTML document fields — only those on screen; getHtmlFrame() explains the hidden ones.
+  const htmlFieldList = htmlFields(p).filter(f => f.visible).map(f => f.label ? { name: f.name, label: f.label } : { name: f.name });
+  if (htmlFieldList.length) result.htmlFields = htmlFieldList;
 
   // Collapsible / popup groups — surface that part of the form is hidden + its state.
   // Идентификация раскрываемой группы (есть заголовок <base>#title_text и один из признаков):

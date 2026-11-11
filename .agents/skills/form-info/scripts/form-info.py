@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# form-info v1.8 — Analyze 1C managed form structure
+# form-info v1.15 — Analyze 1C managed form structure
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 
 import argparse
@@ -52,7 +52,6 @@ SKIP_ELEMENTS = {
     "SearchStringAddition",
     "ViewStatusAddition",
     "SearchControlAddition",
-    "ColumnGroup",
 }
 
 
@@ -93,8 +92,11 @@ def format_type(type_node):
         raw = t.text or ""
         if raw == "xs:string":
             sq = type_node.find("v8:StringQualifiers/v8:Length", NSMAP)
+            al = type_node.find("v8:StringQualifiers/v8:AllowedLength", NSMAP)
             length = int(sq.text) if sq is not None and sq.text else 0
-            if length > 0:
+            if al is not None and al.text == "Fixed":
+                parts.append(f"string({length},fixed)")
+            elif length > 0:
                 parts.append(f"string({length})")
             else:
                 parts.append("string")
@@ -103,11 +105,16 @@ def format_type(type_node):
             if nq is not None:
                 d = nq.find("v8:Digits", NSMAP)
                 f = nq.find("v8:FractionDigits", NSMAP)
+                s = nq.find("v8:AllowedSign", NSMAP)
                 digits = d.text if d is not None and d.text else "0"
                 frac = f.text if f is not None and f.text else "0"
-                parts.append(f"decimal({digits},{frac})")
+                if s is not None and s.text == "Nonnegative":
+                    parts.append(f"decimal({digits},{frac},nonneg)")
+                else:
+                    parts.append(f"decimal({digits},{frac})")
             else:
-                parts.append("decimal")
+                # Без квалификаторов платформа читает число как 0,0; голое decimal значило бы 10,0
+                parts.append("decimal(0,0)")
         elif raw == "xs:boolean":
             parts.append("boolean")
         elif raw == "xs:dateTime":
@@ -177,6 +184,147 @@ def test_title_differs(node, name):
     return title_text
 
 
+# --- Обработчики: процедуры модуля формы (только с -Handlers) ---
+
+# Текст модуля формы; None — модуль не в UTF-8 (с заменой символов имена процедур не найти — лучше сказать прямо)
+def read_module_text(path):
+    try:
+        with open(path, encoding='utf-8-sig', newline='') as fh:
+            return fh.read()
+    except UnicodeDecodeError:
+        return None
+
+
+# Сканер BSL: строковые литералы (с "" и многострочными продолжениями «|») и комментарии // отделяются
+# от кода, номера строк сохраняются. Lines — строки текста; Code — они же без комментариев, литерал
+# заменён на ""; Literals — {Line, Text, Prefix — код этой строки слева от литерала}.
+def get_bsl_scan(text):
+    lines = text.replace("\r", "").split("\n")
+    code = []
+    mask = []
+    lits = []
+    in_str = False
+    cur = None
+    cur_line = 0
+    cur_prefix = ""
+    cur_col = -1
+    for i, line in enumerate(lines):
+        # строка без кавычек вне литерала — только отрезать комментарий
+        if not in_str and '"' not in line:
+            k = line.find('//')
+            code.append(line[:k] if k >= 0 else line)
+            mask.append(line[:k] + ' ' * (len(line) - k) if k >= 0 else line)
+            continue
+        sb = []
+        mk = list(line)
+        j = 0
+        if in_str:
+            # продолжение многострочного литерала: пробелы, затем «|»
+            while j < len(line) and line[j] in (' ', '\t'):
+                j += 1
+            # строка «//…» между строками литерала — комментарий, литерал продолжается на следующей
+            if line.startswith('//', j):
+                code.append("")
+                mask.append(' ' * len(line))
+                continue
+            if j < len(line) and line[j] == '|':
+                mk[j] = ' '
+                j += 1
+            cur += "\n"
+            cur_col = -1
+        while j < len(line):
+            c = line[j]
+            if in_str:
+                if c == '"':
+                    if j + 1 < len(line) and line[j + 1] == '"':
+                        cur += '"'
+                        mk[j] = ' '
+                        mk[j + 1] = ' '
+                        j += 2
+                        continue
+                    in_str = False
+                    lits.append({"Line": cur_line, "Text": cur, "Prefix": cur_prefix, "Col": cur_col})
+                    sb.append('""')
+                    j += 1
+                    continue
+                cur += c
+                mk[j] = ' '
+                j += 1
+                continue
+            if c == '/' and j + 1 < len(line) and line[j + 1] == '/':
+                for q in range(j, len(mk)):
+                    mk[q] = ' '
+                break
+            if c == '"':
+                in_str = True
+                cur = ""
+                cur_line = i + 1
+                cur_prefix = "".join(sb)
+                cur_col = j + 1
+                j += 1
+                continue
+            sb.append(c)
+            j += 1
+        code.append("".join(sb))
+        mask.append("".join(mk))
+    return {"Lines": lines, "Code": code, "Mask": mask, "Literals": lits}
+
+
+# Процедуры и функции модуля (имя, первая и последняя строка; первая — с аннотациями над заголовком)
+# и области (имя, строки #Область и #КонецОбласти, вложенность). Строки нумеруются с 1.
+# Заголовок — только в начале строки: продолжение литерала («|…») и комментарий заголовком не станут.
+def get_module_outline(lines):
+    procs, regions, opened = [], [], []
+    cur = None
+    for i, l in enumerate(lines):
+        if cur is not None:
+            # \u043a\u043e\u043d\u0435\u0446 \u043f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u044b \u2014 \u0432 \u043d\u0430\u0447\u0430\u043b\u0435 \u0441\u0442\u0440\u043e\u043a\u0438 \u0438\u043b\u0438 \u043f\u043e\u0441\u043b\u0435 \u00ab;\u00bb (`\u0412\u043e\u0437\u0432\u0440\u0430\u0442 \u0425;\u041a\u043e\u043d\u0435\u0446\u0424\u0443\u043d\u043a\u0446\u0438\u0438`)
+            if re.search(r'(^|;)\s*(\u041a\u043e\u043d\u0435\u0446\u041f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u044b|\u041a\u043e\u043d\u0435\u0446\u0424\u0443\u043d\u043a\u0446\u0438\u0438|EndProcedure|EndFunction)(?!\w)', l, re.I):
+                cur['end'] = i + 1
+                procs.append(cur)
+                cur = None
+            continue
+        m = re.match(r'^\s*(?:(?:\u0410\u0441\u0438\u043d\u0445|Async)\s+)?(?:\u041f\u0440\u043e\u0446\u0435\u0434\u0443\u0440\u0430|\u0424\u0443\u043d\u043a\u0446\u0438\u044f|Procedure|Function)\s+(\w+)\s*\(', l, re.I)
+        if m:
+            s = i
+            while s > 0 and re.match(r'^\s*&', lines[s - 1]):
+                s -= 1
+            cur = {'name': m.group(1), 'start': s + 1, 'end': i + 1}
+            continue
+        m = re.match(r'^\s*#(?:\u041e\u0431\u043b\u0430\u0441\u0442\u044c|Region)\s+(\S+)', l, re.I)
+        if m:
+            opened.append({'name': m.group(1), 'start': i + 1, 'end': 0, 'depth': len(opened)})
+            continue
+        if re.match(r'^\s*#(\u041a\u043e\u043d\u0435\u0446\u041e\u0431\u043b\u0430\u0441\u0442\u0438|EndRegion)(?!\w)', l, re.I) and opened:
+            r = opened.pop()
+            r['end'] = i + 1
+            regions.append(r)
+    return {'procs': procs, 'regions': regions}
+
+
+# Состояние -Handlers: включён ли ключ, процедуры модуля (имя в нижнем регистре -> процедура; None — модуля нет),
+# форма расширения. Заполняет main.
+_handlers = {'on': False, 'procs': None, 'ext': False}
+GUID_RE = re.compile(r'^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$')
+
+
+# Где процедура обработчика: " (lines a-b)", " (not in module)" или "" — без -Handlers, без модуля,
+# у привязки формы расширения без callType (процедура исходной формы — в модуле конфигурации)
+# и у события с GUID-именем без процедуры (платформа такой обработчик не вызывает).
+def get_handler_suffix(handler, call_type, event_name):
+    procs = _handlers['procs']
+    if procs is None or not handler:
+        return ""
+    if _handlers['ext'] and not call_type:
+        return ""
+    p = procs.get(handler.strip().lower())
+    if p:
+        return f" (lines {p['start']}-{p['end']})"
+    if GUID_RE.match(event_name or ''):
+        return ""
+    return " (not in module)"
+
+
 # --- Helper: get events as compact string ---
 
 def get_events_str(node):
@@ -187,10 +335,10 @@ def get_events_str(node):
     for e in events_node.findall("d:Event", NSMAP):
         e_name = e.get("name", "")
         ct = e.get("callType", "")
-        if ct:
-            evts.append(f"{e_name}[{ct}]")
-        else:
-            evts.append(e_name)
+        label = f"{e_name}[{ct}]" if ct else e_name
+        if _handlers['on']:
+            label += f": {(e.text or '').strip()}{get_handler_suffix(e.text or '', ct, e_name)}"
+        evts.append(label)
     if len(evts) == 0:
         return ""
     return " {" + ", ".join(evts) + "}"
@@ -264,6 +412,12 @@ def get_element_tag(node):
         return "[Popup]"
     elif local_name == "ButtonGroup":
         return "[BtnGroup]"
+    elif local_name == "ColumnGroup":
+        return "[ColGroup]"
+    elif local_name == "AutoCommandBar":
+        return "[CmdBar]"
+    elif local_name == "ContextMenu":
+        return "[ContextMenu]"
     else:
         return f"[{local_name}]"
 
@@ -286,20 +440,43 @@ def count_significant_children(child_items_node):
 
 # --- Build element tree recursively ---
 
-def build_tree(child_items_node, prefix, tree_lines, expand="", state=None):
-    if child_items_node is None:
-        return
+# Командная панель и контекстное меню элемента — в дереве, только если в них есть своё:
+# кнопки, подменю или отключённое автозаполнение. Стандартные пустые не шумят.
+def get_own_panels(node):
+    out = []
+    for c in node:
+        if not isinstance(c.tag, str):
+            continue
+        ln = etree.QName(c.tag).localname
+        if ln not in ("ContextMenu", "AutoCommandBar"):
+            continue
+        ci = c.find("d:ChildItems", NSMAP)
+        af = c.find("d:Autofill", NSMAP)
+        if count_significant_children(ci) > 0 or (af is not None and af.text == "false"):
+            out.append(c)
+    return out
 
-    # Collect significant children
-    children = []
+
+def get_significant_children(child_items_node):
+    out = []
+    if child_items_node is None:
+        return out
     for child in child_items_node:
         if not isinstance(child.tag, str):
             continue
-        ln = etree.QName(child.tag).localname
-        if ln in SKIP_ELEMENTS:
+        if etree.QName(child.tag).localname in SKIP_ELEMENTS:
             continue
-        children.append(child)
+        out.append(child)
+    return out
 
+
+def build_tree(child_items_node, prefix, tree_lines, expand="", state=None):
+    if child_items_node is None:
+        return
+    build_tree_nodes(get_significant_children(child_items_node), prefix, tree_lines, expand, state)
+
+
+def build_tree_nodes(children, prefix, tree_lines, expand="", state=None):
     for i, child in enumerate(children):
         last = (i == len(children) - 1)
         connector = "\u2514\u2500" if last else "\u251C\u2500"
@@ -309,6 +486,11 @@ def build_tree(child_items_node, prefix, tree_lines, expand="", state=None):
         name = child.get("name", "")
         flags = get_flags(child)
         events = get_events_str(child)
+        local_name = etree.QName(child.tag).localname
+        if local_name in ("AutoCommandBar", "ContextMenu"):
+            af = child.find("d:Autofill", NSMAP)
+            if af is not None and af.text == "false":
+                flags += " [autofill:false]"
 
         # DataPath or CommandName
         binding = ""
@@ -320,8 +502,11 @@ def build_tree(child_items_node, prefix, tree_lines, expand="", state=None):
             if cn is not None and cn.text:
                 cn_val = cn.text
                 m = re.match(r'^Form\.StandardCommand\.(.+)$', cn_val)
+                m_item = re.match(r'^Form\.Item\.(.+)\.StandardCommand\.(.+)$', cn_val)
                 if m:
                     binding = f" -> {m.group(1)} [std]"
+                elif m_item:
+                    binding = f" -> {m_item.group(1)}.{m_item.group(2)} [std]"
                 else:
                     m = re.match(r'^Form\.Command\.(.+)$', cn_val)
                     if m:
@@ -335,11 +520,19 @@ def build_tree(child_items_node, prefix, tree_lines, expand="", state=None):
         if diff_title:
             title_str = f" [title:{diff_title}]"
 
-        line = f"{prefix}{connector} {tag} {name}{binding}{flags}{title_str}{events}"
+        panels = get_own_panels(child)
+        # Панель таблицы с нестандартным именем — имя в строке таблицы (нужно для правки формы)
+        panel_str = ""
+        if local_name == "Table":
+            acb = child.find("d:AutoCommandBar", NSMAP)
+            if acb is not None and acb.get("name", "").lower() != (name + "\u041a\u043e\u043c\u0430\u043d\u0434\u043d\u0430\u044f\u041f\u0430\u043d\u0435\u043b\u044c").lower() \
+                    and not any(etree.QName(p.tag).localname == "AutoCommandBar" for p in panels):
+                panel_str = f" [cmdBar:{acb.get('name', '')}]"
+
+        line = f"{prefix}{connector} {tag} {name}{binding}{flags}{title_str}{panel_str}{events}"
         tree_lines.append(line)
 
         # Recurse into containers (but not Page -- show summary unless expanded)
-        local_name = etree.QName(child.tag).localname
         if local_name == "Page":
             ci = child.find("d:ChildItems", NSMAP)
             page_name = child.get("name", "")
@@ -349,13 +542,18 @@ def build_tree(child_items_node, prefix, tree_lines, expand="", state=None):
                 build_tree(ci, prefix + continuation, tree_lines, expand, state)
             else:
                 cnt = count_significant_children(ci)
-                tree_lines[-1] = tree_lines[-1] + f" ({cnt} items)"
+                # с -Handlers — сколько привязок внутри свёрнутой страницы: без счётчика их не заметить
+                hc = len(ci.findall(".//d:Event", NSMAP)) if (_handlers['on'] and ci is not None) else 0
+                hc_str = f", {hc} handlers" if hc > 0 else ""
+                tree_lines[-1] = tree_lines[-1] + f" ({cnt} items{hc_str})"
                 if state is not None:
                     state["has_collapsed"] = True
-        elif local_name in ("UsualGroup", "Pages", "Table", "CommandBar", "ButtonGroup", "Popup"):
-            ci = child.find("d:ChildItems", NSMAP)
-            if ci is not None:
-                build_tree(ci, prefix + continuation, tree_lines, expand, state)
+        else:
+            sub = list(panels)
+            if local_name in ("UsualGroup", "Pages", "Table", "CommandBar", "ButtonGroup", "Popup", "ColumnGroup", "AutoCommandBar", "ContextMenu"):
+                sub += get_significant_children(child.find("d:ChildItems", NSMAP))
+            if sub:
+                build_tree_nodes(sub, prefix + continuation, tree_lines, expand, state)
 
 
 # --- Support status (Ext/ParentConfigurations.bin) ---
@@ -455,6 +653,7 @@ def main():
     parser.add_argument("-Limit", type=int, default=150, help="Max lines to show")
     parser.add_argument("-Offset", type=int, default=0, help="Line offset for pagination")
     parser.add_argument("-Expand", default="", help="Expand collapsed section by name, or * for all")
+    parser.add_argument("-Handlers", action="store_true", help="Show handler names with their line ranges in Form/Module.bsl")
     args = ci_parse_args(parser)
 
     form_path = args.FormPath
@@ -495,6 +694,18 @@ def main():
     # --- Detect extension (BaseForm) ---
     base_form_node = root.find("d:BaseForm", NSMAP)
     is_extension = base_form_node is not None
+
+    module_path = os.path.join(os.path.dirname(os.path.abspath(form_path)), "Form", "Module.bsl")
+    _handlers['on'] = bool(args.Handlers)
+    _handlers['ext'] = is_extension
+    module_text = read_module_text(module_path) if (args.Handlers and os.path.isfile(module_path)) else None
+    module_not_utf8 = bool(args.Handlers and os.path.isfile(module_path) and module_text is None)
+    if module_text is not None:
+        bsl = get_bsl_scan(module_text)
+        procs = {}
+        for p in get_module_outline(bsl["Code"])["procs"]:
+            procs.setdefault(p["name"].lower(), p)
+        _handlers['procs'] = procs
 
     # --- Determine form name and object from path ---
     resolved_path = os.path.abspath(form_path)
@@ -553,6 +764,9 @@ def main():
     _support = get_support_status_for_path(form_path)
     if _support is not None:
         lines.append(f"Поддержка: {_support}")
+    if args.Handlers:
+        lines.append(f"Module: {module_path if os.path.isfile(module_path) else 'none'}"
+                     + (" (not UTF-8 \u2014 line ranges unavailable)" if module_not_utf8 else ""))
 
     # --- Form properties (Title excluded -- shown in header) ---
     prop_names = [
@@ -594,7 +808,7 @@ def main():
             e_handler = e.text or ""
             ct = e.get("callType", "")
             ct_str = f"[{ct}]" if ct else ""
-            lines.append(f"  {e_name}{ct_str} -> {e_handler}")
+            lines.append(f"  {e_name}{ct_str} -> {e_handler}{get_handler_suffix(e_handler, ct, e_name)}")
 
     # --- Main AutoCommandBar (form's id=-1 panel) ---
     def format_main_acb(acb_node):
@@ -625,9 +839,10 @@ def main():
                     buttons.append(f"  {tag} {b_name} -> {cmd_ref}{loc_str}")
                 else:
                     buttons.append(f"  {tag} {b_name}{loc_str}")
+        acb_name = acb_node.get("name", "")
         if not buttons and autofill and halign_node is None:
-            return ["AutoCommandBar [autofill]"]
-        return [f"AutoCommandBar [{', '.join(flags)}]"] + buttons
+            return [f"AutoCommandBar {acb_name} [autofill]"]
+        return [f"AutoCommandBar {acb_name} [{', '.join(flags)}]"] + buttons
 
     cb_loc_node = root.find("d:CommandBarLocation", NSMAP)
     cb_loc = cb_loc_node.text if cb_loc_node is not None and cb_loc_node.text else "Auto"
@@ -743,12 +958,12 @@ def main():
                 for a in actions:
                     ct = a.get("callType", "")
                     ct_str = f"[{ct}]" if ct else ""
-                    act_parts.append(f"{a.text or ''}{ct_str}")
+                    act_parts.append(f"{a.text or ''}{ct_str}{get_handler_suffix(a.text or '', ct, 'Action')}")
                 action_str = " -> " + ", ".join(act_parts)
             elif len(actions) == 1:
                 ct = actions[0].get("callType", "")
                 ct_str = f"[{ct}]" if ct else ""
-                action_str = f" -> {actions[0].text or ''}{ct_str}"
+                action_str = f" -> {actions[0].text or ''}{ct_str}{get_handler_suffix(actions[0].text or '', ct, 'Action')}"
             else:
                 action_str = ""
 
@@ -766,10 +981,15 @@ def main():
         lines.append("")
         lines.append(f"BaseForm: {bf_str}")
 
-    # --- Expand hint ---
+    # --- Hints ---
+    hints = []
     if tree_state["has_collapsed"]:
+        hints.append("Hint: use -Expand <name> to expand a collapsed section, -Expand * for all")
+    if not args.Handlers and root.xpath(".//d:Events/d:Event | d:Commands/d:Command/d:Action", namespaces=NSMAP):
+        hints.append("Hint: use -Handlers to show handler names with their line ranges in Form/Module.bsl")
+    if hints:
         lines.append("")
-        lines.append("Hint: use -Expand <name> to expand a collapsed section, -Expand * for all")
+        lines.extend(hints)
 
     # --- Truncation protection ---
     total_lines = len(lines)
@@ -787,6 +1007,9 @@ def main():
         remaining = total_lines - offset - limit
         print("")
         print(f"[TRUNCATED] Shown {limit} of {total_lines} lines. Use -Offset {offset + limit} to continue.")
+        # Подсказки стоят в конце вывода — при обрезке повторяем их здесь
+        for h in hints:
+            print(h)
     else:
         for l in lines:
             print(l)

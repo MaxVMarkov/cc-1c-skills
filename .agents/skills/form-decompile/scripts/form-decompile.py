@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# form-decompile v0.152 — Decompile 1C managed Form.xml to JSON DSL (draft)
+# form-decompile v0.159 — Decompile 1C managed Form.xml to JSON DSL (draft)
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 # ВНИМАНИЕ: раундтрип не гарантируется. Навык исключён из авто-использования моделью.
 #
@@ -477,7 +477,7 @@ def test_has_real_markup(text):
         return False
     vals = list(text.values()) if isinstance(text, dict) else [str(text)]
     for v in vals:
-        if re.search(FMT_MARKUP_RE, str(v)):
+        if re.search(FMT_MARKUP_RE, str(v), re.I):  # как -match в PS: без учёта регистра
             return True
     return False
 
@@ -624,6 +624,17 @@ def _ps_str(v):
     if v is None:
         return ''
     return str(v)
+
+
+def _dlist_has_explicit_key(list_name):
+    """Список с явным ключом набора (FieldValue/RowKey/RowNumber) без основной таблицы: ссылки в строке
+    нет, умный дефолт RowPictureDataPath = <Список>.DefaultPicture компилятор ему не ставит."""
+    for a in ROOT.findall('lf:Attributes/lf:Attribute', NS):
+        if (a.get('name') or '').lower() == list_name.lower():
+            kt = a.find('lf:Settings/lf:KeyType', NS)
+            v = (kt.text or '').strip() if kt is not None else ''
+            return v != '' and v.lower() != 'auto' and a.find('lf:Settings/lf:MainTable', NS) is None
+    return False
 
 
 # Шрифт оформления → объект {@type:Font, ...} (bit-perfect для compile).
@@ -1458,10 +1469,13 @@ def decompile_type(type_node):
             ln = type_node.find('v8:StringQualifiers/v8:Length', NS)
             al = type_node.find('v8:StringQualifiers/v8:AllowedLength', NS)
             fixed = (al is not None and _text(al) == 'Fixed')   # Variable = дефолт; Fixed — явно
-            if ln is not None and int(_text(ln)) > 0:
-                short = ('string(%s,fixed)' % _text(ln)) if fixed else ('string(%s)' % _text(ln))
+            ll = _text(ln) if ln is not None else '0'
+            if fixed and int(ll) > 0:   # Fixed при длине 0 платформа не хранит
+                short = 'string(%s,fixed)' % ll
+            elif int(ll) > 0:
+                short = 'string(%s)' % ll
             else:
-                short = 'string'   # Length=0 → всегда Variable (корпус)
+                short = 'string'   # голая строка у form-compile — неограниченная
         elif re.match(r'^xs:decimal$', raw):
             d = type_node.find('v8:NumberQualifiers/v8:Digits', NS)
             f = type_node.find('v8:NumberQualifiers/v8:FractionDigits', NS)
@@ -1470,6 +1484,8 @@ def decompile_type(type_node):
             ff = _text(f) if f is not None else '0'
             if sgn is not None and _text(sgn) == 'Nonnegative':
                 short = 'decimal(%s,%s,nonneg)' % (dd, ff)
+            elif dd == '10' and ff == '0':
+                short = 'decimal'   # голое число у form-compile — 10,0
             else:
                 short = 'decimal(%s,%s)' % (dd, ff)
         elif re.match(r'^xs:boolean$', raw):
@@ -2101,9 +2117,17 @@ def decompile_element(node):
         if rep:
             repmap = {'None': 'none', 'NormalSeparation': 'normal', 'WeakSeparation': 'weak', 'StrongSeparation': 'strong'}
             obj['representation'] = repmap[rep] if rep in repmap else rep
+        # Зеркало компилятора. Обычная группа без showTitle: с заголовком (title/titleDataPath) — показан, без — скрыт; ключ
+        # пишется, только когда факт расходится с этим умолчанием. Сворачиваемая/всплывающая — факт. значение.
         st = get_child(node, 'ShowTitle')
-        if st is not None:
-            obj['showTitle'] = (st == 'true')
+        if behavior in ('Collapsible', 'PopUp'):
+            if st is not None:
+                obj['showTitle'] = (st == 'true')
+        elif obj.get('title') or get_child(node, 'TitleDataPath'):
+            if st == 'false':
+                obj['showTitle'] = False
+        elif st != 'false':
+            obj['showTitle'] = True
         cru = get_child(node, 'CurrentRowUse')
         if cru:
             obj['currentRowUse'] = cru
@@ -2516,7 +2540,13 @@ def decompile_element(node):
                 obj['updateOnDataChange'] = uodc
             if get_child(node, 'AllowGettingCurrentRowURL') == 'false':
                 obj['allowGettingCurrentRowURL'] = False
-            if rpdp is None:
+            # RowPictureDataPath: инверсия умного дефолта <Список>.DefaultPicture. У списка с явным ключом
+            # без основной таблицы умолчание — отсутствие (компилятор его не ставит): ""-маркер не нужен,
+            # а любое значение — явное.
+            if _dlist_has_explicit_key(_ps_str(obj.get('path'))):
+                if rpdp is not None:
+                    obj['rowPictureDataPath'] = rpdp
+            elif rpdp is None:
                 obj['rowPictureDataPath'] = ''
             elif rpdp != ('%s.DefaultPicture' % _ps_str(obj.get('path'))):
                 obj['rowPictureDataPath'] = rpdp

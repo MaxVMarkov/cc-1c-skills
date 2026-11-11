@@ -1,4 +1,4 @@
-﻿# mxl-validate v1.8 — Validate 1C spreadsheet
+﻿# mxl-validate v1.11 — Validate 1C spreadsheet
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 [CmdletBinding(PositionalBinding=$false)]
 param(
@@ -50,11 +50,76 @@ if (-not (Test-Path $TemplatePath)) {
 	exit 1
 }
 
+# Ошибка разбора XML — блок строк вместо трассы: место, сообщение парсера и выдержка строки файла
+# с указателем. Номера и выдержка в портах совпадают, текст сообщения — нет: у lxml он свой,
+# у .NET ещё и зависит от языка ОС.
+function Format-XmlParseError {
+	param([string]$path, $exception)
+	$ex = $exception
+	while ($ex -and -not ($ex -is [System.Xml.XmlException])) { $ex = $ex.InnerException }
+	# Не XmlException — файл не прочитан (заблокирован, нет прав): это не синтаксис, и звать это
+	# «not well-formed» значит отправить искать ошибку, которой нет.
+	if (-not $ex) {
+		# Обёртку «Exception calling "Load"…» снимаем: причина — во внутреннем исключении.
+		$inner = $exception
+		while ($inner.InnerException) { $inner = $inner.InnerException }
+		return @("[ERROR] Cannot read XML: $($inner.Message)")
+	}
+	$lineNo = $ex.LineNumber
+	$pos = $ex.LinePosition
+	# Хвост «Line N, position M.» («строка N, позиция M.») повторяет заголовок; срезаем его по самим
+	# номерам, чтобы не зависеть от языка сообщения.
+	$msg = $ex.Message -replace ",?\s*\S+\s+$lineNo,\s*\S+\s+$pos\.?\s*$", ''
+	# Пустой файл .NET относит к строке 0, позиции 0, а lxml — к 1:1; приводим к общему виду.
+	if ($lineNo -lt 1) { $lineNo = 1; $pos = 1 }
+	$out = @("[ERROR] Not well-formed XML (line $lineNo, position $pos):", "        $msg")
+	$fileLines = [System.IO.File]::ReadAllText($path) -split "`n"
+	if ($lineNo -gt $fileLines.Count) { return $out }
+	$raw = $fileLines[$lineNo - 1].TrimEnd("`r").Replace("`t", ' ')
+	# Только пробел (табы уже заменены): TrimStart() и str.lstrip() считают пробелами разные
+	# символы, и на управляющем символе в начале строки указатель в портах разъезжался.
+	$text = $raw.TrimStart(' ')
+	# Пустая строка (обрыв файла) ничего не показывает — без выдержки.
+	if ($text -eq '') { return $out }
+	$col = [Math]::Max(0, $pos - 1 - ($raw.Length - $text.Length))
+	# Длинную строку (base64 картинки) режем до окна вокруг позиции — иначе в вывод уйдут килобайты.
+	$prefix = ''
+	$suffix = ''
+	if ($text.Length -gt 120) {
+		$start = [Math]::Max(0, [Math]::Min($col - 60, $text.Length - 120))
+		if ($start -gt 0) { $prefix = '...' }
+		if ($start + 120 -lt $text.Length) { $suffix = '...' }
+		$text = $text.Substring($start, 120)
+		$col -= $start
+	}
+	$col = [Math]::Min($col, $text.Length)
+	$gutter = "        $lineNo | "
+	$out += $gutter + $prefix + $text + $suffix
+	$out += (' ' * ($gutter.Length + $prefix.Length + $col)) + '^'
+	return $out
+}
+
+$resolvedPath = (Resolve-Path $TemplatePath).ProviderPath
+# Имя — из разрешённого пути, как в py: у голого «Template.xml» GetDirectoryName даёт пустую
+# строку, и второй вызов на ней бросает исключение.
+$templateName = [System.IO.Path]::GetFileName([System.IO.Path]::GetDirectoryName([System.IO.Path]::GetDirectoryName($resolvedPath)))
+
 # --- Load XML ---
 
 $xmlDoc = New-Object System.Xml.XmlDocument
 $xmlDoc.PreserveWhitespace = $false
-$xmlDoc.Load((Resolve-Path $TemplatePath).Path)
+try {
+	$xmlDoc.Load($resolvedPath)
+} catch {
+	if ($Detailed) {
+		Write-Host "=== Validation: Template.$templateName ==="
+		Write-Host ""
+	}
+	foreach ($l in (Format-XmlParseError $resolvedPath $_.Exception)) { Write-Host $l }
+	Write-Host ""
+	Write-Host "=== Result: 1 errors, 0 warnings (other checks skipped) ==="
+	exit 1
+}
 
 $nsMgr = New-Object System.Xml.XmlNamespaceManager($xmlDoc.NameTable)
 $nsMgr.AddNamespace("d", "http://v8.1c.ru/8.2/data/spreadsheet")
@@ -91,7 +156,6 @@ function Report-Warn {
 	Write-Host "[WARN]  $msg"
 }
 
-$templateName = [System.IO.Path]::GetFileName([System.IO.Path]::GetDirectoryName([System.IO.Path]::GetDirectoryName($TemplatePath)))
 if ($Detailed) {
 	# Форма имени та же, что в итоговой строке и у py-порта: раньше шапка -Detailed
 	# печаталась без префикса «Template.», и вывод портов расходился одной строкой.

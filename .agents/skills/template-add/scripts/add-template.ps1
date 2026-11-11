@@ -1,4 +1,4 @@
-﻿# template-add v1.27 — Add template to 1C object (+write_xml_file/write_utf8_bom: общий эталон записи)
+﻿# template-add v1.30 — Add template to 1C object (+write_xml_file/write_utf8_bom: общий эталон записи)
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 param(
 	[Parameter(Mandatory)]
@@ -63,16 +63,20 @@ function Find-V8Project([string]$startDir) {
 }
 function Get-EditMode([string]$cfgDir) {
 	try {
-		$pj = Find-V8Project (Get-Location).Path
-		if (-not $pj) { $pj = Find-V8Project $cfgDir }
+		$pj = Find-V8Project (Get-Location).ProviderPath
+		if (-not $pj) { $pj = Find-V8Project ([System.IO.Path]::GetFullPath($cfgDir)) }
 		if (-not $pj) { return 'deny' }
-		$proj = Get-Content -Raw $pj | ConvertFrom-Json
+		# UTF-8 явно: PS 5.1 читает файл без BOM как ANSI, и configSrc с кириллицей не совпал бы
+		$proj = Get-Content -Raw -Encoding UTF8 $pj | ConvertFrom-Json
+		# configSrc — от каталога .v8-project.json, а не от рабочего каталога: иначе из подкаталога
+		# проекта база не сопоставляется и берётся правило проекта.
+		$projDir = [System.IO.Path]::GetDirectoryName($pj)
 		$cfgFull = [System.IO.Path]::GetFullPath($cfgDir).TrimEnd('\', '/')
 		if ($proj.databases) {
 			foreach ($db in $proj.databases) {
 				if ($db.configSrc) {
-					$src = [System.IO.Path]::GetFullPath($db.configSrc).TrimEnd('\', '/')
-					if ($cfgFull -eq $src -or $cfgFull.StartsWith($src + [System.IO.Path]::DirectorySeparatorChar)) {
+					$src = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($projDir, $db.configSrc)).TrimEnd('\', '/')
+					if ($cfgFull -eq $src -or $cfgFull.StartsWith($src + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
 						if ($db.editingAllowedCheck) { return $db.editingAllowedCheck }
 					}
 				}
@@ -85,7 +89,7 @@ function Get-EditMode([string]$cfgDir) {
 function Assert-EditAllowed([string]$targetPath, [string]$require) {
 	try {
 		$rp = $targetPath
-		try { $rp = (Resolve-Path $targetPath -ErrorAction Stop).Path } catch {}
+		try { $rp = (Resolve-Path $targetPath -ErrorAction Stop).ProviderPath } catch {}
 		# Autonomous external object (EPF/ERF): never part of a config on support (issue #39).
 		if (Test-ExternalObjectRoot $rp) { return }
 		$elemUuid = Get-RootUuid $rp
@@ -228,7 +232,7 @@ if (-not (Test-LangCode $Lang)) {
 $addLangMode = $false
 if (Test-Path $templateMetaPath) {
 	$existingType = $null
-	$metaText = [System.IO.File]::ReadAllText((Resolve-Path $templateMetaPath).Path, [System.Text.Encoding]::UTF8)
+	$metaText = [System.IO.File]::ReadAllText((Resolve-Path $templateMetaPath).ProviderPath, [System.Text.Encoding]::UTF8)
 	if ($metaText -match '<TemplateType>([^<]+)</TemplateType>') { $existingType = $Matches[1] }
 
 	if ($TemplateType -eq "HTML" -and $existingType -eq "HTMLDocument") {
@@ -292,10 +296,10 @@ function Detect-FormatVersion([string]$dir) {
 # Версию берём прежде всего из корня самого объекта — он её несёт всегда, а у автономной
 # внешней обработки/отчёта подниматься к Configuration.xml просто некуда.
 $formatVersion = $null
-$objHead = [System.IO.File]::ReadAllText((Resolve-Path $rootXmlPath).Path, [System.Text.Encoding]::UTF8)
+$objHead = [System.IO.File]::ReadAllText((Resolve-Path $rootXmlPath).ProviderPath, [System.Text.Encoding]::UTF8)
 $objHead = $objHead.Substring(0, [Math]::Min(2000, $objHead.Length))
 if ($objHead -match '<MetaDataObject[^>]+version="(\d+\.\d+)"') { $formatVersion = $Matches[1] }
-if (-not $formatVersion) { $formatVersion = Detect-FormatVersion (Resolve-Path $SrcDir).Path }
+if (-not $formatVersion) { $formatVersion = Detect-FormatVersion (Resolve-Path $SrcDir).ProviderPath }
 
 # Объявления пространств имён — одной переменной: место эмиссии её только интерполирует.
 # Правки шапки (как xmlns:pal в формате 2.21) делаются здесь, в одном месте.
@@ -367,7 +371,7 @@ if ($addLangMode) {
 	$pagePath = Join-Path $pageDir "$Lang.html"
 
 	if (Test-Path $descPath) {
-		$descText = [System.IO.File]::ReadAllText((Resolve-Path $descPath).Path, [System.Text.Encoding]::UTF8)
+		$descText = [System.IO.File]::ReadAllText((Resolve-Path $descPath).ProviderPath, [System.Text.Encoding]::UTF8)
 		# Версию берём из самого дескриптора: правка чужой выгрузки не должна менять формат.
 		if ($descText -match '<Help[^>]+version="(\d+\.\d+)"') { $descVersion = $Matches[1] }
 		$langs = @([regex]::Matches($descText, '<Page>([^<]+)</Page>') | ForEach-Object { $_.Groups[1].Value })
@@ -501,12 +505,70 @@ switch ($TemplateType) {
 	}
 }
 
+# Порядок групп в <ChildObjects> объекта по виду. Это xs:sequence <Вид>ChildObjects из MDClasses XSD,
+# сверенный выгрузкой платформы: выгрузка сама ставит группы в этот порядок, так что вставка не на место
+# даёт дифф при следующей выгрузке. Единого порядка нет — у документа Form стоит до TabularSection.
+function Get-ObjectChildOrder {
+	return @{
+		"Catalog"                    = @("Attribute", "TabularSection", "Form", "Template", "Command")
+		"Document"                   = @("Attribute", "Form", "TabularSection", "Template", "Command")
+		"ExchangePlan"               = @("Attribute", "TabularSection", "Form", "Template", "Command")
+		"ChartOfCharacteristicTypes" = @("Attribute", "TabularSection", "Form", "Template", "Command")
+		"ChartOfAccounts"            = @("Attribute", "TabularSection", "AccountingFlag", "ExtDimensionAccountingFlag", "Form", "Template", "Command")
+		"ChartOfCalculationTypes"    = @("Attribute", "TabularSection", "Form", "Template", "Command")
+		"BusinessProcess"            = @("Attribute", "TabularSection", "Form", "Template", "Command")
+		"Task"                       = @("Attribute", "TabularSection", "Form", "Template", "AddressingAttribute", "Command")
+		"DataProcessor"              = @("Attribute", "TabularSection", "Form", "Template", "Command")
+		"Report"                     = @("Attribute", "TabularSection", "Form", "Template", "Command")
+		"ExternalDataProcessor"      = @("Attribute", "TabularSection", "Form", "Template")
+		"ExternalReport"             = @("Attribute", "TabularSection", "Form", "Template")
+		"Enum"                       = @("EnumValue", "Form", "Template", "Command")
+		"InformationRegister"        = @("Resource", "Attribute", "Dimension", "Form", "Template", "Command")
+		"AccumulationRegister"       = @("Resource", "Attribute", "Dimension", "Form", "Template", "Command")
+		"AccountingRegister"         = @("Dimension", "Resource", "Attribute", "Form", "Template", "Command")
+		"CalculationRegister"        = @("Resource", "Attribute", "Dimension", "Recalculation", "Form", "Template", "Command")
+		"DocumentJournal"            = @("Column", "Form", "Template", "Command")
+		"Table"                      = @("Field", "Form", "Command", "Template")
+		"ExternalDataSource"         = @("Table", "Cube", "Function")
+		"Cube"                       = @("DimensionTable", "Dimension", "Resource", "Form", "Command", "Template")
+		"DimensionTable"             = @("Field", "Form", "Command", "Template")
+		"FilterCriterion"            = @("Form", "Command")
+		"SettingsStorage"            = @("Form", "Template")
+		"TabularSection"             = @("Attribute")
+	}
+}
+
+# Элемент <ChildObjects>, ПЕРЕД которым встаёт новый <tag>; $null — дописать в конец.
+# Сразу за последним элементом своего тега, иначе перед первым элементом группы, идущей
+# по канону вида позже. Вид или тег вне канона — $null, как раньше.
+function Find-ChildAnchor($container, [string]$tag, [string]$objType) {
+	$children = New-Object System.Collections.Generic.List[object]
+	foreach ($c in $container.ChildNodes) { if ($c.NodeType -eq 'Element') { $children.Add($c) } }
+	$lastIdx = -1
+	for ($i = 0; $i -lt $children.Count; $i++) {
+		if ($children[$i].LocalName -ceq $tag) { $lastIdx = $i }
+	}
+	if ($lastIdx -ge 0) {
+		if ($lastIdx + 1 -lt $children.Count) { return $children[$lastIdx + 1] }
+		return $null
+	}
+	$order = (Get-ObjectChildOrder)[$objType]
+	if (-not $order) { return $null }
+	$tagIdx = [array]::IndexOf([string[]]$order, $tag)
+	if ($tagIdx -lt 0) { return $null }
+	$later = @($order | Select-Object -Skip ($tagIdx + 1))
+	foreach ($c in $children) {
+		if ($later -ccontains $c.LocalName) { return $c }
+	}
+	return $null
+}
+
 # --- 3. Модификация корневого XML ---
 
 $rootXmlFull = Resolve-Path $rootXmlPath
 $xmlDoc = New-Object System.Xml.XmlDocument
 $xmlDoc.PreserveWhitespace = $true
-$xmlDoc.Load($rootXmlFull.Path)
+$xmlDoc.Load($rootXmlFull.ProviderPath)
 
 $nsMgr = New-Object System.Xml.XmlNamespaceManager($xmlDoc.NameTable)
 $nsMgr.AddNamespace("md", "http://v8.1c.ru/8.3/MDClasses")
@@ -517,14 +579,20 @@ if (-not $childObjects) {
 	exit 1
 }
 
-# Добавить <Template> в конец ChildObjects — идемпотентно (не дублировать уже зарегистрированный)
+# Добавить <Template> в ChildObjects — идемпотентно (не дублировать уже зарегистрированный)
 $alreadyRegistered = [bool]$childObjects.SelectSingleNode("md:Template[text()='$TemplateName']", $nsMgr)
 
 if (-not $alreadyRegistered) {
 $templateElem = $xmlDoc.CreateElement("Template", "http://v8.1c.ru/8.3/MDClasses")
 $templateElem.InnerText = $TemplateName
 
-if ($childObjects.ChildNodes.Count -eq 0) {
+# Место — по канону вида владельца: макет встаёт перед командами (у таблицы внешнего источника — после)
+$insertBefore = Find-ChildAnchor $childObjects "Template" $childObjects.ParentNode.LocalName
+
+if ($insertBefore) {
+	$childObjects.InsertBefore($templateElem, $insertBefore) | Out-Null
+	$childObjects.InsertBefore($xmlDoc.CreateWhitespace("`n`t`t`t"), $insertBefore) | Out-Null
+} elseif ($childObjects.ChildNodes.Count -eq 0) {
 	$childObjects.AppendChild($xmlDoc.CreateWhitespace("`n`t`t`t")) | Out-Null
 	$childObjects.AppendChild($templateElem) | Out-Null
 	$childObjects.AppendChild($xmlDoc.CreateWhitespace("`n`t`t")) | Out-Null
@@ -594,9 +662,9 @@ $xmlText = $xmlText.Replace('encoding="utf-8"', 'encoding="UTF-8"')
 $xmlText = [regex]::Replace($xmlText, '(?s)<!\[CDATA\[.*?\]\]>|<!--.*?-->|(?<=\S) />', { param($m) if ($m.Value -eq ' />') { '/>' } else { $m.Value } })
 # Целевой перевод строки: стиль файла-назначения — правка наследует его (#44/#46/#47),
 # новый файл получает канон выгрузки CRLF. Зеркало _detect_xml_style в py-порту.
-$targetEol = if ((Test-Path -LiteralPath $rootXmlFull.Path) -and ([System.IO.File]::ReadAllText($rootXmlFull.Path) -notmatch "`r`n")) { "`n" } else { "`r`n" }
+$targetEol = if ((Test-Path -LiteralPath $rootXmlFull.ProviderPath) -and ([System.IO.File]::ReadAllText($rootXmlFull.ProviderPath) -notmatch "`r`n")) { "`n" } else { "`r`n" }
 $xmlText = ($xmlText -replace "`r`n", "`n") -replace "`n", $targetEol
-[System.IO.File]::WriteAllText($rootXmlFull.Path, $xmlText, $encBom)
+[System.IO.File]::WriteAllText($rootXmlFull.ProviderPath, $xmlText, $encBom)
 
 Write-Host "[OK] Создан макет: $TemplateName ($TemplateType)"
 if ($alreadyRegistered) {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# cfe-validate v1.18 — Validate 1C configuration extension XML structure (CFE)
+# cfe-validate v1.37 — Validate 1C configuration extension structure (CFE)
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 """Validates extension Configuration.xml: root, InternalInfo, extension properties, ChildObjects, borrowed objects."""
 import sys, os, argparse, re
@@ -190,7 +190,90 @@ GENERATED_TYPE_CATEGORIES = {
 # Основной реквизит формы: <Attribute name="X"> с <MainAttribute>true</MainAttribute> внутри
 MAIN_ATTR_RE = re.compile(
     r'<Attribute name=\"([^\"]+)\"[^>]*>(?:(?!</Attribute>).)*?<MainAttribute>true</MainAttribute>', re.DOTALL)
+# Обычные имена основного реквизита формы — когда настоящее имя взять неоткуда
+MAIN_ATTR_DEFAULT_NAMES = ['Объект', 'Список', 'Запись', 'Отчет', 'НаборЗаписей', 'НаборКонстант',
+                           'Object', 'List', 'Record', 'Report', 'RecordSet', 'ConstantsSet']
 
+MAIN_ATTR_TYPE_RE = re.compile(r'<v8:Type[^>]*>(?:\w+:)?(\w+?)(Object|RecordManager|RecordSet)\.([^<]+)</v8:Type>')
+# Вид объекта без учёта регистра — как у хеш-таблицы PS-порта
+CHILD_TYPE_KINDS_CI = {k.upper() for k in CHILD_TYPE_DIR_MAP}
+
+
+def main_attribute_target(main_attr_xml):
+    """Объект, по которому разрешаются пути формы, — тип её основного реквизита, а не владелец формы:
+    форма обработки бывает с основным реквизитом DocumentObject.X. Берётся первый тип, который
+    является объектом метаданных (префикс пространства имён любой, в т.ч. объявленный на самом
+    <v8:Type>). Нет такого (динамический список,
+    таблица значений) — None: путь не по составу объекта."""
+    for tm in MAIN_ATTR_TYPE_RE.finditer(main_attr_xml):
+        if tm.group(1).upper() in CHILD_TYPE_KINDS_CI:
+            return {'Key': f'{tm.group(1)}.{tm.group(3)}', 'Category': tm.group(1) + tm.group(2),
+                    'TypeName': f'{tm.group(1)}{tm.group(2)}.{tm.group(3)}'}
+    return None
+
+
+# Стандартные реквизиты, которые платформа принимает первым сегментом пути формы, — по типу
+# основного реквизита (замер 8.3.24 на собственных объектах расширения, оба написания). Набор
+# зависит и от свойств объекта (Parent — иерархия, Owner — владельцы, ExtDimensionDr — корреспонденция),
+# здесь — надмножество по типу. Типа нет в карте (не замерен) — пути формы не проверяются.
+MAIN_ATTR_STANDARD_FIELDS = {k.upper(): {n.upper() for n in v.split()} for k, v in {
+    'CatalogObject': 'Code Description Ref Parent Owner DeletionMark Predefined PredefinedDataName IsFolder Код Наименование Ссылка Родитель Владелец ПометкаУдаления Предопределенный ИмяПредопределенныхДанных ЭтоГруппа',
+    'DocumentObject': 'Number Date Posted Ref DeletionMark RegisterRecords Номер Дата Проведен Ссылка ПометкаУдаления Движения',
+    'ChartOfCharacteristicTypesObject': 'Code Description Ref Parent IsFolder DeletionMark Predefined PredefinedDataName ValueType Код Наименование Ссылка Родитель ЭтоГруппа ПометкаУдаления Предопределенный ИмяПредопределенныхДанных ТипЗначения',
+    'ChartOfAccountsObject': 'Code Description Ref Parent DeletionMark Predefined PredefinedDataName OffBalance Order Type ExtDimensionTypes Код Наименование Ссылка Родитель ПометкаУдаления Предопределенный ИмяПредопределенныхДанных Забалансовый Порядок Вид ВидыСубконто',
+    'ChartOfCalculationTypesObject': 'Code Description Ref DeletionMark Predefined PredefinedDataName ActionPeriodIsBasic BaseCalculationTypes LeadingCalculationTypes DisplacingCalculationTypes Код Наименование Ссылка ПометкаУдаления Предопределенный ИмяПредопределенныхДанных ПериодДействияБазовый БазовыеВидыРасчета ВедущиеВидыРасчета ВытесняющиеВидыРасчета',
+    'ExchangePlanObject': 'Code Description Ref DeletionMark ThisNode SentNo ReceivedNo Код Наименование Ссылка ПометкаУдаления ЭтотУзел НомерОтправленного НомерПринятого',
+    'TaskObject': 'Number Date Description Ref DeletionMark BusinessProcess RoutePoint Executed Номер Дата Наименование Ссылка ПометкаУдаления БизнесПроцесс ТочкаМаршрута Выполнена',
+    'BusinessProcessObject': 'Number Date Ref DeletionMark Started Completed HeadTask Номер Дата Ссылка ПометкаУдаления Стартован Завершен ВедущаяЗадача',
+    'DataProcessorObject': '',
+    'ReportObject': 'SettingsComposer КомпоновщикНастроек',
+    'InformationRegisterRecordManager': 'Period Recorder LineNumber Active Период Регистратор НомерСтроки Активность',
+    'InformationRegisterRecordSet': 'Period Recorder LineNumber Active RowsCount Период Регистратор НомерСтроки Активность КоличествоСтрок',
+    'AccumulationRegisterRecordSet': 'Period Recorder LineNumber Active RecordType RowsCount Период Регистратор НомерСтроки Активность ВидДвижения КоличествоСтрок',
+    'AccountingRegisterRecordSet': 'Period Recorder LineNumber Active RecordType RowsCount Account AccountDr AccountCr ExtDimension1 ExtDimension2 ExtDimension3 ExtDimensionDr1 ExtDimensionDr2 ExtDimensionDr3 ExtDimensionCr1 ExtDimensionCr2 ExtDimensionCr3 Период Регистратор НомерСтроки Активность ВидДвижения КоличествоСтрок Счет СчетДт СчетКт Субконто1 Субконто2 Субконто3 СубконтоДт1 СубконтоДт2 СубконтоДт3 СубконтоКт1 СубконтоКт2 СубконтоКт3',
+    'CalculationRegisterRecordSet': 'Recorder LineNumber Active RowsCount CalculationType RegistrationPeriod ReversingEntry ActionPeriod BegOfActionPeriod EndOfActionPeriod BegOfBasePeriod EndOfBasePeriod Регистратор НомерСтроки Активность КоличествоСтрок ВидРасчета ПериодРегистрации Сторно ПериодДействия ПериодДействияНачало ПериодДействияКонец БазовыйПериодНачало БазовыйПериодКонец',
+}.items()}
+
+# Путь через компоновщик настроек отчёта (<Отчет>.SettingsComposer.<Свойство>.<Колонка или коллекция>) —
+# по дереву реквизита формы в конфигураторе (замер 8.3.24, 8.3.27, 8.5). Справка синтакс-помощника тут не
+# источник: Structure, Parent, UserSettings.Items во встроенном языке есть, а в пути формы — «Неверный путь
+# к данным». Платформа проверяет путь на всю глубину; здесь — два уровня после компоновщика, поля строк
+# коллекций (Filter.Use) не проверяем.
+SETTINGS_COMPOSER_NAMES = {'SETTINGSCOMPOSER', 'КОМПОНОВЩИКНАСТРОЕК'}
+_SC_SETTINGS = ('Use ReportStructurePicture ReportStructure HasSelection HasFilter HasOrder HasConditionalAppearance '
+                'HasOutputParameters DataParameters Filter Selection Order ConditionalAppearance OutputParameters UserFields '
+                'Использование КартинкаСтруктурыОтчета СтруктураОтчета НаличиеВыбора НаличиеОтбора НаличиеПорядка '
+                'НаличиеУсловногоОформления НаличиеПараметровВывода ПараметрыДанных Отбор Выбор Порядок УсловноеОформление '
+                'ПараметрыВывода ПользовательскиеПоля')
+_SC_USER_SETTINGS = ('Use SettingPicture Setting ComparisonType ValuePicture Value EditInReportForm '
+                     'Использование КартинкаНастройки Настройка ВидСравнения КартинкаЗначения Значение РедактированиеВФормеОтчета')
+SETTINGS_COMPOSER_TREE = {k.upper(): {n.upper() for n in v.split()} for k, v in {
+    'Settings': _SC_SETTINGS, 'Настройки': _SC_SETTINGS,
+    'FixedSettings': _SC_SETTINGS, 'ФиксированныеНастройки': _SC_SETTINGS,
+    'UserSettings': _SC_USER_SETTINGS, 'ПользовательскиеНастройки': _SC_USER_SETTINGS,
+}.items()}
+
+
+def settings_composer_error(segs):
+    """Путь после компоновщика настроек (segs[0]): (номер неверного сегмента, текст) или None."""
+    if len(segs) < 2:
+        return None
+    node = SETTINGS_COMPOSER_TREE.get(segs[1].upper())
+    if node is None:
+        # Подсказка — на языке, которым записан сам компоновщик
+        names = ('Настройки, ПользовательскиеНастройки, ФиксированныеНастройки' if segs[0].upper() == 'КОМПОНОВЩИКНАСТРОЕК'
+                 else 'Settings, UserSettings, FixedSettings')
+        return 1, f'the settings composer has no such property (available to forms: {names})'
+    if len(segs) >= 3 and segs[2].upper() not in node:
+        return 2, f'{segs[1]} has no such column or settings collection available to forms'
+    return None
+
+
+REF_TYPE_RE = re.compile(r'^(?:\w+:)?(\w+?)Ref\.(.+)$')
+
+
+# Стандартные поля строки табличной части: в ChildObjects их нет, но пути Объект.<ТЧ>.<Стандартный>
+# законны. Имена зависят от варианта встроенного языка, поэтому держим оба написания.
 STANDARD_OBJECT_FIELDS = {
     'Code', 'Description', 'Ref', 'Parent', 'Owner', 'DeletionMark', 'Predefined', 'IsFolder', 'LineNumber',
     'Number', 'Date', 'Posted', 'PredefinedDataName', 'RegisterRecords', 'DataVersion', 'RowsCount',
@@ -198,6 +281,7 @@ STANDARD_OBJECT_FIELDS = {
     'ЭтоГруппа', 'НомерСтроки', 'Номер', 'Дата', 'Проведен', 'ИмяПредопределенныхДанных',
     'Движения', 'ВерсияДанных', 'КоличествоСтрок',
 }
+STANDARD_OBJECT_FIELDS_CI = {f.upper() for f in STANDARD_OBJECT_FIELDS}
 
 # Valid enum values for extension properties
 VALID_ENUM_VALUES = {
@@ -289,6 +373,8 @@ class Reporter:
             result = f'=== Validation OK: Extension.{self.obj_name} ({checks} checks) ==='
         else:
             self.out('')
+            if self.stopped and self.errors >= self.max_errors:
+                self.out(f'Stopped after {self.max_errors} errors. Fix and re-run.')
             self.out(f'=== Result: {self.errors} errors, {self.warnings} warnings ({checks} checks) ===')
             result = self.text()
 
@@ -703,8 +789,140 @@ def main():
     MD = NS['md']
     XR = NS['xr']
     enum_values_index = {}
-    borrowed_ts_index = {}
+    ext_obj_index = {}
+    # Все объекты состава расширения, и те, чей файл не прочитан: отличить «объекта нет» от «не разобран»
+    ext_obj_listed = set()
     form_list = []
+
+    # Собственные подобъекты данных в заимствованном объекте (реквизит, ТЧ, колонка заимствованной ТЧ,
+    # измерение, ресурс, признаки учёта, реквизит адресации): у ПВХ, ПС, ПВР и регистров платформа их загружает, но базу не
+    # обновляет («Добавление дочерних объектов этого типа к заимствованным в расширениях недопустимо»,
+    # 8.3.24–8.5.1 при любом режиме совместимости); у БП и Задачи — так же на платформе ниже 8.3.25, а с
+    # 8.3.25 можно (граница по версии платформы, не по режиму — по исходникам её не определить).
+    # Формы, команды и макеты — можно везде (замер 8.3.24, 8.3.27, 8.5.1).
+    # Собственные объекты верхнего уровня: платформа загружает расширение, но базу не обновляет
+    # («Добавление дочерних объектов этого типа к заимствованным в расширениях недопустимо в режиме
+    # совместимости <режим> и ниже» — режим в сообщении лишь текущий). Последовательность, хранилище
+    # настроек, общий реквизит — нигде (8.3.24–8.5.1, и в режиме 8.5.1); БП и Задача — на платформе ниже
+    # 8.3.25, журнал документов — ниже 8.3.26 (граница по версии платформы, режим расширения 8.3.24).
+    # Остальные виды — можно уже на 8.3.24.
+    own_object_restricted = {
+        'Sequence': 'Error', 'SettingsStorage': 'Error', 'CommonAttribute': 'Error',
+        'BusinessProcess': '8.3.25', 'Task': '8.3.25', 'DocumentJournal': '8.3.26',
+    }
+    own_child_restricted = {
+        'ChartOfCharacteristicTypes': 'Error', 'ChartOfAccounts': 'Error', 'ChartOfCalculationTypes': 'Error',
+        'InformationRegister': 'Error', 'AccumulationRegister': 'Error', 'AccountingRegister': 'Error',
+        'CalculationRegister': 'Error', 'BusinessProcess': 'Since8325', 'Task': 'Since8325',
+    }
+    own_data_child_tags = ('Attribute', 'TabularSection', 'Dimension', 'Resource', 'AccountingFlag', 'ExtDimensionAccountingFlag', 'AddressingAttribute')
+
+    def md_type_list(el):
+        """Типы подобъекта метаданных: тексты <v8:Type>; определяемый тип — меткой «#DefinedType.<Имя>», прочие
+        наборы — «#TypeSet», квалификаторы пропускаются."""
+        result = []
+        type_el = el.find(f'{{{MD}}}Properties/{{{MD}}}Type')
+        if type_el is not None:
+            for tn in type_el:
+                if not isinstance(tn.tag, str):
+                    continue
+                ln = etree.QName(tn.tag).localname
+                if ln == 'Type':
+                    result.append((tn.text or '').strip())
+                elif ln == 'TypeSet':
+                    dtm = re.match(r'^(?:\w+:)?DefinedType\.(.+)$', (tn.text or '').strip())
+                    result.append(f'#DefinedType.{dtm.group(1)}' if dtm else '#TypeSet')
+        return result
+
+    def get_std_ref_types(kind, name, seg):
+        """Типы стандартного ссылочного реквизита справочника, через который путь идёт дальше: Родитель — сам
+        справочник, Владелец — единственный владелец (несколько — не замерено). Иначе None."""
+        if kind.upper() != 'CATALOG':
+            return None
+        if seg.upper() in ('PARENT', 'РОДИТЕЛЬ'):
+            return [f'cfg:CatalogRef.{name}']
+        if seg.upper() in ('OWNER', 'ВЛАДЕЛЕЦ'):
+            entry = ext_obj_index.get(f'{kind}.{name}'.upper())
+            if entry is not None and len(entry['Owners']) == 1:
+                om = re.match(r'^(\w+)\.(.+)$', entry['Owners'][0])
+                if om:
+                    return [f'cfg:{om.group(1)}Ref.{om.group(2)}']
+        return None
+
+    def ref_tail_error(types, segs, i):
+        """Хвост пути после ссылочного реквизита: сегмент с номером i и дальше. Замер 8.3.24: сегмент
+        разрешается по целевому объекту в расширении (заимствованные и собственные подобъекты) и стандартным
+        реквизитам вида — набор тот же, что у объекта (MAIN_ATTR_STANDARD_FIELDS); объекта в расширении
+        нет — только стандартные.
+        ТЧ цели — дальше колонка этой ТЧ; Родитель и Владелец справочника — дальше по их типу. Правило
+        повторяется на каждом шаге. У составного типа (любой состав) дальше реквизита путь не разрешается.
+        Определяемый тип раскрывается по его составу в расширении (замер 8.3.27: путь через составной ОТ
+        отвергается и в конфигурации); ОТ нет в расширении — не проверяем, это проверка 19.
+        Не замерено (примитивный тип, перечисление, прочие стандартные реквизиты в середине пути) — не
+        проверяем. Ошибка — (номер сегмента, текст), иначе None."""
+        while i < len(segs):
+            expanded = []
+            for t in types:
+                if t.startswith('#DefinedType.'):
+                    dt_entry = ext_obj_index.get(f'DefinedType.{t[13:]}'.upper())
+                    if dt_entry is None:
+                        return None
+                    expanded.extend(dt_entry['Types'])
+                else:
+                    expanded.append(t)
+            types = expanded
+            if '#TypeSet' in types:
+                return None
+            if len(types) >= 2:
+                return i, f'{segs[i - 1]} has a composite type — the path cannot continue past it'
+            if len(types) != 1:
+                return None
+            rm = REF_TYPE_RE.match(types[0])
+            if not rm:
+                return None
+            t_kind, t_name = rm.group(1), rm.group(2)
+            t_std = MAIN_ATTR_STANDARD_FIELDS.get(f'{t_kind}Object'.upper())
+            if t_std is None:
+                return None
+            t_key = f'{t_kind}.{t_name}'
+            seg = segs[i]
+            seg_ci = seg.upper()
+            if seg_ci in t_std:
+                std_types = get_std_ref_types(t_kind, t_name, seg)
+                if std_types is None:
+                    return None
+                types = std_types
+                i += 1
+                continue
+            t_entry = ext_obj_index.get(t_key.upper())
+            if t_entry is None:
+                if t_key.upper() in ext_obj_listed:
+                    return None
+                return i, (f'{t_key} has no attribute {seg} in the extension: the object is not borrowed, '
+                           f'and through a reference only its standard attributes are visible')
+            if seg_ci not in t_entry['Names']:
+                return i, f'{t_key} has no attribute {seg} in the extension (an unborrowed source attribute is not visible to extension forms)'
+            if seg_ci in t_entry['TSColumns']:
+                if i + 1 >= len(segs):
+                    return None
+                col = segs[i + 1]
+                if col.upper() in STANDARD_OBJECT_FIELDS_CI:
+                    return None
+                if col.upper() not in t_entry['TSColumns'][seg_ci]:
+                    return i + 1, f'tabular section {seg} of {t_key} has no column {col} in the extension'
+                types = t_entry['TSColumns'][seg_ci][col.upper()]
+                i += 2
+                continue
+            types = t_entry['Names'][seg_ci]
+            i += 1
+        return None
+
+    def add_ref_tail_bad_path(bad_paths, root_name, segs, types, i):
+        """Хвост пути через ссылку — в список висячих путей формы (ключ — путь до сегмента с ошибкой)."""
+        tail = ref_tail_error(types, segs, i)
+        if tail:
+            bad = f"{root_name}.{'.'.join(segs[:tail[0] + 1])}"
+            bad_paths.setdefault(bad.upper(), [bad, ''])[1] = tail[1]
 
     def is_borrowed_sub_item(sub_item):
         """Check if sub-item has explicit borrowed metadata (ObjectBelonging or ExtendedConfigurationObject)."""
@@ -734,13 +952,17 @@ def main():
             ok = False
         sub_ext = sub_props.find(f'{{{MD}}}ExtendedConfigurationObject')
         sub_name_val = (sub_name.text or '') if sub_name is not None else '?'
-        if sub_ext is None or not (sub_ext.text or ''):
-            r.error(f'{check_num}. {context}: {sub_type}.{sub_name_val} missing ExtendedConfigurationObject')
-            ok = False
-        elif not GUID_PATTERN.match(sub_ext.text):
+        if sub_ext is None:
+            no_link_items.append(f'{context}.{sub_type}.{sub_name_val}')
+        elif not GUID_PATTERN.match(sub_ext.text or ''):
             r.error(f'{check_num}. {context}: {sub_type}.{sub_name_val} invalid ExtendedConfigurationObject')
             ok = False
         return ok
+
+    # Заимствованные элементы без ExtendedConfigurationObject (проверки 9–11). Платформа такие принимает и
+    # связывает по имени, но штатно элемент пишется всегда: без него не видно, что объект источника
+    # пересоздан, — расширение молча прицепится к новому (замер 8.3.23–8.5.1). Итог — одно предупреждение.
+    no_link_items = []
 
     if child_obj_node is not None:
         borrowed_count = 0
@@ -760,7 +982,12 @@ def main():
             if type_name not in CHILD_TYPE_DIR_MAP:
                 continue
             dir_name = CHILD_TYPE_DIR_MAP[type_name]
+            ext_obj_listed.add(f'{type_name}.{child_name}'.upper())
             obj_file = os.path.join(config_dir, dir_name, child_name + '.xml')
+            # Общая форма — сама себе объект: её Form.xml проверяют те же 11–14, что и формы объектов
+            if type_name == 'CommonForm' and os.path.isfile(os.path.join(config_dir, dir_name, child_name, 'Ext', 'Form.xml')):
+                form_list.append({'TypeName': type_name, 'ObjName': child_name, 'FormName': child_name,
+                                  'DirName': dir_name, 'IsCommon': True})
 
             if not os.path.exists(obj_file):
                 continue
@@ -794,11 +1021,11 @@ def main():
                 borrowed_count += 1
 
                 ext_obj = obj_props.find(f'{{{MD}}}ExtendedConfigurationObject')
-                if ext_obj is None or not (ext_obj.text or ''):
-                    r.error(f'9. Borrowed {type_name}.{child_name}: missing ExtendedConfigurationObject')
-                    check9_ok = False
-                elif not GUID_PATTERN.match(ext_obj.text):
-                    r.error(f"9. Borrowed {type_name}.{child_name}: invalid ExtendedConfigurationObject UUID '{ext_obj.text}'")
+                if ext_obj is None:
+                    no_link_items.append(f'{type_name}.{child_name}')
+                    borrowed_ok_count += 1
+                elif not GUID_PATTERN.match(ext_obj.text or ''):
+                    r.error(f"9. Borrowed {type_name}.{child_name}: invalid ExtendedConfigurationObject UUID '{ext_obj.text or ''}'")
                     check9_ok = False
                 else:
                     borrowed_ok_count += 1
@@ -819,9 +1046,86 @@ def main():
                         word = 'category' if len(missing_cats) == 1 else 'categories'
                         r.error(f"9. Borrowed {type_name}.{child_name}: missing GeneratedType {word} {', '.join(missing_cats)}")
                         check9_ok = False
+            else:
+                own_obj_rule = own_object_restricted.get(type_name)
+                if own_obj_rule == 'Error':
+                    r.error(f'9. {type_name}.{child_name}: own object of this kind in an extension — the platform loads the extension but does not update the database («Добавление дочерних объектов этого типа к заимствованным в расширениях недопустимо»)')
+                    check9_ok = False
+                elif own_obj_rule:
+                    r.warn(f'9. {type_name}.{child_name}: own object of this kind — below platform {own_obj_rule} the database is not updated («Добавление дочерних объектов этого типа к заимствованным в расширениях недопустимо»)')
 
             # --- Check 10: Sub-items (Attribute, TabularSection, EnumValue, Form) ---
             obj_child_objects = obj_el.find(f'{{{MD}}}ChildObjects')
+
+            # Объект таким, каким он описан в расширении: реквизиты (и реквизиты адресации задачи, признаки
+            # учёта плана счетов), измерения, ресурсы, ТЧ и колонки ТЧ — и заимствованные, и собственные;
+            # значение — список типов (по нему разрешается путь через ссылочный реквизит). По этому описанию платформа разрешает пути любой формы
+            # расширения (проверка 14) и таблицы <AdditionalColumns> (проверка 12); незаимствованный
+            # подобъект источника она не видит. Имена (и ключ объекта) регистронезависимы, как в языке 1С: upper().
+            ix_names = {}
+            ix_ts_columns = {}
+            if obj_child_objects is not None:
+                for ix_sub in obj_child_objects:
+                    if not isinstance(ix_sub.tag, str):
+                        continue
+                    ix_ln = etree.QName(ix_sub.tag).localname
+                    if ix_ln not in ('Attribute', 'Dimension', 'Resource', 'TabularSection',
+                                     'AddressingAttribute', 'AccountingFlag', 'ExtDimensionAccountingFlag'):
+                        continue
+                    ix_name_el = ix_sub.find(f'{{{MD}}}Properties/{{{MD}}}Name')
+                    if ix_name_el is None or not ix_name_el.text:
+                        continue
+                    ix_name = ix_name_el.text.strip().upper()
+                    ix_names[ix_name] = md_type_list(ix_sub)
+                    if ix_ln != 'TabularSection':
+                        continue
+                    ix_cols = {}
+                    for ix_col in ix_sub.findall(f'{{{MD}}}ChildObjects/{{{MD}}}Attribute'):
+                        ix_col_name = ix_col.find(f'{{{MD}}}Properties/{{{MD}}}Name')
+                        if ix_col_name is not None and ix_col_name.text:
+                            ix_cols[ix_col_name.text.strip().upper()] = md_type_list(ix_col)
+                    ix_ts_columns[ix_name] = ix_cols
+            ix_owners = [o.text.strip() for o in obj_el.findall(f'{{{MD}}}Properties/{{{MD}}}Owners/{{{XR}}}Item') if o.text]
+            ix_ext_dim = obj_el.find(f'{{{MD}}}Properties/{{{MD}}}ExtDimensionTypes')
+            ix_max_ext_dim = obj_el.find(f'{{{MD}}}Properties/{{{MD}}}MaxExtDimensionCount')
+            ext_obj_index[f'{type_name}.{child_name}'.upper()] = {'Names': ix_names, 'TSColumns': ix_ts_columns, 'Owners': ix_owners,
+                                                                  'ExtDimTypes': (ix_ext_dim is not None and bool((ix_ext_dim.text or '').strip())
+                                                                                  and ix_max_ext_dim is not None and bool((ix_max_ext_dim.text or '').strip())),
+                                                                  'Types': md_type_list(obj_el) if type_name == 'DefinedType' else []}
+
+            # Собственные подобъекты данных в заимствованном объекте вида, где они запрещены
+            own_rule = None
+            if ob_node is not None and (ob_node.text or '') == 'Adopted':
+                own_rule = own_child_restricted.get(type_name)
+            if own_rule and obj_child_objects is not None:
+                own_found = []
+                for oc in obj_child_objects:
+                    if not isinstance(oc.tag, str) or etree.QName(oc.tag).localname not in own_data_child_tags:
+                        continue
+                    oc_ln = etree.QName(oc.tag).localname
+                    oc_name = oc.find(f'{{{MD}}}Properties/{{{MD}}}Name')
+                    oc_label = f"{oc_ln}.{(oc_name.text or '').strip() if oc_name is not None else '?'}"
+                    if not is_borrowed_sub_item(oc):
+                        own_found.append(oc_label)
+                        continue
+                    if oc_ln != 'TabularSection':
+                        continue
+                    for occ in oc.findall(f'{{{MD}}}ChildObjects/{{{MD}}}Attribute'):
+                        if is_borrowed_sub_item(occ):
+                            continue
+                        occ_name = occ.find(f'{{{MD}}}Properties/{{{MD}}}Name')
+                        own_found.append(f"{oc_label}.Attribute.{(occ_name.text or '').strip() if occ_name is not None else '?'}")
+                for own_label in own_found:
+                    if r.stopped:
+                        break
+                    if own_rule == 'Error':
+                        r.error(f'10. {type_name}.{child_name}: own {own_label} in a borrowed object — the platform loads the extension '
+                                f'but does not update the database («Добавление дочерних объектов этого типа к заимствованным в расширениях недопустимо»)')
+                        check10_ok = False
+                    else:
+                        r.warn(f'10. {type_name}.{child_name}: own {own_label} in a borrowed object — below platform 8.3.25 '
+                               f'the database is not updated («Добавление дочерних объектов этого типа к заимствованным в расширениях недопустимо»)')
+
             if obj_child_objects is not None:
                 ctx = f'{type_name}.{child_name}'
                 for sub_item in obj_child_objects:
@@ -847,9 +1151,6 @@ def main():
                             ts_info = sub_item.find(f'{{{MD}}}InternalInfo')
                             ts_name_el = sub_item.find(f'{{{MD}}}Properties/{{{MD}}}Name')
                             ts_label = (ts_name_el.text or '?') if ts_name_el is not None else '?'
-                            # Индекс заимствованных ТЧ — по нему Check 12 сверяет <AdditionalColumns table="Объект.X">
-                            if ts_name_el is not None and ts_name_el.text:
-                                borrowed_ts_index.setdefault(f'{type_name}.{child_name}', {})[ts_name_el.text.strip()] = True
                             if ts_info is None:
                                 r.error(f'10. {ctx}: TabularSection.{ts_label} missing InternalInfo')
                                 check10_ok = False
@@ -871,7 +1172,7 @@ def main():
                                     if not is_borrowed_sub_item(ts_attr):
                                         continue
                                     sub_item_count += 1
-                                    if not validate_borrowed_sub_item('10', f'{ctx}.ТЧ.{ts_label}', 'Attribute', ts_attr):
+                                    if not validate_borrowed_sub_item('10', f'{ctx}.TabularSection.{ts_label}', 'Attribute', ts_attr):
                                         check10_ok = False
 
                     elif sub_type == 'EnumValue' and type_name == 'Enum':
@@ -903,10 +1204,12 @@ def main():
             if r.stopped:
                 break
 
-        if borrowed_count == 0:
-            r.ok('9. Borrowed objects: none found')
-        elif check9_ok:
-            r.ok(f'9. Borrowed objects: {borrowed_ok_count}/{borrowed_count} validated')
+        # Ошибка проверки 9 (в т.ч. на собственном объекте) гасит итоговую строку OK
+        if check9_ok:
+            if borrowed_count == 0:
+                r.ok('9. Borrowed objects: none found')
+            else:
+                r.ok(f'9. Borrowed objects: {borrowed_ok_count}/{borrowed_count} validated')
 
         if sub_item_count == 0:
             r.ok('10. Sub-items: none found')
@@ -919,16 +1222,25 @@ def main():
 
     # --- Check 11: Borrowed form structure ---
     borrowed_forms_with_tree = []
+    # Все формы объектов расширения с текстом Form.xml — заимствованные и собственные (проверка 14)
+    forms_with_text = []
     check11_ok = True
     form_count = 0
 
     for fi in form_list:
         form_count += 1
-        form_base = os.path.join(config_dir, fi['DirName'], fi['ObjName'], 'Forms', fi['FormName'])
+        is_common = fi.get('IsCommon', False)
+        # Каталог формы относительно корня: CommonForms/X у общей, Catalogs/X/Forms/Y у формы объекта
+        form_rel = (os.path.join(fi['DirName'], fi['ObjName']) if is_common
+                    else os.path.join(fi['DirName'], fi['ObjName'], 'Forms', fi['FormName']))
+        form_base = os.path.join(config_dir, form_rel)
         form_meta_file = os.path.join(os.path.dirname(form_base), fi['FormName'] + '.xml')
         form_xml_file = os.path.join(form_base, 'Ext', 'Form.xml')
         module_bsl_file = os.path.join(form_base, 'Ext', 'Form', 'Module.bsl')
-        ctx = f"{fi['TypeName']}.{fi['ObjName']}.Form.{fi['FormName']}"
+        ctx = (f"{fi['TypeName']}.{fi['ObjName']}" if is_common
+               else f"{fi['TypeName']}.{fi['ObjName']}.Form.{fi['FormName']}")
+        # Владелец формы — объект, у общей формы его нет
+        owner_key11 = '' if is_common else f"{fi['TypeName']}.{fi['ObjName']}"
 
         # Validate form metadata XML
         if os.path.exists(form_meta_file):
@@ -945,10 +1257,13 @@ def main():
                     if fm_props is not None:
                         fm_ob = fm_props.find(f'{{{MD}}}ObjectBelonging')
                         is_borrowed = fm_ob is not None and (fm_ob.text or '') == 'Adopted'
-                        if is_borrowed:
+                        # У общей формы это описание самого объекта — его уже проверила проверка 9
+                        if is_borrowed and not is_common:
                             fm_ext = fm_props.find(f'{{{MD}}}ExtendedConfigurationObject')
-                            if fm_ext is None or not (fm_ext.text or '') or not GUID_PATTERN.match(fm_ext.text or ''):
-                                r.error(f'11. {ctx}: invalid/missing ExtendedConfigurationObject')
+                            if fm_ext is None:
+                                no_link_items.append(ctx)
+                            elif not GUID_PATTERN.match(fm_ext.text or ''):
+                                r.error(f'11. {ctx}: invalid ExtendedConfigurationObject')
                                 check11_ok = False
                         fm_type = fm_props.find(f'{{{MD}}}FormType')
                         if fm_type is not None and (fm_type.text or '') != 'Managed':
@@ -970,12 +1285,15 @@ def main():
         # Read Form.xml as raw text for BaseForm checks
         with open(form_xml_file, 'r', encoding='utf-8-sig') as f:
             form_raw_text = f.read()
+        forms_with_text.append({
+            'RawText': form_raw_text, 'Context': ctx, 'OwnerKey': owner_key11, 'FormRel': form_rel,
+        })
 
         if '<BaseForm' in form_raw_text:
             if not re.search(r'<BaseForm[^>]+version=', form_raw_text):
                 r.warn(f'11. {ctx}: <BaseForm> missing version attribute')
             borrowed_forms_with_tree.append({
-                'Path': form_xml_file, 'RawText': form_raw_text, 'Context': ctx,
+                'Path': form_xml_file, 'RawText': form_raw_text, 'Context': ctx, 'OwnerKey': owner_key11,
             })
 
     if form_count == 0:
@@ -983,6 +1301,12 @@ def main():
     elif check11_ok:
         bf_count = len(borrowed_forms_with_tree)
         r.ok(f'11. Borrowed forms: {form_count} validated ({bf_count} with BaseForm)')
+
+    if no_link_items:
+        shown = ', '.join(no_link_items[:5])
+        if len(no_link_items) > 5:
+            shown += ', …'
+        r.warn(f'9. {len(no_link_items)} borrowed element(s) without ExtendedConfigurationObject ({shown}), the link to the source object: the platform binds them by name only — if the source object is deleted and recreated under the same name, the extension silently binds to the new one. Restore the link: /cfe-borrow -Actualize')
 
     if r.stopped:
         r.finalize(out_file)
@@ -1043,8 +1367,8 @@ def main():
                 missing_items.append(f"Enum.{entry['Enum']}.EnumValue.{entry['Value']}")
 
         # <AdditionalColumns table="Объект.X"> — доп. колонки табличной части, объявленные в самой форме.
-        # Колонки есть, а самой ТЧ в расширении нет → платформа отвергает загрузку: «Неверный путь к
-        # данным» плюс «Колонки не могут быть добавлены к реквизиту».
+        # Колонки есть, а самой ТЧ в расширении нет (ни заимствованной, ни собственной) → платформа
+        # отвергает загрузку: «Неверный путь к данным» плюс «Колонки не могут быть добавлены к реквизиту».
         # Соседние проверки этого блока эвристичны (имя стиля добывается регуляркой), поэтому там
         # предупреждение. Здесь сигнал точный — имя ТЧ берётся из атрибута, — а последствие жёсткое,
         # поэтому ошибка.
@@ -1053,16 +1377,27 @@ def main():
         # таких формах молча не срабатывали. Ищем сначала в <Attributes> формы, потом в <BaseForm>.
         root_match = MAIN_ATTR_RE.search(raw)
         root_name = root_match.group(1) if root_match else ""
+        # Только своя часть формы: <BaseForm> — снимок исходной формы, его платформа разрешает по конфигурации.
         ac_tables = set()
         if root_name:
-            ac_tables = set(re.findall(r'<AdditionalColumns table="' + re.escape(root_name) + r'\.(\w+)"', raw))
-        if ac_tables:
-            owner_key = ctx.split('.Form.')[0]
-            owner_ts = borrowed_ts_index.get(owner_key, {})
+            own_part = raw.split('<BaseForm', 1)[0]
+            ac_tables = set(re.findall(r'<AdditionalColumns table="' + re.escape(root_name) + r'\.(\w+)"', own_part))
+        # ТЧ ищется у объекта основного реквизита; типа у реквизита нет — у владельца формы; тип не объект
+        # метаданных (таблица значений, список) — ТЧ объекта тут ни при чём. Объекта основного реквизита
+        # в расширении нет — об этом скажет проверка 14, здесь бы вышла ложная подсказка про ТЧ.
+        ac_target = main_attribute_target(root_match.group(0)) if root_match else None
+        owner_key = None
+        if ac_target:
+            if ac_target['Key'].upper() in ext_obj_index:
+                owner_key = ac_target['Key']
+        elif '<v8:Type' not in (root_match.group(0) if root_match else '') and bf['OwnerKey']:
+            owner_key = bf['OwnerKey']
+        if ac_tables and owner_key:
+            owner_ts = ext_obj_index.get(owner_key.upper(), {}).get('TSColumns', {})
             for tbl_name in sorted(ac_tables):
                 dep_check_count += 1
-                if tbl_name not in owner_ts:
-                    r.error(f'12. {ctx}: <AdditionalColumns table="{root_name}.{tbl_name}"> — TabularSection.{tbl_name} not borrowed in extension')
+                if tbl_name.upper() not in owner_ts:
+                    r.error(f'12. {ctx}: <AdditionalColumns table="{root_name}.{tbl_name}"> — TabularSection.{tbl_name} is neither borrowed nor added in extension')
                     check12_ok = False
 
         for mi in missing_items:
@@ -1096,125 +1431,187 @@ def main():
     elif check13_ok:
         r.ok('13. TypeLink: clean')
 
-    # --- Check 14: пути Объект.* заимствованных форм против конфигурации-источника ---
-    # Требует -ConfigPath: отличить живой путь от висячего можно только по исходному объекту.
-    # «Объект.Партнер» валиден и без заимствования реквизита (наследуется от базы), а «Объект.Товары.Артикул»
-    # не разрешится нигде, если Артикул — не колонка ТЧ и не колонка из <Columns> самой формы.
-    # Такой путь платформа отвергает на загрузке: «Неверный путь к данным».
-    if not r.stopped and borrowed_forms_with_tree:
-        if not config_path_arg:
-            r.out('[INFO]  14. Пути Объект.* против конфигурации-источника не проверялись: не задан -ConfigPath')
-        else:
-            cfg_root = config_path_arg
-            if not os.path.isabs(cfg_root):
-                cfg_root = os.path.join(os.getcwd(), cfg_root)
-            if os.path.exists(cfg_root) and not os.path.isdir(cfg_root):
-                cfg_root = os.path.dirname(cfg_root)
+    # Каталог конфигурации-источника из -ConfigPath (каталог или путь к Configuration.xml) для
+    # проверки 18; есть ли там Configuration.xml, она решает и сообщает сама.
+    def source_config_root():
+        root = config_path_arg
+        if not os.path.isabs(root):
+            root = os.path.join(os.getcwd(), root)
+        if os.path.exists(root) and not os.path.isdir(root):
+            root = os.path.dirname(root)
+        return root
 
-            if not os.path.isfile(os.path.join(cfg_root, 'Configuration.xml')):
-                r.warn(f"14. -ConfigPath '{config_path_arg}': Configuration.xml не найден — проверка путей пропущена")
-            else:
-                check14_ok = True
-                path_check_count = 0
+    # --- Check 14: пути <Основной реквизит>.* форм расширения против объекта в расширении ---
+    # Платформа разрешает путь любой формы расширения — и заимствованной, и собственной — по объекту
+    # таким, каким он описан в расширении: заимствованные и собственные реквизиты, ТЧ и их колонки
+    # (индекс ext_obj_index, проверка 10). Незаимствованный реквизит источника она не видит даже
+    # на заимствованной форме, где он был в исходной: «Неверный путь к данным». Имена — без учёта
+    # регистра. Стандартные реквизиты — по типу основного реквизита (MAIN_ATTR_STANDARD_FIELDS).
+    # После ссылочного реквизита или колонки путь продолжается по целевому объекту (ref_tail_error).
+    if not r.stopped and forms_with_text:
+        check14_ok = True
+        path_check_count = 0
 
-                for bf in borrowed_forms_with_tree:
-                    raw = bf['RawText']
-                    ctx = bf['Context']
-                    # Корень путей — имя основного реквизита формы (см. проверку 12). Нет его ни в
-                    # <Attributes> формы, ни в <BaseForm> — путей с корнем не бывает, проверять нечего.
-                    root_match14 = MAIN_ATTR_RE.search(raw)
-                    if root_match14 is None:
+        for fw in forms_with_text:
+            raw = fw['RawText']
+            ctx = fw['Context']
+            # Только своя часть формы: <BaseForm> — снимок исходной формы, его платформа разрешает по
+            # конфигурации, а не по расширению.
+            own = raw.split('<BaseForm', 1)[0]
+            root_match14 = MAIN_ATTR_RE.search(own)
+
+            # Корень любого пути — реквизит, объявленный в <Attributes> самой формы, иначе «Неверный путь к
+            # данным». Заимствованная без основного реквизита форма его не объявляет, а поле Объект.* на неё
+            # дописать можно. Пропускаются Items.* (текущая строка таблицы) и ссылки, которые Конфигуратор
+            # пишет номерами (58, 1/0:<uuid>, 306:<uuid>/8:<uuid>) — имя реквизита с цифры не начинается.
+            declared = set()
+            attr_section = re.search(r'(?s)<Attributes>(.*?)</Attributes>', own)
+            if attr_section:
+                declared = {n.upper() for n in re.findall(r'<Attribute name="([^"]+)"', attr_section.group(1))}
+            undeclared = {}   # корень в верхнем регистре -> (корень как в первом пути, пути)
+            for m in re.finditer(r'<(?:\w+:)?\w*DataPath[^>]*>([^<]+)</(?:\w+:)?\w*DataPath>', own):
+                dp = m.group(1).strip()
+                if not dp or dp[0].isdigit():
+                    continue
+                root = re.sub(r'^~', '', re.sub(r'\[\d+\]', '', dp)).split('.', 1)[0]
+                if root.upper() == 'ITEMS' or root.upper() in declared:
+                    continue
+                entry = undeclared.setdefault(root.upper(), (root, []))
+                if dp not in entry[1]:
+                    entry[1].append(dp)
+            if undeclared:
+                # Подсказка — только когда корень и есть основной реквизит исходной формы: по самой исходной
+                # форме (-ConfigPath), без неё — по снимку <BaseForm>, а нет его и там — по обычным именам
+                # основного реквизита (так же решает form-validate).
+                hint_roots = []
+                hint_exact = False   # имя взято из исходной формы или <BaseForm>, а не из обычных имён
+                if not root_match14 and '<BaseForm' in raw:
+                    src_form = (os.path.join(source_config_root(), fw['FormRel'], 'Ext', 'Form.xml')
+                                if config_path_arg else '')
+                    if src_form and os.path.isfile(src_form):
+                        with open(src_form, 'r', encoding='utf-8-sig') as f:
+                            src_match = MAIN_ATTR_RE.search(f.read().split('<BaseForm', 1)[0])
+                        if src_match:
+                            hint_roots = [src_match.group(1)]
+                            hint_exact = True
+                    else:
+                        base_match = MAIN_ATTR_RE.search(raw.split('<BaseForm', 1)[1])
+                        hint_exact = base_match is not None
+                        hint_roots = [base_match.group(1)] if base_match else MAIN_ATTR_DEFAULT_NAMES
+                hint_roots_upper = {n.upper() for n in hint_roots}
+                for root, paths in undeclared.values():   # порядок корней — как в файле
+                    sample = "', '".join(paths[:3])
+                    more = f' (and {len(paths) - 3} more)' if len(paths) > 3 else ''
+                    if root.upper() not in hint_roots_upper:
+                        hint = ''
+                    elif hint_exact:
+                        hint = ' — the form was borrowed without its main attribute, re-borrow it with -BorrowMainAttribute Form'
+                    else:
+                        hint = f" — if '{root}' is the source form's main attribute, re-borrow the form with -BorrowMainAttribute Form"
+                    r.error(f"14. {ctx}: path '{sample}'{more} — form attribute '{root}' is not declared in the form{hint}")
+                check14_ok = False
+
+            # Дальше — хвост путей от основного реквизита по составу объекта (см. проверку 12). Основного
+            # реквизита нет — проверять хвост не по чему.
+            if not root_match14:
+                continue
+            root_name14 = root_match14.group(1)
+            # Тип не объект метаданных — пути не по составу объекта. Так и у динамического списка: его поля —
+            # результат запроса, туда входят стандартные поля списка (Ref, Date, DefaultPicture) и псевдонимы
+            # (корпусная проверка: 3383 таких сегмента на 1094 формах списка УТ).
+            target = main_attribute_target(root_match14.group(0))
+            if target is None:
+                continue
+            owner_key = target['Key']
+            owner_entry = ext_obj_index.get(owner_key.upper())
+            if owner_entry is None:
+                # Объект в составе расширения есть, но его файл не прочитан — об этом уже сказала проверка 9.
+                if owner_key.upper() in ext_obj_listed:
+                    continue
+                # Объекта основного реквизита в расширении нет — тип не разрешается, и платформа не читает
+                # форму целиком: «Исключение XDTO произошло при чтении файла». Это ошибка типа, а не путей,
+                # поэтому она не зависит от того, замерен ли набор стандартных реквизитов этого типа (ниже).
+                r.error(f"14. {ctx}: main attribute '{root_name14}' of type {target['TypeName']} — object {owner_key} is not in the extension (borrow it)")
+                check14_ok = False
+                continue
+            std_fields = MAIN_ATTR_STANDARD_FIELDS.get(target['Category'].upper())
+            if std_fields is None:
+                continue
+
+            # Колонки ТЧ — из описания в расширении плюс объявленные в самой форме через
+            # <Columns>/<AdditionalColumns table="Объект.X">. Копия, чтобы не дописывать в индекс.
+            ts_columns = {ts: dict(cols) for ts, cols in owner_entry['TSColumns'].items()}
+            root_pat14 = re.escape(root_name14)
+            for acm in re.finditer(r'<AdditionalColumns table="' + root_pat14 + r'\.(\w+)">(.*?)</AdditionalColumns>', own, re.DOTALL):
+                cols = ts_columns.setdefault(acm.group(1).upper(), {})
+                for cm in re.finditer(r'<Column name="(\w+)"', acm.group(2)):
+                    cols.setdefault(cm.group(1).upper(), [])
+
+            # Ключ — путь без учёта регистра, как у хеш-таблицы PS-порта: первое написание остаётся
+            bad_paths = {}
+            for m in re.finditer(r'<(?:\w+:)?\w*DataPath[^>]*>' + root_pat14 + r'\.([^<]+)</(?:\w+:)?\w*DataPath>', own):
+                # Индекс строки ТЧ (Объект.Товары[0].Цена) к имени не относится
+                segments = [re.sub(r'\[.*$', '', s) for s in m.group(1).split('.')]
+                seg0 = segments[0]
+                seg0_ci = seg0.upper()
+                path_check_count += 1
+                if seg0_ci in std_fields:
+                    # Стандартная ТЧ видов субконто плана счетов видна, только если в описании объекта в расширении
+                    # заданы свойства ExtDimensionTypes и MaxExtDimensionCount: без любого из них — «Неверный путь к
+                    # данным» (замер 8.3.24). ПВХ видов субконто ещё должен быть заимствован — иначе «Неизвестный объект
+                    # метаданных», это не про пути.
+                    if (target['Category'] == 'ChartOfAccountsObject' and seg0_ci in ('EXTDIMENSIONTYPES', 'ВИДЫСУБКОНТО')
+                            and not owner_entry['ExtDimTypes']):
+                        bad = f'{root_name14}.{seg0}'
+                        bad_paths.setdefault(bad.upper(), [bad, ''])[1] = (
+                            f'{owner_key} in the extension lacks ExtDimensionTypes or MaxExtDimensionCount — the standard tabular section '
+                            f'ExtDimensionTypes is not visible to the form (copy both properties and borrow the extra dimension types chart)')
                         continue
-                    root_name14 = root_match14.group(1)
-                    # У динамического списка набор полей — результат его запроса, а не состав объекта:
-                    # туда входят и стандартные поля списка (Ref, Date, DefaultPicture), и псевдонимы
-                    # запроса. Сверять такие пути с ChildObjects объекта нельзя — будут ложные ошибки
-                    # (корпусная проверка: 3383 таких сегмента на 1094 формах списка УТ).
-                    if '>cfg:DynamicList<' in root_match14.group(0):
+                    if target['Category'].upper() == 'REPORTOBJECT' and seg0_ci in SETTINGS_COMPOSER_NAMES:
+                        sc_err = settings_composer_error(segments)
+                        if sc_err:
+                            bad = f"{root_name14}.{'.'.join(segments[:sc_err[0] + 1])}"
+                            bad_paths.setdefault(bad.upper(), [bad, ''])[1] = sc_err[1]
                         continue
-                    owner_key = ctx.split('.Form.')[0]
-                    owner_parts = owner_key.split('.', 1)
-                    if len(owner_parts) < 2:
-                        continue
-                    owner_type, owner_name = owner_parts
-                    owner_dir = CHILD_TYPE_DIR_MAP.get(owner_type)
-                    if not owner_dir:
-                        continue
-                    src_obj_file = os.path.join(cfg_root, owner_dir, f'{owner_name}.xml')
-                    if not os.path.isfile(src_obj_file):
-                        r.warn(f'14. {ctx}: объект-источник не найден в конфигурации ({owner_dir}/{owner_name}.xml)')
-                        continue
+                    if len(segments) >= 2:
+                        target_kind, target_name = owner_key.split('.', 1)
+                        std_types = get_std_ref_types(target_kind, target_name, seg0)
+                        if std_types:
+                            add_ref_tail_bad_path(bad_paths, root_name14, segments, std_types, 1)
+                    continue
+                if seg0_ci not in owner_entry['Names']:
+                    bad = f'{root_name14}.{seg0}'
+                    bad_paths.setdefault(bad.upper(), [bad, ''])[1] = (
+                        f'{owner_key} has no such attribute or tabular section in the extension '
+                        f'(an unborrowed source attribute is not visible to extension forms)')
+                    continue
+                if len(segments) < 2:
+                    continue
+                if seg0_ci not in ts_columns:
+                    add_ref_tail_bad_path(bad_paths, root_name14, segments, owner_entry['Names'][seg0_ci], 1)
+                    continue
+                seg1 = segments[1]
+                seg1_ci = seg1.upper()
+                if seg1_ci in STANDARD_OBJECT_FIELDS_CI:
+                    continue
+                # Итог колонки — псевдополе платформы: Total<Колонка> при живой колонке законен
+                if seg1_ci.startswith('TOTAL') and seg1_ci[5:] in ts_columns[seg0_ci]:
+                    continue
+                if seg1_ci not in ts_columns[seg0_ci]:
+                    bad = f'{root_name14}.{seg0}.{seg1}'
+                    bad_paths.setdefault(bad.upper(), [bad, ''])[1] = (
+                        f'tabular section {seg0} has no column {seg1} in the extension, and the form <Columns> does not declare it')
+                    continue
+                # Дальше колонки — по её типу (Объект.Товары.Номенклатура.Артикул)
+                if len(segments) > 2:
+                    add_ref_tail_bad_path(bad_paths, root_name14, segments, ts_columns[seg0_ci][seg1_ci], 2)
 
-                    # Имена, доступные первым сегментом пути: реквизиты и ТЧ объекта-источника.
-                    # Плюс для каждой ТЧ — её колонки: второй сегмент проверяем по ним (именно там
-                    # и жил дефект — Объект.Товары.Артикул при живой ТЧ Товары).
-                    src_names = set()
-                    src_ts_columns = {}
-                    src_tree = etree.parse(src_obj_file, etree.XMLParser(remove_blank_text=True))
-                    src_obj_el = None
-                    for c in src_tree.getroot():
-                        if isinstance(c.tag, str):
-                            src_obj_el = c
-                            break
-                    src_child_objects = src_obj_el.find(f'{{{MD}}}ChildObjects') if src_obj_el is not None else None
-                    if src_child_objects is not None:
-                        for sub in src_child_objects:
-                            if not isinstance(sub.tag, str):
-                                continue
-                            sub_ln = etree.QName(sub.tag).localname
-                            # У регистра дочерние объекты — Dimension/Resource, а не Attribute: без них
-                            # замена корня превратила бы тихий пропуск в ложные ошибки на форме записи.
-                            if sub_ln not in ('Attribute', 'Dimension', 'Resource', 'TabularSection'):
-                                continue
-                            name_el = sub.find(f'{{{MD}}}Properties/{{{MD}}}Name')
-                            if name_el is None or not name_el.text:
-                                continue
-                            sub_name = name_el.text.strip()
-                            src_names.add(sub_name)
-                            if sub_ln != 'TabularSection':
-                                continue
-                            cols = set()
-                            for col_name in sub.findall(f'{{{MD}}}ChildObjects/{{{MD}}}Attribute/{{{MD}}}Properties/{{{MD}}}Name'):
-                                if col_name.text:
-                                    cols.add(col_name.text.strip())
-                            src_ts_columns[sub_name] = cols
-                    # Плюс колонки, объявленные в самой форме через <Columns>/<AdditionalColumns table="Объект.X">
-                    root_pat14 = re.escape(root_name14)
-                    for acm in re.finditer(r'<AdditionalColumns table="' + root_pat14 + r'\.(\w+)">(.*?)</AdditionalColumns>', raw, re.DOTALL):
-                        tbl = acm.group(1)
-                        cols = src_ts_columns.setdefault(tbl, set())
-                        for cm in re.finditer(r'<Column name="(\w+)"', acm.group(2)):
-                            cols.add(cm.group(1))
+            for bad, msg in sorted(bad_paths.values(), key=lambda bm: bm[0].upper()):
+                r.error(f"14. {ctx}: path '{bad}' — {msg}")
+                check14_ok = False
 
-                    bad_paths = {}
-                    for m in re.finditer(r'<(?:\w+:)?\w*DataPath[^>]*>' + root_pat14 + r'\.([^<]+)</(?:\w+:)?\w*DataPath>', raw):
-                        segments = m.group(1).split('.')
-                        seg0 = segments[0]
-                        path_check_count += 1
-                        if seg0 in STANDARD_OBJECT_FIELDS:
-                            continue
-                        if seg0 not in src_names:
-                            bad_paths[f'{root_name14}.{seg0}'] = f'у {owner_key} нет такого реквизита или табличной части'
-                            continue
-                        # Второй сегмент проверяем только для табличных частей: у ссылочного реквизита
-                        # он ведёт в чужой объект, и это уже другая проверка.
-                        if len(segments) < 2 or seg0 not in src_ts_columns:
-                            continue
-                        seg1 = segments[1]
-                        if seg1 in STANDARD_OBJECT_FIELDS:
-                            continue
-                        # Итог колонки — псевдополе платформы: Total<Колонка> при живой колонке законен
-                        if seg1.startswith('Total') and seg1[5:] in src_ts_columns[seg0]:
-                            continue
-                        if seg1 not in src_ts_columns[seg0]:
-                            bad_paths[f'{root_name14}.{seg0}.{seg1}'] = f'у табличной части {seg0} нет колонки {seg1}, и <Columns> формы её не объявляет'
-
-                    for bad in sorted(bad_paths):
-                        r.error(f"14. {ctx}: путь '{bad}' — {bad_paths[bad]}")
-                        check14_ok = False
-
-                if check14_ok:
-                    r.ok(f'14. Object paths vs source config: {path_check_count} checked')
+        if check14_ok:
+            r.ok(f'14. Form object paths: {path_check_count} checked')
 
     # --- Check 15: основные роли расширения не дают прав на заимствованные объекты ---
     # Платформа: «Назначение прав доступа на заимствованные объекты основными ролями в
@@ -1265,12 +1662,12 @@ def main():
                     continue
                 check15_count += 1
                 if is_object_adopted(segs[0], segs[1]):
-                    r.error(f"15. Роль '{def_role_name}' входит в DefaultRoles и даёт права на заимствованный "
-                            f"{segs[0]}.{segs[1]} ({full_name}): платформа это запрещает. "
-                            "Вынесите такие права в отдельную роль вне DefaultRoles.")
+                    r.error(f"15. Role '{def_role_name}' is in DefaultRoles and grants rights on borrowed "
+                            f"{segs[0]}.{segs[1]} ({full_name}): the platform forbids this. "
+                            "Move these rights to a separate role outside DefaultRoles.")
                     check15_ok = False
         if check15_ok and check15_count > 0:
-            r.ok(f'15. Основные роли: прав на заимствованные объекты нет ({check15_count} checked)')
+            r.ok(f'15. Default roles: no rights on borrowed objects ({check15_count} checked)')
 
     if r.stopped:
         r.finalize(out_file)
@@ -1307,13 +1704,13 @@ def main():
                 has_file = os.path.isfile(os.path.join(type_dir, obj_name_val, 'Ext', f'{kind}.bsl'))
                 has_flag = f'<xr:Property>{kind}</xr:Property>' in obj_text
                 if has_file and not has_flag:
-                    state_issues.append(f'{type_name}.{obj_name_val} — есть {kind}.bsl, но нет <xr:PropertyState> для {kind}')
+                    state_issues.append(f'{type_name}.{obj_name_val} — {kind}.bsl exists but <xr:PropertyState> for {kind} is missing')
                 elif has_flag and not has_file:
-                    state_issues.append(f'{type_name}.{obj_name_val} — есть <xr:PropertyState> для {kind}, но нет {kind}.bsl')
+                    state_issues.append(f'{type_name}.{obj_name_val} — <xr:PropertyState> for {kind} is present but {kind}.bsl is missing')
 
         if state_checked > 0:
             if not state_issues:
-                r.ok(f'16. Модули заимствованных объектов: пометки расширенных свойств согласованы ({state_checked})')
+                r.ok(f'16. Borrowed object modules: extended property marks are consistent ({state_checked})')
             else:
                 for issue in state_issues:
                     r.warn(f'16. {issue}')
@@ -1408,6 +1805,836 @@ def main():
         elif ver_errors == 0 and ver_bodies_ok > 0:
             r.ok(f'17. Format version: {ver_bodies_ok} stamped part(s) agree with their descriptors and the extension')
 
+    # --- Check 18: заимствованные объекты и основной язык против конфигурации-источника ---
+    # ОбъектРасширяемойКонфигурации контролируется у самого объекта и у каждого заимствованного
+    # подобъекта (реквизит, ТЧ, колонка ТЧ, форма — замер 8.3.24), ОсновнойЯзык — у расширения.
+    # Расхождение платформа принимает при загрузке, а применять расширение отказывается, и по
+    # сообщению не видно, откуда взялся чужой UUID. Нулевой UUID (cfe-init без -ConfigPath) не
+    # совпадёт ни с чем — его видно и без источника. Собственный подобъект с именем незаимствованного
+    # подобъекта источника платформа тоже загружает, а базу не обновляет.
+
+    # UUID, по которому подобъект связан с основной конфигурацией: в расширении —
+    # ExtendedConfigurationObject (у собственных подобъектов его нет), в источнике — атрибут uuid.
+    def md_id_value(el, from_extension):
+        if from_extension:
+            n = el.xpath("*[local-name()='Properties']/*[local-name()='ExtendedConfigurationObject']")
+            return (n[0].text or '').strip() if n else None
+        return el.get('uuid') or None
+
+    # Заимствованный элемент расширения попадает в индекс и без ExtendedConfigurationObject — со значением
+    # None: платформа связывает его по имени, и наличие в источнике с точным именем сверяется всё равно.
+    def is_adopted_md_el(el, from_extension):
+        if not from_extension:
+            return False
+        ob = el.xpath("*[local-name()='Properties']/*[local-name()='ObjectBelonging']")
+        return bool(ob) and (ob[0].text or '').strip() == 'Adopted'
+
+    # Подобъекты, у которых в ChildObjects владельца только имя, а описание — в отдельном файле
+    # <каталог владельца>/<Имя владельца>/<Каталог>/<Имя>.xml.
+    nested_file_dirs = {'Form': 'Forms', 'Template': 'Templates', 'Subsystem': 'Subsystems', 'Recalculation': 'Recalculations'}
+
+    # Объект или подобъект из отдельного файла: сам файл и всё, что под ним. False — файла нет или он
+    # не читается.
+    def add_md_id_file(idx, obj_file, key, from_extension):
+        if not os.path.isfile(obj_file):
+            return False
+        try:
+            doc_root = etree.parse(obj_file).getroot()
+        except Exception:
+            return False
+        obj_el = None
+        for c in doc_root:
+            if isinstance(c.tag, str):
+                obj_el = c
+                break
+        if obj_el is None:
+            return False
+        v = md_id_value(obj_el, from_extension)
+        if v or is_adopted_md_el(obj_el, from_extension):
+            idx[key] = v
+        own_dir = os.path.join(os.path.dirname(obj_file), os.path.splitext(os.path.basename(obj_file))[0])
+        add_md_id_entries(idx, obj_el, key, from_extension, own_dir)
+        return True
+
+    # Подобъекты с собственными свойствами (реквизиты, ТЧ и их колонки, значения перечисления, команды
+    # и т.п.) лежат в ChildObjects целиком — обходим их рекурсивно. Формы, макеты, вложенные подсистемы
+    # и перерасчёты там — только имя: их UUID в отдельном файле под каталогом владельца.
+    def add_md_id_entries(idx, el, prefix, from_extension, own_dir):
+        co = el.xpath("*[local-name()='ChildObjects']")
+        if not co:
+            return
+        for sub in co[0]:
+            if not isinstance(sub.tag, str):
+                continue
+            sub_type = etree.QName(sub.tag).localname
+            name_node = sub.xpath("*[local-name()='Properties']/*[local-name()='Name']")
+            if name_node:
+                key = f'{prefix}.{sub_type}.{(name_node[0].text or "").strip()}'
+                v = md_id_value(sub, from_extension)
+                if v or is_adopted_md_el(sub, from_extension):
+                    idx[key] = v
+                add_md_id_entries(idx, sub, key, from_extension, '')
+            elif own_dir and sub_type in nested_file_dirs and (sub.text or '').strip():
+                sub_name = sub.text.strip()
+                sub_file = os.path.join(own_dir, nested_file_dirs[sub_type], f'{sub_name}.xml')
+                add_md_id_file(idx, sub_file, f'{prefix}.{sub_type}.{sub_name}', from_extension)
+
+    # Индекс «путь подобъекта → UUID связи» по файлу объекта; None — файла нет или он не читается.
+    # Ключи сравниваются с учётом регистра: имя заимствованного подобъекта платформа сверяет точно
+    # (контролируемое свойство «Имя», замер 8.3.24), хотя в коде 1С имена регистронезависимы.
+    def md_id_index(type_dir, type_name, obj_name, from_extension):
+        idx = {}
+        if not add_md_id_file(idx, os.path.join(type_dir, f'{obj_name}.xml'), f'{type_name}.{obj_name}', from_extension):
+            return None
+        return idx
+
+    # Имя объекта по его описанию в источнике; файл ищется без учёта регистра. Ключи индекса строятся из
+    # имени в расширении, а на Windows файл источника находится и при другом регистре — без этой сверки
+    # расхождение имени самого объекта не видно. None — файла нет или он не читается.
+    def source_object_name(type_dir, obj_name):
+        f = os.path.join(type_dir, f'{obj_name}.xml')
+        if not os.path.isfile(f):
+            if not os.path.isdir(type_dir):
+                return None
+            twin = next((n for n in sorted(os.listdir(type_dir))
+                         if n.lower().endswith('.xml') and n[:-4].upper() == obj_name.upper()
+                         and os.path.isfile(os.path.join(type_dir, n))), None)
+            if twin is None:
+                return None
+            f = os.path.join(type_dir, twin)
+        try:
+            doc_root = etree.parse(f).getroot()
+        except Exception:
+            return None
+        for c in doc_root:
+            if not isinstance(c.tag, str):
+                continue
+            n = c.xpath("*[local-name()='Properties']/*[local-name()='Name']")
+            return (n[0].text or '').strip() if n else None
+        return None
+
+    # Объект источника по UUID: имя или None. Связь расширения указывает на объект, которого под этим именем
+    # нет, — возможно, его переименовали. Индекс UUID → имя по каталогу вида строится один раз, из начала файлов.
+    src_uuid_names = {}
+
+    def find_source_object_by_uuid(type_dir, uuid_):
+        if type_dir not in src_uuid_names:
+            m = {}
+            if os.path.isdir(type_dir):
+                for n in sorted(os.listdir(type_dir)):
+                    f = os.path.join(type_dir, n)
+                    if not n.lower().endswith('.xml') or not os.path.isfile(f):
+                        continue
+                    try:
+                        with open(f, encoding='utf-8-sig', errors='replace') as fh:
+                            head = fh.read(16384)
+                    except OSError:
+                        continue
+                    um = re.search(r'<MetaDataObject\b[^>]*>\s*<\w+\s[^>]*?uuid="([^"]+)"', head)
+                    nm = re.search(r'<Name>([^<]*)</Name>', head)
+                    if um and nm:
+                        m[um.group(1).lower()] = nm.group(1).strip()
+            src_uuid_names[type_dir] = m
+        return src_uuid_names[type_dir].get(uuid_.lower())
+
+    # Ключ подобъекта источника с этим UUID (подобъект переименован) или None
+    def find_idx_key_by_uuid(idx, uuid_):
+        u = uuid_.lower()
+        for k, v in idx.items():
+            if v and v.lower() == u:
+                return k
+        return None
+
+    # Тексты проверки 18 о связи с источником. Читатель — модель без контекста: смысл словами, имя тега —
+    # указатель в файл, и что делать дальше; там, где решение за человеком, — прямо сказать, чего не делать.
+    def link_renamed_text(key, new_key, namesake):
+        tail = f"; the name {key.split('.')[-1]} now belongs to a different object" if namesake else ''
+        if key.startswith('Language.'):
+            return f"18. {key}: renamed in the source configuration to {new_key} (the same language: its UUID matches ExtendedConfigurationObject in the extension){tail} — the platform does not apply the extension. Rename the language in the extension the same way: a language holds no data, so this is safe"
+        return f"18. {key}: renamed in the source configuration to {new_key} (the same object: its UUID matches ExtendedConfigurationObject in the extension), the extension still uses the old name{tail} — the platform does not apply the extension. /cfe-borrow -Actualize renames it in the extension following the UUID and keeps what the extension added (attributes, forms, code); then fix the code mentions it lists"
+
+    def link_missing_text(key, has_link):
+        how = ('neither by name nor by its UUID (ExtendedConfigurationObject) — deleted there or recreated under another name'
+               if has_link else 'no object with this name')
+        return f"18. {key}: missing from the source configuration, {how}. The extension cannot be applied. Ask the user whether to remove it from the extension or restore it in the source; do not delete it by hand: the extension's own data may be bound to it"
+
+    # Язык cfe-borrow не актуализирует; данных у языка нет — UUID правится прямо
+    def language_link_fix(key):
+        n = key[len('Language.'):]
+        return f"Set it to the uuid attribute of the language in the source configuration (Languages/{n}.xml): a language holds no data, so this is safe"
+
+    def link_recreated_text(key, src_uuid, ext_uuid):
+        if key.startswith('Language.'):
+            return f"18. {key}: ExtendedConfigurationObject (the link to the source object) is {ext_uuid}, but the language in the source configuration has UUID {src_uuid} — the platform does not apply the extension. {language_link_fix(key)}"
+        return f"18. {key}: the source object with this name is a different object (UUID {src_uuid}): the one the extension borrowed (ExtendedConfigurationObject {ext_uuid}) is no longer in the source — recreated or deleted. The platform does not apply the extension. Do not edit the UUID by hand or re-borrow: the extension's own data is bound to the old object — ask the user"
+
+    def link_zero_text(key, with_source):
+        how = '' if with_source else ' with -ConfigPath'
+        fix = language_link_fix(key) if key.startswith('Language.') else f'Restore the link: /cfe-borrow -Actualize{how}'
+        return f"18. {key}: ExtendedConfigurationObject (the link to the source object) is zero — it matches nothing, so the platform loads the extension but does not apply it. {fix}"
+
+    # Собственные подобъекты заимствованного объекта, одноимённые (без учёта регистра) с незаимствованным
+    # подобъектом источника того же вида на том же уровне: реквизит, ТЧ, колонка заимствованной ТЧ, значение
+    # перечисления, форма, команда, макет. Платформа расширение загружает, а базу не обновляет: «Уже существует объект с
+    # именем …» (замер 8.3.24, 8.3.27). Реквизит и ТЧ с одним именем друг другу не мешают. Совпадение с
+    # подобъектом, заимствованным в этом же расширении, — дубль имени, его платформа отвергает уже на загрузке.
+    def get_own_name_collisions(obj_file, prefix, ext_idx, src_idx):
+        result = []
+        try:
+            doc_root = etree.parse(obj_file).getroot()
+        except Exception:
+            return result
+        obj_el = next((c for c in doc_root if isinstance(c.tag, str)), None)
+        co = obj_el.xpath("*[local-name()='ChildObjects']") if obj_el is not None else []
+        if not co:
+            return result
+        own_dir = os.path.join(os.path.dirname(obj_file), os.path.splitext(os.path.basename(obj_file))[0])
+        keys = []
+        for sub in co[0]:
+            if not isinstance(sub.tag, str):
+                continue
+            ln = etree.QName(sub.tag).localname
+            if ln in ('Form', 'Template'):
+                # Собственная форма или макет — файл есть и в нём нет ни ObjectBelonging=Adopted, ни
+                # ExtendedConfigurationObject (у заимствованной формы последнего может не быть). Нет файла или
+                # не читается — не судим (об отсутствии файла формы говорит проверка 10)
+                f_name = (sub.text or '').strip()
+                if not f_name:
+                    continue
+                f_file = os.path.join(own_dir, nested_file_dirs[ln], f'{f_name}.xml')
+                if not os.path.isfile(f_file):
+                    continue
+                try:
+                    f_root = etree.parse(f_file).getroot()
+                except Exception:
+                    continue
+                if f_root.xpath("//*[local-name()='Properties']/*[local-name()='ExtendedConfigurationObject']"):
+                    continue
+                if f_root.xpath("//*[local-name()='Properties']/*[local-name()='ObjectBelonging' and normalize-space()='Adopted']"):
+                    continue
+                keys.append(f'{prefix}.{ln}.{f_name}')
+                continue
+            if ln not in ('Attribute', 'TabularSection', 'EnumValue', 'Command'):
+                continue
+            name_node = sub.xpath("*[local-name()='Properties']/*[local-name()='Name']")
+            if not name_node:
+                continue
+            k = f'{prefix}.{ln}.{(name_node[0].text or "").strip()}'
+            keys.append(k)
+            if ln != 'TabularSection' or k not in ext_idx:
+                continue
+            for col in sub.xpath("*[local-name()='ChildObjects']/*[local-name()='Attribute']"):
+                col_name = col.xpath("*[local-name()='Properties']/*[local-name()='Name']")
+                if col_name:
+                    keys.append(f'{k}.Attribute.{(col_name[0].text or "").strip()}')
+        src_ci = {sk.upper(): sk for sk in src_idx}
+        ext_ci = {ek.upper() for ek in ext_idx}
+        for k in keys:
+            if k.upper() in ext_ci:
+                continue
+            if k.upper() in src_ci:
+                result.append({'Own': k, 'Src': src_ci[k.upper()]})
+        return result
+
+    # InnerText узла как в .NET XmlDocument (без PreserveWhitespace): текст потомков без комментариев
+    # и без пробельных узлов между тегами
+    def xml_inner_text(el):
+        return ''.join(t for t in el.itertext() if t.strip())
+
+    # Объявленные свойства заимствованного против источника. Контролируется то, что объявлено в Properties;
+    # режим — <xr:PropertyState> в InternalInfo: нет — проверять и запрещать, Notify — проверять, не
+    # запрещать, Extended — переопределять, MultiState — у составного типа свой режим на часть типов
+    # (xr:CheckValue / xr:ExtendValue / xr:NotifyValue). Замер 8.3.27: расхождение без режима — расширение
+    # не применяется; Notify — применяется, проверка сообщает; Тип — не применяется в любом режиме контроля.
+    # Ключ — имя свойства в верхнем регистре (поиск без учёта регистра), значение — (имя, режим).
+    def md_prop_states(el):
+        states = {}
+        for ps in el.xpath("*[local-name()='InternalInfo']/*[local-name()='PropertyState']"):
+            p = ps.xpath("*[local-name()='Property']")
+            s = ps.xpath("*[local-name()='State']")
+            if p and s:
+                name = xml_inner_text(p[0]).strip()
+                prev = states.get(name.upper())
+                states[name.upper()] = (prev[0] if prev else name, xml_inner_text(s[0]).strip())
+        return states
+
+    def norm_outer_xml(node):
+        x = etree.tostring(node, encoding='unicode', with_tail=False)
+        x = re.sub(r'\s+xmlns(?::\w+)?="[^"]*"', '', x)
+        return re.sub(r'>\s+<', '><', x).strip()
+
+    # Описание типов: состав (Type / TypeSet / TypeId) и квалификаторы по виду
+    def type_desc(type_node):
+        types = []
+        quals = {}
+        for c in type_node:
+            if not isinstance(c.tag, str):
+                continue
+            ln = etree.QName(c.tag).localname
+            if ln.upper() in ('TYPE', 'TYPESET', 'TYPEID'):
+                types.append(f'{ln}|{xml_inner_text(c).strip()}')
+            elif ln.endswith('Qualifiers'):
+                quals[ln.upper()] = norm_outer_xml(c)
+        return {'Types': types, 'Quals': quals}
+
+    qual_kind_by_type = {'TYPE|XS:STRING': 'StringQualifiers', 'TYPE|XS:DECIMAL': 'NumberQualifiers', 'TYPE|XS:DATETIME': 'DateQualifiers', 'TYPE|XS:BASE64BINARY': 'BinaryDataQualifiers'}
+
+    def format_type_desc(type_node):
+        parts = []
+        for c in type_node:
+            if not isinstance(c.tag, str) or etree.QName(c.tag).localname.upper() not in ('TYPE', 'TYPESET', 'TYPEID'):
+                continue
+            v = xml_inner_text(c).strip()
+            vl = v.lower()
+            if vl == 'xs:string':
+                ln_ = type_node.xpath("*[local-name()='StringQualifiers']/*[local-name()='Length']")
+                v = f'String({xml_inner_text(ln_[0])})' if ln_ else 'String'
+            elif vl == 'xs:decimal':
+                dg = type_node.xpath("*[local-name()='NumberQualifiers']/*[local-name()='Digits']")
+                fd = type_node.xpath("*[local-name()='NumberQualifiers']/*[local-name()='FractionDigits']")
+                v = f'Number({xml_inner_text(dg[0])},{xml_inner_text(fd[0]) if fd else 0})' if dg else 'Number'
+            elif vl == 'xs:boolean':
+                v = 'Boolean'
+            elif vl == 'xs:datetime':
+                v = 'Date'
+            else:
+                v = re.sub(r'^\w+:', '', v, count=1)
+            parts.append(v)
+        return ', '.join(parts)
+
+    # Заявленная часть типа согласуется с источником: каждый тип есть в источнике, квалификаторы нужных ему
+    # видов — те же. exact — весь тип без режимов: состав должен совпасть целиком.
+    def type_part_fits(part, src, exact):
+        if exact and len(part['Types']) != len(src['Types']):
+            return False
+        for t in part['Types']:
+            if t not in src['Types']:
+                return False
+            k = qual_kind_by_type.get(t.upper())
+            if not k:
+                continue
+            ku = k.upper()
+            if ku in part['Quals'] and part['Quals'][ku] != src['Quals'].get(ku):
+                return False
+            if exact and (ku in part['Quals']) != (ku in src['Quals']):
+                return False
+        return True
+
+    # Элементы файла объекта по ключам «Вид.Имя[.Вид.Имя…]» — та же схема, что у индекса UUID
+    def md_element_map(obj_file, key):
+        m = {}
+        if not os.path.exists(obj_file):
+            return m
+        try:
+            doc_root = etree.parse(obj_file).getroot()
+        except Exception:
+            return m
+        obj_el = next((c for c in doc_root if isinstance(c.tag, str)), None)
+        if obj_el is None:
+            return m
+        m[key] = obj_el
+        stack = [(obj_el, key)]
+        while stack:
+            cur_el, cur_key = stack.pop()
+            co = cur_el.xpath("*[local-name()='ChildObjects']")
+            if not co:
+                continue
+            for sub in co[0]:
+                if not isinstance(sub.tag, str):
+                    continue
+                n = sub.xpath("*[local-name()='Properties']/*[local-name()='Name']")
+                if not n:
+                    continue
+                k = f'{cur_key}.{etree.QName(sub.tag).localname}.{xml_inner_text(n[0]).strip()}'
+                m[k] = sub
+                stack.append((sub, k))
+        return m
+
+    # Группы объявленных свойств — те же, что у cfe-borrow: контролируемые сверяются по режимам, дополнения
+    # (список расширения сливается со списком источника — замер М10) не сверяются, прочие — предупреждение.
+    controlled_props = ['Type', 'Owners', 'Global', 'ClientManagedApplication', 'Server', 'ExternalConnection',
+                        'ClientOrdinaryApplication', 'ServerCall', 'Hierarchical', 'CodeLength', 'DescriptionLength', 'CodeType',
+                        'CodeAllowedLength', 'NumberType', 'NumberLength', 'NumberAllowedLength', 'InformationRegisterPeriodicity',
+                        'WriteMode', 'LanguageCode', 'RegisteredDocuments', 'ExtDimensionTypes', 'MaxExtDimensionCount']
+    additive_props = ['RegisterRecords', 'Content']
+    # Свойства без переопределения (Конфигуратор режим не предлагает, замер М4): Extended у них платформа
+    # принимает, но теряет при выгрузке, и своя же выгрузка не грузится (замеры М15, М16) — сверяем как контролируемые
+    no_override_props = ['Hierarchical', 'InformationRegisterPeriodicity', 'WriteMode', 'Global',
+                         'ClientManagedApplication', 'Server', 'ExternalConnection', 'ClientOrdinaryApplication', 'ServerCall', 'CodeAllowedLength', 'LanguageCode']
+
+    check18_props = [0]
+
+    def compare_adopted_properties(key, ext_el, src_el):
+        ok = True
+        ep = ext_el.xpath("*[local-name()='Properties']")
+        sp = src_el.xpath("*[local-name()='Properties']")
+        if not ep or not sp:
+            return True
+        ep, sp = ep[0], sp[0]
+        states = md_prop_states(ext_el)
+        hint = 'refresh with /cfe-borrow (report: -Check)'
+        for c in ep:
+            if not isinstance(c.tag, str):
+                continue
+            prop = etree.QName(c.tag).localname
+            if prop.upper() in ('OBJECTBELONGING', 'NAME', 'COMMENT', 'EXTENDEDCONFIGURATIONOBJECT'):
+                continue
+            st = states.get(prop.upper())
+            state = st[1] if st else None
+            no_override = ''
+            if state == 'Extended' and prop in no_override_props:
+                no_override = ' — override mode is not supported for this property: the platform accepts it once, drops it on dump, and the next load fails'
+                state = None
+            # Переопределение типа платформа принимает только частями (MultiState, xr:ExtendValue); одиночный
+            # Extended у Type она не применяет и сверяет тип как контролируемый (замер М13, 8.3.27)
+            if state == 'Extended' and prop != 'Type':
+                continue
+            # Дополнения: список расширения сливается со списком источника — расхождение тут норма
+            if prop in additive_props:
+                continue
+            s = sp.xpath(f"*[local-name()='{prop}']")
+            if not s:
+                continue
+            s = s[0]
+            if prop not in controlled_props:
+                if norm_outer_xml(c) != norm_outer_xml(s):
+                    r.warn(f'18. {key}: {prop} ({xml_inner_text(c).strip()}) differs from the source configuration ({xml_inner_text(s).strip()}) — not a known controlled property: if the platform controls it, the extension is not applied')
+                continue
+            if prop == 'Owners':
+                # Заявленные владельцы — подмножество владельцев источника (добавить владельца в источнике можно)
+                src_items = [xml_inner_text(x).strip() for x in s if isinstance(x.tag, str)]
+                prop_ok = True
+                for it in c:
+                    if not isinstance(it.tag, str):
+                        continue
+                    it_text = xml_inner_text(it).strip()
+                    if it_text not in src_items:
+                        r.error(f'18. {key}: owner {it_text} is declared in the extension but not in the source configuration — the platform rejects the extension («Значение контролируемого свойства Владельцы не совпадает»); {hint}')
+                        ok = False
+                        prop_ok = False
+                if prop_ok:
+                    check18_props[0] += 1
+                continue
+            if prop == 'Type':
+                sd = type_desc(s)
+                xsi_type = c.get('{http://www.w3.org/2001/XMLSchema-instance}type') or ''
+                if state == 'MultiState' or re.search('ExtendedProperty', xsi_type, re.IGNORECASE):
+                    prop_ok = True
+                    for part in c:
+                        if not isinstance(part.tag, str):
+                            continue
+                        part_ln = etree.QName(part.tag).localname
+                        if part_ln.upper() not in ('CHECKVALUE', 'NOTIFYVALUE'):
+                            continue
+                        if not type_part_fits(type_desc(part), sd, False):
+                            label = 'check' if part_ln == 'CheckValue' else 'notify'
+                            r.error(f'18. {key}: Type ({label} part) {format_type_desc(part)} does not match the source configuration ({format_type_desc(s)}) — the platform loads the extension but does not apply it («Значение контролируемого свойства Тип не совпадает»); {hint}')
+                            ok = False
+                            prop_ok = False
+                    if prop_ok:
+                        check18_props[0] += 1
+                    continue
+                if not type_part_fits(type_desc(c), sd, True):
+                    r.error(f'18. {key}: Type {format_type_desc(c)} differs from the source configuration ({format_type_desc(s)}) — the platform loads the extension but does not apply it («Значение контролируемого свойства Тип не совпадает»); {hint}')
+                    ok = False
+                else:
+                    check18_props[0] += 1
+                continue
+            if norm_outer_xml(c) == norm_outer_xml(s):
+                check18_props[0] += 1
+                continue
+            was = xml_inner_text(c).strip()
+            now = xml_inner_text(s).strip()
+            if state == 'Notify':
+                r.warn(f'18. {key}: {prop} ({was}) differs from the source configuration ({now}), mode Notify — the extension is applied, the applicability check reports the mismatch; {hint}')
+            elif no_override:
+                r.error(f'18. {key}: {prop} ({was}) differs from the source configuration ({now}){no_override} («Значение контролируемого свойства … не совпадает»); {hint}')
+                ok = False
+            else:
+                r.error(f'18. {key}: {prop} ({was}) differs from the source configuration ({now}) — the platform loads the extension but does not apply it («Значение контролируемого свойства … не совпадает»); {hint}')
+                ok = False
+        return ok
+
+    if not r.stopped and child_obj_node is not None:
+        zero_guid = '00000000-0000-0000-0000-000000000000'
+        src_root = None
+        src_cfg_root = None
+        if config_path_arg:
+            src_root = source_config_root()
+            src_cfg_file = os.path.join(src_root, 'Configuration.xml')
+            if not os.path.isfile(src_cfg_file):
+                r.warn(f"18. -ConfigPath '{config_path_arg}': Configuration.xml not found — comparison with the source configuration skipped")
+                src_root = None
+            else:
+                try:
+                    src_cfg_root = etree.parse(src_cfg_file).getroot()
+                except Exception:
+                    r.warn(f"18. -ConfigPath '{config_path_arg}': Configuration.xml is unreadable — comparison with the source configuration skipped")
+                    src_root = None
+
+        check18_ok = True
+        check18_count = 0
+
+        if src_root:
+            src_def_lang_node = src_cfg_root.xpath("//*[local-name()='Configuration']/*[local-name()='Properties']/*[local-name()='DefaultLanguage']")
+            src_def_lang = (src_def_lang_node[0].text or '').strip() if src_def_lang_node else ''
+            ext_def_lang = (def_lang or '').strip()
+            if ext_def_lang and src_def_lang:
+                check18_count += 1
+                if ext_def_lang != src_def_lang:
+                    r.error(f'18. Extension DefaultLanguage "{def_lang}" differs from the source configuration "{src_def_lang}" — the platform loads the extension but does not apply it («ОсновнойЯзык не совпадает»)')
+                    check18_ok = False
+
+        # Дубль связи: два заимствованных элемента связаны с одним объектом источника — платформа расширение
+        # не грузит («Не найден объект …», замер М15). Видно в самом расширении, источник не нужен
+        dup_keys = set()
+        link_owners = {}
+        # Индексы связей объектов — один разбор файла на запуск, основной цикл берёт их отсюда
+        ext_idx_cache = {}
+        for child in child_obj_node:
+            if not isinstance(child.tag, str):
+                continue
+            d_type = etree.QName(child.tag).localname
+            if d_type not in CHILD_TYPE_DIR_MAP:
+                continue
+            dn = (child.text or '').strip()
+            if not dn:
+                continue
+            # Повтор записи в ChildObjects — о нём говорит проверка 5; дублем связи он не является
+            if f'{d_type}.{dn}' in ext_idx_cache:
+                continue
+            dix = md_id_index(os.path.join(config_dir, CHILD_TYPE_DIR_MAP[d_type]), d_type, dn, True)
+            ext_idx_cache[f'{d_type}.{dn}'] = dix
+            if not dix:
+                continue
+            for k, lnk in dix.items():
+                if not lnk or lnk == zero_guid:
+                    continue
+                link_owners.setdefault(lnk.lower(), []).append(k)
+        for lnk, ks in link_owners.items():
+            if len(ks) >= 2:
+                dup_keys.update(ks)
+        for lnk, ks in link_owners.items():
+            if len(ks) < 2:
+                continue
+            # Подобъекты двух дублей (объектов, табличных частей) повторяют ту же ошибку — о них не говорим
+            owner_dup = [k for k in ks if any('.'.join(k.split('.')[:n]) in dup_keys for n in range(2, len(k.split('.')), 2))]
+            if len(owner_dup) == len(ks):
+                continue
+            r.error(f"18. {', '.join(ks)}: bound to the same source object (ExtendedConfigurationObject {lnk}) — the platform does not load the extension («Не найден объект …»). Ask the user which one is extra and remove it by hand: both may hold data; do not rename one into the other")
+            check18_ok = False
+            if r.stopped:
+                break
+
+        for child in child_obj_node:
+            if r.stopped:
+                break
+            if not isinstance(child.tag, str):
+                continue
+            type_name = etree.QName(child.tag).localname
+            if type_name not in CHILD_TYPE_DIR_MAP:
+                continue
+            obj_name18 = (child.text or '').strip()
+            if not obj_name18:
+                continue
+            dir_name = CHILD_TYPE_DIR_MAP[type_name]
+            ext_idx = (ext_idx_cache[f'{type_name}.{obj_name18}'] if f'{type_name}.{obj_name18}' in ext_idx_cache
+                       else md_id_index(os.path.join(config_dir, dir_name), type_name, obj_name18, True))
+            if not ext_idx:
+                continue
+            # О дубле сказано выше; советы про переименование к нему неприменимы
+            if f'{type_name}.{obj_name18}' in dup_keys:
+                continue
+
+            if not src_root:
+                for key, ext_id in ext_idx.items():
+                    check18_count += 1
+                    if ext_id == zero_guid:
+                        r.warn(link_zero_text(key, False))
+                continue
+
+            src_name = source_object_name(os.path.join(src_root, dir_name), obj_name18)
+            # Только расхождение регистра: имя, отличающееся иначе (файл назван не по объекту), — не наш случай
+            if src_name and src_name != obj_name18 and src_name.upper() == obj_name18.upper():
+                r.error(f'18. {type_name}.{obj_name18}: the source configuration has this name in a different case ({type_name}.{src_name}) — the platform rejects the extension («контролируемое свойство Имя не совпадает»)')
+                check18_ok = False
+                continue
+            src_idx = md_id_index(os.path.join(src_root, dir_name), type_name, obj_name18, False)
+            # Сам объект: нет под этим именем или под ним другой объект — переименован (ищем по UUID связи),
+            # пересоздан или удалён. Расхождения подобъектов в этом случае — следствие, о них не говорим
+            top_key = f'{type_name}.{obj_name18}'
+            top_link = ext_idx.get(top_key)
+            top_real = bool(top_link and top_link != zero_guid)
+            top_other = (top_real and src_idx is not None and bool(src_idx.get(top_key))
+                         and src_idx[top_key].lower() != top_link.lower())
+            if src_idx is None or top_other:
+                renamed_to = find_source_object_by_uuid(os.path.join(src_root, dir_name), top_link) if top_real else None
+                if renamed_to:
+                    r.error(link_renamed_text(top_key, f'{type_name}.{renamed_to}', src_idx is not None))
+                elif src_idx is None:
+                    r.error(link_missing_text(top_key, top_real))
+                else:
+                    r.error(link_recreated_text(top_key, src_idx[top_key], top_link))
+                check18_ok = False
+                continue
+            # Подобъекты с расхождением связи: свойства у них сверять не с чем (под этим именем другой подобъект)
+            link_bad = set()
+            for key, ext_id in ext_idx.items():
+                if key in dup_keys:
+                    link_bad.add(key)
+                    continue
+                # В итог «связи совпадают» — только сверенные UUID; о незаданных сказала проверка 9
+                if ext_id:
+                    check18_count += 1
+                src_id = src_idx.get(key)
+                if src_id is None:
+                    case_twin = next((sk for sk in src_idx if sk.upper() == key.upper()), None)
+                    if case_twin:
+                        r.error(f'18. {key}: the source configuration has this name in a different case ({case_twin}) — the platform loads the extension but does not apply it («контролируемое свойство Имя не совпадает»)')
+                    else:
+                        real = bool(ext_id and ext_id != zero_guid)
+                        nk = find_idx_key_by_uuid(src_idx, ext_id) if real else None
+                        if nk:
+                            r.error(link_renamed_text(key, nk, False))
+                        else:
+                            r.error(link_missing_text(key, real))
+                    link_bad.add(key)
+                    check18_ok = False
+                elif ext_id and ext_id.lower() != src_id.lower():
+                    if ext_id == zero_guid:
+                        r.error(link_zero_text(key, True))
+                    else:
+                        nk = find_idx_key_by_uuid(src_idx, ext_id)
+                        if nk:
+                            r.error(link_renamed_text(key, nk, True))
+                        else:
+                            r.error(link_recreated_text(key, src_id, ext_id))
+                    link_bad.add(key)
+                    check18_ok = False
+                if r.stopped:
+                    break
+            if r.stopped:
+                break
+            # Там, где собственных подобъектов данных быть не может, о них уже сказала проверка 10 — остаются
+            # формы, команды и макеты (их добавлять можно)
+            data_banned = own_child_restricted.get(type_name) == 'Error'
+            for nc in get_own_name_collisions(os.path.join(config_dir, dir_name, f'{obj_name18}.xml'), f'{type_name}.{obj_name18}', ext_idx, src_idx):
+                if data_banned and nc['Own'].split('.')[2] not in ('Form', 'Command', 'Template'):
+                    continue
+                r.error(f"18. {nc['Own']}: own sub-object, but the source configuration has an unborrowed sub-object with this name ({nc['Src']}) — the platform loads the extension but does not update the database («Уже существует объект с именем …»)")
+                check18_ok = False
+                if r.stopped:
+                    break
+            if r.stopped:
+                break
+            # Объявленные свойства — у элементов, которые нашлись в источнике под тем же ключом
+            ext_els = md_element_map(os.path.join(config_dir, dir_name, f'{obj_name18}.xml'), f'{type_name}.{obj_name18}')
+            src_els = md_element_map(os.path.join(src_root, dir_name, f'{obj_name18}.xml'), f'{type_name}.{obj_name18}')
+            for k in ext_els:
+                if k not in src_els or k not in ext_idx or k in link_bad:
+                    continue
+                if not compare_adopted_properties(k, ext_els[k], src_els[k]):
+                    check18_ok = False
+                if r.stopped:
+                    break
+
+        if not config_path_arg:
+            r.out('[INFO]  18. Borrowed objects and the default language were not compared with the source configuration: -ConfigPath not set')
+        elif src_root and check18_ok and check18_count > 0:
+            props_agree = f'; {check18_props[0]} controlled property value(s) agree' if check18_props[0] > 0 else ''
+            r.ok(f'18. Source config: {check18_count} link(s) agree (DefaultLanguage, ExtendedConfigurationObject){props_agree}')
+
+    # --- Check 19: ссылки на объекты, которых нет в расширении ---
+    # Объект основной конфигурации виден расширению, только если он заимствован (замер 8.3.24/8.3.27):
+    # - ссылочный тип (реквизит, колонка, константа, измерение, параметр команды, реквизит формы, состав
+    #   заимствованного определяемого типа): ниже 8.3.25 — «Неизвестное имя типа», с 8.3.25 работает;
+    # - ссылка на объект (владельцы, движения, ввод на основании, журнал, состав подсистемы, план
+    #   счетов регистра, задача БП): ниже 8.3.25 — «Неизвестный объект метаданных», с 8.3.25 грузится,
+    #   но в рантайме связь пуста;
+    # - права роли на такой объект платформа выбрасывает;
+    # - тип собственного определяемого типа, источник подписки, виды субконто плана счетов не грузятся нигде;
+    # - заимствованный определяемый тип с таким составом в реквизите, колонке, измерении собственного объекта
+    #   или в собственной константе — «Недопустимый тип» на любой платформе (замер 8.3.25/8.3.27); в
+    #   реквизитах заимствованного объекта и в реквизитах форм с 8.3.25 работает.
+    # Формы (значения, СКД) и макеты не проверяются — не замерено.
+    if not r.stopped and child_obj_node is not None:
+        ref_type_kind = {}
+        for k in ('Catalog', 'Document', 'Enum', 'ChartOfCharacteristicTypes', 'ChartOfAccounts', 'ChartOfCalculationTypes', 'ExchangePlan', 'BusinessProcess', 'Task'):
+            for s in ('Ref', 'Object', 'Selection', 'List', 'Manager'):
+                ref_type_kind[k + s] = k
+        for k in ('InformationRegister', 'AccumulationRegister', 'AccountingRegister', 'CalculationRegister'):
+            for s in ('RecordSet', 'RecordKey', 'Record', 'Manager', 'Selection', 'List', 'RecordManager'):
+                ref_type_kind[k + s] = k
+        for k in ('DataProcessor', 'Report'):
+            ref_type_kind[k + 'Object'] = k
+            ref_type_kind[k + 'Manager'] = k
+        ref_type_kind.update({'ConstantValueManager': 'Constant', 'ConstantManager': 'Constant', 'DefinedType': 'DefinedType',
+                              'Characteristic': 'ChartOfCharacteristicTypes', 'BusinessProcessRoutePointRef': 'BusinessProcess',
+                              'DocumentJournalSelection': 'DocumentJournal'})
+        ref_type_re = re.compile(r'<v8:(Type|TypeSet)>(?:\w+:)?(\w+)\.([^<.\s]+)</v8:\1>')
+        ref_list_re = re.compile(r'<(Owners|RegisterRecords|BasedOn|RegisteredDocuments|Content)>(.*?)</\1>', re.S)
+        ref_item_re = re.compile(r'>(\w+)\.([^<.\s]+)</xr:Item>')
+        ref_tag_re = re.compile(r'<(ChartOfAccounts|Task|ExtDimensionTypes)>(\w+)\.([^<.\s]+)</\1>')
+        ref_rights_re = re.compile(r'<object>\s*<name>(\w+)\.([^<.\s]+)')
+        ref_seen = set()
+        check19 = {'count': 0, 'ok': True}
+
+        # where — что ссылается (относительный путь файла), prop — свойство, kind.name — цель
+        def report_ref(where, prop, kind, name, level):
+            if kind.upper() not in CHILD_TYPE_KINDS_CI:
+                return
+            target = f'{kind}.{name}'
+            check19['count'] += 1
+            if target.upper() in ext_obj_listed:
+                return
+            key = f'{where}|{prop}|{target}'.upper()
+            if key in ref_seen:
+                return
+            ref_seen.add(key)
+            check19['ok'] = False
+            if level == 'type':
+                r.warn(f'19. {where}: {prop} refers to {target}, which is not in the extension — below 8.3.25 it does not load («Неизвестное имя типа»), from 8.3.25 it is allowed. Borrow {target}')
+            elif level == 'adt':
+                r.warn(f'19. {where}: {prop} refers to {target}, which is not in the extension — below 8.3.25 it does not load («Неизвестное имя типа»), from 8.3.25 it is allowed only in borrowed objects and forms. Borrow {target}')
+            elif level == 'owndt':
+                r.error(f'19. {where}: type {prop} includes {target}, which is not in the extension — the platform does not load the extension («Недопустимый тип»). Borrow {target}')
+            elif level == 'never':
+                r.error(f'19. {where}: {prop} refers to {target}, which is not in the extension — the platform does not load the extension. Borrow {target}')
+            elif level == 'rights':
+                r.error(f'19. {where}: rights on {target}, which is not in the extension — the platform drops them. Borrow {target}')
+            else:
+                r.error(f'19. {where}: {prop} refers to {target}, which is not in the extension — below 8.3.25 it does not load («Неизвестный объект метаданных»), from 8.3.25 it loads but the link is empty at runtime. Borrow {target}')
+
+        def read_text19(f):
+            try:
+                with open(f, encoding='utf-8-sig') as fh:
+                    return fh.read()
+            except Exception:
+                return None
+
+        def scan_types(text, where, prop, level):
+            for m in ref_type_re.finditer(text):
+                k = ref_type_kind.get(m.group(2))
+                if k:
+                    report_ref(where, prop, k, m.group(3), level)
+                if r.stopped:
+                    return
+
+        # Файлы под каталогом: (относительный путь через "/", полный путь); сначала файлы, потом
+        # подкаталоги, имена по кодовым точкам — как Ordinal в PS
+        def rel_files(d, rel=''):
+            try:
+                names = sorted(os.listdir(d))
+            except OSError:
+                return
+            for n in names:
+                if os.path.isfile(os.path.join(d, n)):
+                    yield (f'{rel}/{n}' if rel else n), os.path.join(d, n)
+            for n in names:
+                if os.path.isdir(os.path.join(d, n)):
+                    yield from rel_files(os.path.join(d, n), f'{rel}/{n}' if rel else n)
+
+        for child in child_obj_node:
+            if r.stopped:
+                break
+            if not isinstance(child.tag, str):
+                continue
+            type_name = etree.QName(child.tag).localname
+            child_name = child.text or ''
+            if type_name == 'Language' or type_name not in CHILD_TYPE_DIR_MAP:
+                continue
+            obj_dir = os.path.join(config_dir, CHILD_TYPE_DIR_MAP[type_name])
+            text = read_text19(os.path.join(obj_dir, child_name + '.xml'))
+            if text is None:
+                continue
+            where = f'{type_name}.{child_name}'
+
+            # Подсистема: состав — у неё и у вложенных подсистем
+            texts = [(where, text)]
+            if type_name == 'Subsystem':
+                sub_dir = os.path.join(obj_dir, child_name)
+                if os.path.isdir(sub_dir):
+                    for rel, f in rel_files(sub_dir):
+                        segs = rel.split('/')
+                        if len(segs) < 2 or segs[-2].lower() != 'subsystems' or not rel.lower().endswith('.xml'):
+                            continue
+                        t = read_text19(f)
+                        if t is not None:
+                            texts.append((f'{where}/{rel}', t))
+            for w, t in texts:
+                # Состав заимствованного определяемого типа — как ссылочный тип (замер 8.3.24/8.3.27, в т.ч.
+                # режим расширения 8.3.24 на 8.3.27); у собственного не грузится нигде
+                if type_name == 'DefinedType':
+                    type_prop = 'Type'
+                    type_level = 'adt' if '<ObjectBelonging>Adopted</ObjectBelonging>' in t else 'never'
+                elif type_name == 'EventSubscription':
+                    type_prop, type_level = 'Source', 'never'
+                else:
+                    type_prop, type_level = 'type', 'type'
+                scan_types(t, w, type_prop, type_level)
+                if r.stopped:
+                    break
+                # Собственный объект: заимствованный определяемый тип, в составе которого объект вне расширения
+                if type_name != 'DefinedType' and '<ObjectBelonging>Adopted</ObjectBelonging>' not in t:
+                    for dm in re.finditer(r'<v8:TypeSet>(?:\w+:)?DefinedType\.([^<.\s]+)</v8:TypeSet>', t):
+                        dt_name = dm.group(1)
+                        dt_text = read_text19(os.path.join(config_dir, CHILD_TYPE_DIR_MAP['DefinedType'], dt_name + '.xml'))
+                        if dt_text is None or '<ObjectBelonging>Adopted</ObjectBelonging>' not in dt_text:
+                            continue
+                        for m in ref_type_re.finditer(dt_text):
+                            k = ref_type_kind.get(m.group(2))
+                            if k and k != 'DefinedType':
+                                report_ref(w, f'DefinedType.{dt_name}', k, m.group(3), 'owndt')
+                            if r.stopped:
+                                break
+                        if r.stopped:
+                            break
+                    if r.stopped:
+                        break
+                # Движения последовательности не замерены
+                for lm in ([] if type_name == 'Sequence' else ref_list_re.finditer(t)):
+                    for im in ref_item_re.finditer(lm.group(2)):
+                        report_ref(w, lm.group(1), im.group(1), im.group(2), 'object')
+                        if r.stopped:
+                            break
+                    if r.stopped:
+                        break
+                for tm in ref_tag_re.finditer(t):
+                    report_ref(w, tm.group(1), tm.group(2), tm.group(3), 'never' if tm.group(1) == 'ExtDimensionTypes' else 'object')
+                    if r.stopped:
+                        break
+            if r.stopped:
+                break
+
+            # Формы объекта (и общая форма): типы реквизитов и параметров формы
+            form_root = os.path.join(obj_dir, child_name)
+            if os.path.isdir(form_root):
+                for frel, f in rel_files(form_root):
+                    segs = frel.split('/')
+                    if len(segs) < 2 or segs[-1].lower() != 'form.xml' or segs[-2].lower() != 'ext':
+                        continue
+                    t = read_text19(f)
+                    if t is None:
+                        continue
+                    # Общая форма — сам объект (Ext/Form.xml), форма объекта — <Объект>/Forms/<Имя>
+                    rel = where if len(segs) == 2 else f'{where}/' + '/'.join(segs[:-2])
+                    scan_types(t, rel, 'type', 'type')
+                    if r.stopped:
+                        break
+            if r.stopped:
+                break
+
+            if type_name == 'Role':
+                t = read_text19(os.path.join(obj_dir, child_name, 'Ext', 'Rights.xml'))
+                if t is not None:
+                    for rm in ref_rights_re.finditer(t):
+                        report_ref(where, 'rights', rm.group(1), rm.group(2), 'rights')
+                        if r.stopped:
+                            break
+
+        if check19['ok'] and check19['count'] > 0:
+            r.ok(f"19. References: {check19['count']} reference(s) to objects, all present in the extension")
+
     # --- Breadcrumb: controlled methods (&ИзменениеИКонтроль) drift is not checked here ---
     ctrl_kw = bsl_keywords()
     ctrl_re = re.compile(r'^\s*&(?:' + ctrl_kw["ru"]["Control"] + '|' + ctrl_kw["en"]["Control"] + r')\(', re.IGNORECASE)
@@ -1423,7 +2650,84 @@ def main():
                 except OSError:
                     pass
     if ctrl_count > 0:
-        r.out('[INFO]  Контролируемых методов (&ИзменениеИКонтроль): %d — их актуальность здесь не проверяется. Сверьте: /cfe-patch-method -Check -ExtensionPath <ext> -ConfigPath <cf>' % ctrl_count)
+        r.out('[INFO]  Controlled methods (&ИзменениеИКонтроль): %d — not checked for staleness here. Check with: /cfe-patch-method -Check -ExtensionPath <ext> -ConfigPath <cf>' % ctrl_count)
+
+    # --- Check 20: режимы контроля заимствованного против режима совместимости расширения ---
+    # Замер 8.3.27 (база и расширение в одном режиме): переопределение свойства — с 8.3.14, «Предупреждать»
+    # (Notify) — с 8.3.15, переопределение типа (Extended у Type, MultiState) — с 8.3.18. Ниже — отказ
+    # загрузки. Пометка Extended у модуля или формы — не переопределение свойства: её нет в Properties.
+    if not r.stopped and child_obj_node is not None and props_node is not None:
+        cm_node = props_node.find('md:ConfigurationExtensionCompatibilityMode', NS)
+        cm_text = xml_inner_text(cm_node).strip() if cm_node is not None else ''
+        cm_minor = None
+        m20 = re.match(r'^Version8_3_(\d+)$', cm_text, re.IGNORECASE)
+        if m20:
+            cm_minor = int(m20.group(1))
+        elif re.match(r'^Version8_[12]', cm_text, re.IGNORECASE):
+            cm_minor = 0
+        if cm_minor is not None and cm_minor < 18:
+            mode_checked = 0
+            check20_ok = True
+            for child in child_obj_node:
+                if r.stopped:
+                    break
+                if not isinstance(child.tag, str):
+                    continue
+                ln20 = etree.QName(child.tag).localname
+                if ln20 not in CHILD_TYPE_DIR_MAP:
+                    continue
+                n20 = (child.text or '').strip()
+                if not n20:
+                    continue
+                f20 = os.path.join(config_dir, CHILD_TYPE_DIR_MAP[ln20], f'{n20}.xml')
+                if not os.path.exists(f20):
+                    continue
+                els20 = md_element_map(f20, f'{ln20}.{n20}')
+                for k, el in els20.items():
+                    states = md_prop_states(el)
+                    p20 = el.xpath("*[local-name()='Properties']")
+                    for prop, st in states.values():
+                        if not p20 or not p20[0].xpath(f"*[local-name()='{prop}']"):
+                            continue
+                        need = None
+                        if prop == 'Type' and (st == 'MultiState' or st == 'Extended'):
+                            need, what = 18, 'type override'
+                        elif st == 'Notify':
+                            need, what = 15, 'mode Notify'
+                        elif st == 'Extended':
+                            need, what = 14, 'property override'
+                        if not need:
+                            continue
+                        mode_checked += 1
+                        if cm_minor < need:
+                            r.error(f'20. {k}: {prop} — {what} requires extension compatibility mode 8.3.{need} or later (current: {cm_text}) — the platform rejects the extension («… недопустимо в режиме совместимости»)')
+                            check20_ok = False
+            if mode_checked > 0 and check20_ok:
+                r.ok(f'20. Control modes fit the extension compatibility mode {cm_text} ({mode_checked})')
+        # Переопределённая нумерация документа требует объявленного (контролируемого) нумератора — иначе отказ
+        # загрузки (замер М16, 8.3.27)
+        for child in child_obj_node:
+            if r.stopped:
+                break
+            if not isinstance(child.tag, str) or etree.QName(child.tag).localname != 'Document':
+                continue
+            n20 = (child.text or '').strip()
+            if not n20:
+                continue
+            f20 = os.path.join(config_dir, CHILD_TYPE_DIR_MAP['Document'], f'{n20}.xml')
+            if not os.path.exists(f20):
+                continue
+            root20 = md_element_map(f20, f'Document.{n20}').get(f'Document.{n20}')
+            if root20 is None:
+                continue
+            p20 = root20.xpath("*[local-name()='Properties']")
+            if not p20 or p20[0].xpath("*[local-name()='Numerator']"):
+                continue
+            states = md_prop_states(root20)
+            num_ov = [x for x in ('NumberType', 'NumberLength', 'NumberAllowedLength')
+                      if states.get(x.upper()) and states[x.upper()][1] == 'Extended' and p20[0].xpath(f"*[local-name()='{x}']")]
+            if num_ov:
+                r.error(f"20. Document.{n20}: numbering is overridden ({', '.join(num_ov)}), but Numerator is not declared — the platform rejects the extension («… отключать контролируемость свойства «Нумератор» недопустимо»). Declare Numerator with the source value")
 
     # --- Final output ---
     r.finalize(out_file)
