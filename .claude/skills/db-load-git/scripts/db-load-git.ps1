@@ -1,4 +1,4 @@
-﻿# db-load-git v1.36 — Load Git changes into 1C database
+﻿# db-load-git v1.38 — Load Git changes into 1C database
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 # NB: *nix-раскладку платформы (/opt/1cv8/<ver>/1cv8, без .exe) знает только .py-порт — PS на *nix не исполняется.
 <#
@@ -468,6 +468,17 @@ function Get-ProjectExtraArgs {
         $dir = $parent
     }
     return @()
+}
+
+function ConvertTo-QuotedIfNeeded {
+    # Extra arguments come from the caller unquoted; the 1cv8 command line is joined
+    # verbatim, so a token with a space needs quotes of its own. Без кавычек платформа молча
+    # режет значение по пробелу (замер 2026-11-10: «/Out C:\a b\x.txt» пишет лог в «C:\a»).
+    param([string]$Token)
+    if ($Token -and ($Token.Contains(' ') -or $Token.Contains("`t")) -and -not $Token.Contains('"')) {
+        return '"' + $Token + '"'
+    }
+    return $Token
 }
 
 function Assert-ExtraArgs {
@@ -984,6 +995,9 @@ function Find-SilentRejections {
         'Ни один из документов не является регистратором для регистра',
         'Неверное значение перечисления',
         'не может быть приведен к типу',
+        # Дрейф &ИзменениеИКонтроль: расширение загружается с RC=0 и «загрузка успешна», а платформа
+        # его не применит. Строка появляется и в логе загрузки, и в ответе /CheckCanApplyConfigurationExtensions.
+        'не соответствует методу',
         # Режим совместимости выше платформы: объекты в базу не попадают, отказ приходит в рантайме.
         # Обрезано до инвариантной части — конкретная версия в сообщении меняется.
         'Для работы с конфигурацией необходима версия платформы не меньше'
@@ -1027,7 +1041,7 @@ function Invoke-ApplyCheck {
         if ($Extension) { $a += "-Extension", "`"$Extension`"" }
         $outFile = Join-Path $dir "check_log.txt"
         $a += "/Out", "`"$outFile`"", "/DisableStartupDialogs"
-        $a += $ExtraArgs
+        $a += @($ExtraArgs | ForEach-Object { ConvertTo-QuotedIfNeeded $_ })
         $res = Invoke-PlatformProcess $v8 $a -PreQuoted
         $lines = @()
         if (Test-Path $outFile) {
@@ -1391,7 +1405,7 @@ try {
     $outFile = Join-Path $tempDir "load_log.txt"
     $arguments += "/Out", "`"$outFile`""
     $arguments += "/DisableStartupDialogs"
-    $arguments += $extraArgs
+    $arguments += @($extraArgs | ForEach-Object { ConvertTo-QuotedIfNeeded $_ })
 
     # --- Execute ---
     Write-Host ""

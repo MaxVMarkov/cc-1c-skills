@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# cf-info v1.10 — Compact summary of 1C configuration root
+# cf-info v1.12 — Compact summary of 1C configuration root
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 
 import argparse
@@ -215,7 +215,8 @@ def get_home_page_layout():
     tn = hp_root.find(f"{{{HP_NS}}}WorkingAreaTemplate")
     if tn is not None and tn.text:
         result["template"] = tn.text.strip()
-    for col_name, key in (("LeftColumn", "left"), ("RightColumn", "right")):
+    # Шаблон OneColumn хранит единственную колонку в <Column>
+    for col_name, key in (("Column", "left"), ("LeftColumn", "left"), ("RightColumn", "right")):
         col = hp_root.find(f"{{{HP_NS}}}{col_name}")
         if col is None:
             continue
@@ -393,7 +394,10 @@ if args.Mode == "overview" and not args.Section:
     if home_page:
         out("--- Начальная страница ---")
         out(f"  Шаблон: {home_page['template']}")
-        out(f"  LeftColumn: {len(home_page['left'])}, RightColumn: {len(home_page['right'])}  (детали: -Section home-page)")
+        if home_page["template"] == "OneColumn":
+            out(f"  Column: {len(home_page['left'])}  (детали: -Section home-page)")
+        else:
+            out(f"  LeftColumn: {len(home_page['left'])}, RightColumn: {len(home_page['right'])}  (детали: -Section home-page)")
         out()
 
     # Object counts table
@@ -425,7 +429,9 @@ if args.Section == "home-page":
         out()
         out(f"Шаблон: {home_page['template']}")
         out()
-        for col_lbl, col_key in (("LeftColumn", "left"), ("RightColumn", "right")):
+        # У OneColumn единственная колонка — <Column>; подписи — XML-имена, как их ждёт платформа
+        sides = (("Column", "left"),) if home_page["template"] == "OneColumn" else (("LeftColumn", "left"), ("RightColumn", "right"))
+        for col_lbl, col_key in sides:
             items = home_page[col_key]
             if not items:
                 out(f"{col_lbl}: —")
@@ -534,7 +540,10 @@ if args.Mode == "full" and not args.Section:
     if home_page:
         out("--- Начальная страница ---")
         out(f"  Шаблон: {home_page['template']}")
-        out(f"  LeftColumn: {len(home_page['left'])}, RightColumn: {len(home_page['right'])}  (детали: -Section home-page)")
+        if home_page["template"] == "OneColumn":
+            out(f"  Column: {len(home_page['left'])}  (детали: -Section home-page)")
+        else:
+            out(f"  LeftColumn: {len(home_page['left'])}, RightColumn: {len(home_page['right'])}  (детали: -Section home-page)")
         out()
 
     # --- Section: Storages & default forms ---

@@ -96,7 +96,9 @@ const FAMILIES = [
           'epf-build', 'epf-dump', 'web-publish', 'v8-xsd-fetch', 'skd-validate',
           'form-add', 'form-compile', 'form-edit', 'help-add', 'interface-edit', 'meta-compile',
           'meta-edit', 'meta-remove', 'mxl-compile', 'role-compile', 'role-edit', 'skd-compile', 'skd-edit',
-          'subsystem-compile', 'subsystem-edit', 'template-add', 'xdto-compile', 'xdto-edit'] },
+          'subsystem-compile', 'subsystem-edit', 'template-add', 'xdto-compile', 'xdto-edit'],
+        // access-profiles и db-sql-read — форковые навыки только с PS-портом
+        consumersPs1: ['access-profiles', 'db-sql-read'] },
     ],
   },
   {
@@ -120,7 +122,7 @@ const FAMILIES = [
       // если <каталог>.xml — корень ExternalDataProcessor/ExternalReport, чего в дереве
       // конфигурации не бывает. Поэтому вариант один на всех, переключателя не нужно.
       { id: 'base', authority: 'form-compile',
-        consumers: ['cfe-borrow', 'cfe-patch-method', 'form-add', 'help-add', 'interface-edit',
+        consumers: ['cfe-borrow', 'cfe-patch-method', 'form-add', 'form-edit', 'help-add', 'interface-edit',
           'meta-compile', 'mxl-compile', 'role-compile', 'role-edit', 'subsystem-compile', 'template-add', 'xdto-compile'] },
     ],
   },
@@ -422,6 +424,39 @@ const FAMILIES = [
       // В epf-build два скрипта, и копия семьи есть в каждом — гард сверяет обе.
     ],
   },
+  // Проектные v8args/ibcmdargs: 15 копий чтения .v8-project.json — разъехавшись, порт режет строку
+  // на символы, а соседний берёт её одним аргументом.
+  {
+    name: 'platform: project_extra_args', py: 'project_extra_args', ps1: 'Get-ProjectExtraArgs',
+    variants: [
+      { id: 'base', authority: 'db-create',
+        consumers: ['db-cfe-admin', 'db-dump-cf', 'db-dump-dt', 'db-dump-xml', 'db-load-cf', 'db-load-dt',
+          'db-load-git', 'db-load-xml', 'db-repo', 'db-run', 'db-update', 'epf-build', 'epf-dump'] },
+    ],
+  },
+  // Квотирование доп. аргументов 1cv8: без кавычек платформа молча режет значение по пробелу
+  // (debug/v8args-quoting). db-run собирает строку для Start-Process/Popen сам — вне семьи.
+  {
+    name: 'platform: quote_if_needed', py: 'quote_if_needed', ps1: 'ConvertTo-QuotedIfNeeded',
+    variants: [
+      { id: 'base', authority: 'db-create',
+        consumers: ['db-cfe-admin', 'db-dump-cf', 'db-dump-dt', 'db-dump-xml', 'db-load-cf', 'db-load-dt',
+          'db-load-git', 'db-load-xml', 'db-repo', 'db-update', 'epf-build', 'epf-dump'] },
+    ],
+  },
+  // Булевы флаги DSL — общий читатель: true|да|истина / false|нет|ложь и 1/0 → bool, иное — отказ без
+  // записи. Нормализация в точке, где код ждёт bool. Без него порты расходились: PS (-eq) принимал
+  // "false", py (is) — нет. Перевод навыков — по одному (память project_dsl_bool_lenient).
+  {
+    name: 'dsl: to_dsl_bool', py: 'to_dsl_bool', ps1: 'ConvertTo-DslBool',
+    variants: [ { id: 'base', authority: 'meta-compile', consumers: ['meta-edit', 'skd-compile', 'form-compile', 'form-edit', 'mxl-compile',
+      'subsystem-compile', 'role-compile', 'cf-edit'] } ],
+  },
+  {
+    name: 'dsl: get_dsl_bool', py: 'get_dsl_bool', ps1: 'Get-DslBool',
+    variants: [ { id: 'base', authority: 'meta-compile', consumers: ['meta-edit', 'skd-compile', 'form-compile', 'form-edit', 'mxl-compile',
+      'subsystem-compile', 'role-compile', 'cf-edit'] } ],
+  },
   {
     name: 'platform: arg_key_match', py: 'arg_key_match', ps1: 'Test-ArgKeyMatch',
     variants: [
@@ -462,8 +497,7 @@ const FAMILIES = [
     variants: [
       { id: 'base', authority: 'db-dump-cf',
         consumers: ['db-dump-dt', 'db-dump-xml', 'db-load-cf', 'db-load-dt', 'db-load-git',
-          'db-load-xml', 'db-repo', 'db-run', 'db-update', 'epf-build', 'epf-dump', 'db-cfe-admin',
-          'db-create'] },
+          'db-load-xml', 'db-repo', 'db-run', 'db-update', 'epf-build', 'epf-dump', 'db-cfe-admin'] },
     ],
   },
   {
@@ -802,6 +836,7 @@ const FAMILIES = [
   { name: 'get_handler_name', py: 'get_handler_name', ps1: 'Get-HandlerName', variants: [{ id: 'base', authority: 'form-compile', consumers: ['form-edit'] }] },
   { name: 'get_element_name', py: 'get_element_name', ps1: 'Get-ElementName', variants: [{ id: 'base', authority: 'form-compile', consumers: ['form-edit'] }] },
   { name: 'normalize_call_type', py: 'normalize_call_type', ps1: 'Normalize-CallType', variants: [{ id: 'base', authority: 'form-compile', consumers: ['form-edit'] }] },
+  { name: 'resolve_event_name', py: 'resolve_event_name', ps1: 'Resolve-EventName', variants: [{ id: 'base', authority: 'form-compile', consumers: ['form-edit'] }] },
   { name: 'get_event_pairs', py: 'get_event_pairs', ps1: 'Get-EventPairs', variants: [{ id: 'base', authority: 'form-compile', consumers: ['form-edit'] }] },
   { name: 'emit_events', py: 'emit_events', ps1: 'Emit-Events', variants: [{ id: 'base', authority: 'form-compile', consumers: ['form-edit'] }] },
   { name: 'Test-CompanionStructured', py: null, ps1: 'Test-CompanionStructured', variants: [{ id: 'base', authority: 'form-compile', consumers: ['form-edit'] }] },
@@ -957,6 +992,13 @@ const FAMILIES = [
   { name: 'get_event_entry', py: 'get_event_entry', ps1: 'Get-EventEntry', variants: [{ id: 'base', authority: 'form-compile', consumers: ['form-edit'] }] },
   { name: 'test_event_pairs', py: 'test_event_pairs', ps1: 'Test-EventPairs', variants: [{ id: 'base', authority: 'form-compile', consumers: ['form-edit'] }] },
   { name: 'warn_events_ignored', py: 'warn_events_ignored', ps1: 'Warn-EventsIgnored', variants: [{ id: 'base', authority: 'form-compile', consumers: ['form-edit'] }] },
+  { name: 'get_form_owner_kind', py: 'get_form_owner_kind', ps1: 'Get-FormOwnerKind', variants: [{ id: 'base', authority: 'form-compile', consumers: ['form-edit'] }] },
+  { name: 'get_event_rank', py: 'get_event_rank', ps1: 'Get-EventRank', variants: [{ id: 'base', authority: 'form-compile', consumers: ['form-edit'] }] },
+  { name: 'get_edit_distance', py: 'get_edit_distance', ps1: 'Get-EditDistance', variants: [{ id: 'base', authority: 'form-compile', consumers: ['form-edit'] }] },
+  { name: 'get_event_hint', py: 'get_event_hint', ps1: 'Get-EventHint', variants: [{ id: 'base', authority: 'form-compile', consumers: ['form-edit'] }] },
+  { name: 'report_unknown_events', py: 'report_unknown_events', ps1: 'Report-UnknownEvents', variants: [{ id: 'base', authority: 'form-compile', consumers: ['form-edit'] }] },
+  { name: 'sort_event_pairs', py: 'sort_event_pairs', ps1: 'Sort-EventPairs', variants: [{ id: 'base', authority: 'form-compile', consumers: ['form-edit'] }] },
+  { name: 'normalize_main_flag', py: 'normalize_main_flag', ps1: 'Normalize-MainFlag', variants: [{ id: 'base', authority: 'form-compile', consumers: ['form-edit'] }] },
   // ── Заготовки обработчиков в модуле формы ──
   { name: 'get_form_module_template', py: 'get_form_module_template', ps1: 'Get-FormModuleTemplate', variants: [{ id: 'base', authority: 'form-compile', consumers: ['form-edit', 'form-add'] }] },
   { name: 'get_extension_name_prefix', py: 'get_extension_name_prefix', ps1: 'Get-ExtensionNamePrefix', variants: [{ id: 'base', authority: 'form-compile', consumers: ['form-edit'] }] },
@@ -965,6 +1007,7 @@ const FAMILIES = [
   { name: 'get_module_outline', py: 'get_module_outline', ps1: 'Get-ModuleOutline', variants: [{ id: 'base', authority: 'form-compile', consumers: ['form-edit', 'form-validate', 'form-info'] }] },
   { name: 'read_module_text', py: 'read_module_text', ps1: 'Read-ModuleText', variants: [{ id: 'base', authority: 'form-validate', consumers: ['form-info'] }] },
   { name: 'get_bsl_scan', py: 'get_bsl_scan', ps1: 'Get-BslScan', variants: [{ id: 'base', authority: 'form-edit', consumers: ['form-validate', 'form-info', 'form-compile'] }] },
+  { name: 'get_event_params', py: 'get_event_params', ps1: 'Get-EventParams', variants: [{ id: 'base', authority: 'form-compile', consumers: ['form-edit'] }] },
   { name: 'get_handler_stub', py: 'get_handler_stub', ps1: 'Get-HandlerStub', variants: [{ id: 'base', authority: 'form-compile', consumers: ['form-edit'] }] },
   { name: 'get_region_rank', py: 'get_region_rank', ps1: 'Get-RegionRank', variants: [{ id: 'base', authority: 'form-compile', consumers: ['form-edit'] }] },
   { name: 'get_handler_region_name', py: 'get_handler_region_name', ps1: 'Get-HandlerRegionName', variants: [{ id: 'base', authority: 'form-compile', consumers: ['form-edit'] }] },

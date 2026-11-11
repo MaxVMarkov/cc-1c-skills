@@ -69,6 +69,10 @@ node $RUN run <url> script.js --timeout-min=10   # bound the script (default 30 
 
 The bound covers the script, not the 1C startup: `--timeout=<ms>`, `--timeout-min=<min>` or `WEB_TEST_EXEC_TIMEOUT_MS`. Exit code of `run`: `0` — ok, `1` — script error, `2` — timeout.
 
+### Slides-only video (no 1C)
+
+`node $RUN play <slides.mjs> --out=<file.mp4>` — a narrated video from a module of slide specs, no 1C connection; `node $RUN preview <slides.mjs>` — a PNG per step first. See [slides.md](slides.md).
+
 ### Interactive mode (step-by-step development)
 
 ```bash
@@ -120,6 +124,7 @@ await navigateSection('Продажи');
 
 #### `openCommand(name)` → form state
 Open a command from the function panel (fuzzy). Returns form state of the opened form.
+1C closes the function panel once a command opens a form: before the next command of the section call `navigateSection` again (it toggles the panel — called on an open panel it hides it).
 ```js
 const form = await openCommand('Заказы клиентов');
 ```
@@ -500,16 +505,16 @@ Clear filters. Without arguments clears all, with `{ field }` clears specific ba
 #### `getPage()` → Playwright Page (raw, for advanced scripting)
 #### `startRecording(path, opts?)` / `stopRecording()` → MP4 video recording (`{ force: true }` to restart if already recording)
 #### `showCaption(text, opts?)` / `hideCaption()` → text overlay on page
-#### `showTitleSlide(text, opts?)` / `hideTitleSlide()` → full-screen title card (intro/outro)
+#### `showSlide(spec, tts?)` / `hideSlide()` / `prepareSlides(specs, tts?)` → animated slides: title and closing cards ([recording.md](recording.md)), presentation inserts ([slides.md](slides.md)); a slides-only video without 1C — `run.mjs play` / `preview` ([slides.md](slides.md))
 #### `isRecording()` → boolean
 #### `setHighlight(on)` / `isHighlightMode()` → auto-highlight mode for video
 #### `highlight(text)` / `unhighlight()` → manual element highlighting (error lists available elements)
-#### `addNarration(videoPath, opts?)` → narrated MP4 with TTS voiceover
+#### `addNarration(videoPath, opts?)` → narrated MP4 with TTS voiceover (and background music: `{ music: 'bright' }`)
+#### `withMusic(music, fn)` → background music while `fn` runs (long actions without speech); a slide takes `music` too
 #### `getCaptions()` → caption timestamps from last recording
 
 See [recording.md](recording.md) for setup (ffmpeg), highlight mode, TTS narration, API details, and examples.
-If `.v8-project.json` has `ffmpegPath`, pass it to `startRecording({ ffmpegPath })`.
-If `.v8-project.json` has `tts` config, pass the whole object to `addNarration()` as options.
+`ffmpegPath` and `tts` from `.v8-project.json` are picked up automatically (recording, slides, `addNarration`); pass options only to override them.
 
 ## Common patterns
 

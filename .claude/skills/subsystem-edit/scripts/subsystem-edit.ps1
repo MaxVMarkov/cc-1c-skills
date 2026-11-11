@@ -1,4 +1,4 @@
-﻿# subsystem-edit v1.29 — Edit existing 1C subsystem XML (+тип Bot; cfe-diff/cfe-borrow: недостающие типы)
+﻿# subsystem-edit v1.30 — Edit existing 1C subsystem XML (+тип Bot; cfe-diff/cfe-borrow: недостающие типы)
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 [CmdletBinding(PositionalBinding=$false)]
 param(
@@ -670,7 +670,7 @@ function Do-SetProperty([string]$jsonVal) {
 	if ($propName -in $mlProps) {
 		if (-not $propValue) {
 			# Clear - make self-closing
-			$propEl.InnerXml = ""
+			$propEl.IsEmpty = $true
 			$script:modifyCount++
 			Info "Cleared $propName"
 		} else {
@@ -684,7 +684,7 @@ function Do-SetProperty([string]$jsonVal) {
 	}
 
 	if ($propName -eq "Comment") {
-		if (-not $propValue) { $propEl.InnerXml = "" }
+		if (-not $propValue) { $propEl.IsEmpty = $true }
 		else { $propEl.InnerText = $propValue }
 		$script:modifyCount++
 		Info "Set Comment = `"$propValue`""
@@ -693,10 +693,10 @@ function Do-SetProperty([string]$jsonVal) {
 
 	if ($propName -eq "Picture") {
 		if (-not $propValue) {
-			$propEl.InnerXml = ""
+			$propEl.IsEmpty = $true
 		} else {
 			$indent = Get-ChildIndent $script:propsEl
-			$picXml = "`r`n$indent`t<xr:Ref>$propValue</xr:Ref>`r`n$indent`t<xr:LoadTransparent>false</xr:LoadTransparent>`r`n$indent"
+			$picXml = "`r`n$indent`t<xr:Ref>$([System.Security.SecurityElement]::Escape($propValue))</xr:Ref>`r`n$indent`t<xr:LoadTransparent>false</xr:LoadTransparent>`r`n$indent"
 			$propEl.InnerXml = $picXml
 		}
 		$script:modifyCount++

@@ -1,4 +1,4 @@
-﻿# epf-build v1.26 — Build external data processor or report (EPF/ERF) from XML sources
+﻿# epf-build v1.31 — Build external data processor or report (EPF/ERF) from XML sources
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 # NB: *nix-раскладку платформы (/opt/1cv8/<ver>/1cv8, без .exe) знает только .py-порт — PS на *nix не исполняется.
 <#
@@ -194,6 +194,17 @@ function Get-ProjectExtraArgs {
         $dir = $parent
     }
     return @()
+}
+
+function ConvertTo-QuotedIfNeeded {
+    # Extra arguments come from the caller unquoted; the 1cv8 command line is joined
+    # verbatim, so a token with a space needs quotes of its own. Без кавычек платформа молча
+    # режет значение по пробелу (замер 2026-11-10: «/Out C:\a b\x.txt» пишет лог в «C:\a»).
+    param([string]$Token)
+    if ($Token -and ($Token.Contains(' ') -or $Token.Contains("`t")) -and -not $Token.Contains('"')) {
+        return '"' + $Token + '"'
+    }
+    return $Token
 }
 
 function Assert-ExtraArgs {
@@ -856,7 +867,7 @@ function Invoke-SourceCheck {
 	New-Item -ItemType Directory -Path $dir -Force | Out-Null
 	try {
 		$outFile = Join-Path $dir "check_log.txt"
-		$a = @("DESIGNER", "/F", "`"$BasePath`"", "/CheckConfig") + $Flags + @("/Out", "`"$outFile`"", "/DisableStartupDialogs") + $ExtraArgs
+		$a = @("DESIGNER", "/F", "`"$BasePath`"", "/CheckConfig") + $Flags + @("/Out", "`"$outFile`"", "/DisableStartupDialogs") + @($ExtraArgs | ForEach-Object { ConvertTo-QuotedIfNeeded $_ })
 		Write-Host "Running: 1cv8.exe $($a -join ' ')"
 		$res = Invoke-PlatformProcess $v8 $a -PreQuoted
 		$lines = @()
@@ -956,6 +967,21 @@ elseif ($checkList.Count -gt 0 -and $checkList -notcontains 'modules') {
     exit 1
 }
 $sourceDir = Split-Path $SourceFile -Parent
+# Запросный список проверочная копия проверяет запросом-константой, а без базы запрос сверить не с чем
+$objectSrcDir = Join-Path $sourceDir ([IO.Path]::GetFileNameWithoutExtension($SourceFile))
+$manualQueryLists = @()
+if (Test-Path -LiteralPath $objectSrcDir -PathType Container) {
+    foreach ($ff in (Get-ChildItem -LiteralPath $objectSrcDir -Filter "Form.xml" -Recurse -File)) {
+        foreach ($m in [regex]::Matches([System.IO.File]::ReadAllText($ff.FullName, [System.Text.Encoding]::UTF8), '(?s)<Attribute name="([^"]+)"(?:(?!</Attribute>).)*?<ManualQuery>true</ManualQuery>')) { $manualQueryLists += $m.Groups[1].Value }
+    }
+}
+
+function Write-ManualQueryHint([string]$PlatformText) {
+    if (-not $autoCreatedBase -or $manualQueryLists.Count -eq 0 -or -not $PlatformText) { return }
+    $listError = $PlatformText -match 'Неверно указана главная таблица'
+    foreach ($n in $manualQueryLists) { if ($PlatformText.Contains("Неверный путь к данным: `"$n.")) { $listError = $true } }
+    if ($listError) { Write-Host "[note] A form with a manual-query dynamic list cannot be built without an infobase: specify the database" -ForegroundColor Yellow }
+}
 
 # Выгрузка целевой конфигурации для проверки: явный -ConfigSrc, иначе configSrc базы из реестра.
 # Без неё обращения к общим модулям конфигурации проверка считает неопределёнными переменными.
@@ -1102,6 +1128,7 @@ try {
             Write-Host "Error building external data processor/report (code: $exitCode)" -ForegroundColor Red
         }
         Write-PlatformOutput $output
+        if ($exitCode -ne 0) { Write-ManualQueryHint ($output -join "`n") }
         exit $exitCode
     }
 
@@ -1124,7 +1151,7 @@ try {
     $outFile = Join-Path $tempDir "build_log.txt"
     $arguments += "/Out", "`"$outFile`""
     $arguments += "/DisableStartupDialogs"
-    $arguments += $extraArgs
+    $arguments += @($extraArgs | ForEach-Object { ConvertTo-QuotedIfNeeded $_ })
 
     # --- Execute ---
     Write-Host "Running: 1cv8.exe $(Protect-Secrets ((Format-ArgsForDisplay $arguments $engine) -join ' ') @($Password, $UserName))"
@@ -1152,6 +1179,7 @@ try {
         }
     }
     Write-PlatformOutput $__v8.Output
+    if ($exitCode -ne 0) { Write-ManualQueryHint "$logContent`n$($__v8.Output -join "`n")" }
 
     exit $exitCode
 

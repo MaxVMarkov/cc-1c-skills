@@ -32,7 +32,7 @@
 
 [CmdletBinding(PositionalBinding=$false)]
 param(
-    [Parameter(Mandatory=$true, Position=0)]
+    [Parameter(Mandatory=$true)]
     [ValidateSet('profiles', 'roles', 'list')]
     [string]$Command,
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# db-create v1.21 — Create 1C information base
+# db-create v1.24 — Create 1C information base
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 
 import argparse
@@ -265,6 +265,9 @@ def project_extra_args(name):
                     data = json.load(f)
                 v = data.get(name)
                 if v:
+                    # Строка вместо массива — один аргумент, как у PS (@($x)), а не список символов
+                    if not isinstance(v, list):
+                        v = [v]
                     return [str(x) for x in v]
             except Exception:
                 pass
@@ -431,15 +434,6 @@ def file_ib_created(ib_path):
     Exit code 0 without it (broken/headless env) is a false success — reject it."""
     f = os.path.join(ib_path, "1Cv8.1CD")
     return os.path.isfile(f) and os.path.getsize(f) > 0
-
-
-def _redact(text, *secrets):
-    """Redact literal secret values (password, user) from a display string —
-    precise, never touches lookalike paths."""
-    for s in secrets:
-        if s:
-            text = text.replace(s, "***")
-    return text
 
 
 IBCMD_NOUSER_HINT = (
@@ -720,8 +714,8 @@ def main():
         ib_data = tempfile.mkdtemp(prefix="ibcmd_data_")
         atexit.register(shutil.rmtree, ib_data, ignore_errors=True)
         arguments.append(f"--data={ib_data}")
-        arguments.extend(quote_if_needed(a) for a in extra_args)
-        print(f"Running: ibcmd {_redact(' '.join(format_args_for_display(arguments, engine)), db_settings['password'])}")
+        arguments.extend(extra_args)
+        print(f"Running: ibcmd {' '.join(format_args_for_display(arguments, engine))}")
         result = run_ibcmd([v8path] + arguments, warn_no_user=False)
         exit_code = result.returncode
         # Постусловие по файлу 1Cv8.1CD проверяем только у файловой базы: у серверной её нет.

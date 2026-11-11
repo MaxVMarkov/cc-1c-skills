@@ -1,4 +1,4 @@
-// web-test recording/capture v1.18 — Recording lifecycle (CDP screencast + ffmpeg pipe), screenshot, wait helpers.
+// web-test recording/capture v1.20 — Recording lifecycle (CDP screencast + ffmpeg pipe), screenshot, wait helpers.
 // Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 
 import { spawn } from 'child_process';
@@ -6,7 +6,7 @@ import { mkdirSync, statSync, writeFileSync } from 'fs';
 import { dirname } from 'path';
 import {
   page, recorder, lastCaptions,
-  setRecorder, setLastCaptions, setLastRecordingDuration,
+  setRecorder, setLastCaptions, setLastRecordingDuration, setLastMusic,
   resolveProjectPath, ensureConnected,
 } from '../core/state.mjs';
 import { resolveFfmpeg } from './tts.mjs';
@@ -97,6 +97,7 @@ export async function startRecording(outputPath, opts = {}) {
     }
   }
   setLastCaptions([]);
+  setLastMusic({ file: null, cues: [] });
   setLastRecordingDuration(null);
 
   const fps = opts.fps || 25;
@@ -124,6 +125,7 @@ export async function startRecording(outputPath, opts = {}) {
     outputPath: resolvedPath,
     ffmpegError: '',
     captions: [],
+    music: [],   // music stretches (music.mjs: slides with `music`, withMusic)
     framesWritten: 0,
     frameDuration,
     lastFrameBuf: null,
@@ -153,18 +155,55 @@ export async function startRecording(outputPath, opts = {}) {
 
   // Frame handler shared across CDP sessions: when the active context switches, we attach
   // a new CDP session and route its frames to the same ffmpeg pipe — one continuous timeline.
-  const frameHandler = async ({ data, sessionId }, cdp) => {
+  const frameHandler = async ({ data, sessionId, metadata }, cdp) => {
     const buf = Buffer.from(data, 'base64');
+    if (rec.holdSince) {
+      // holding (see _holdFrames): keep only frames captured after the hold began, write nothing
+      if (metadata?.timestamp && metadata.timestamp >= rec.holdSince) rec.lastFrameBuf = buf;
+      try { await cdp.send('Page.screencastFrameAck', { sessionId }); } catch {}
+      return;
+    }
     // Close the slots before this frame's one; the very first frame also covers the start.
     if (ffmpeg.stdin.writable) fillUpTo(slotNow(), rec.lastFrameBuf || buf);
     rec.lastFrameBuf = buf;
     try { await cdp.send('Page.screencastFrameAck', { sessionId }); } catch {}
   };
 
+  // Opening hold: the video does not begin at once. For a moment after startRecording nothing is written
+  // and only the newest frame is kept; then the video starts there. A first slide shown in that moment
+  // extends the hold until its ground is on screen, so the video opens on the slide, not on the page
+  // under it (the page would otherwise flash in the first frames).
+  //   _holdFrames()     — (re)start holding; only frames captured from now on are kept
+  //   _releaseFrames()  — the video starts here (unless a caption was already timed against the old start)
+  rec._holdFrames = () => {
+    if (rec.framesWritten) return false;   // the video has begun — too late
+    clearTimeout(rec.holdTimer);
+    rec.heldFrom = rec.lastFrameBuf || rec.heldFrom;
+    rec.lastFrameBuf = null;
+    rec.holdSince = Date.now() / 1000;      // CDP frame timestamps are wall-clock seconds
+    return true;
+  };
+  rec._releaseFrames = () => {
+    clearTimeout(rec.holdTimer);
+    if (!rec.holdSince) return;
+    rec.holdSince = 0;
+    if (!rec.lastFrameBuf) rec.lastFrameBuf = rec.heldFrom;   // no new frame came: keep what we had
+    rec.heldFrom = null;
+    if (!rec.captions.length) {
+      // the video starts over: music stretches opened against the old start move with it
+      const shift = rec.videoTimeMs;
+      rec.clockStart = performance.now();
+      for (const c of rec.music) {
+        c.start = Math.max(0, Math.round(c.start - shift));
+        if (c.end != null) c.end = Math.max(0, Math.round(c.end - shift));
+      }
+    }
+  };
+
   // Write the slots that are over (static periods, context switches); `final` also writes
   // the current, partly elapsed one.
   rec._flushFrames = (final = false) => {
-    if (!rec.lastFrameBuf || !ffmpeg.stdin.writable) return;
+    if (rec.holdSince || !rec.lastFrameBuf || !ffmpeg.stdin.writable) return;
     fillUpTo(slotNow() + (final ? 1 : 0), rec.lastFrameBuf);
   };
 
@@ -186,6 +225,8 @@ export async function startRecording(outputPath, opts = {}) {
   };
 
   setRecorder(rec);
+  rec.holdSince = Date.now() / 1000 - 1;   // opening hold (frames from the start on are kept)
+  rec.holdTimer = setTimeout(() => rec._releaseFrames(), 600);
   try {
     await rec._attachPage(page);
   } catch (err) {
@@ -204,6 +245,7 @@ export async function stopRecording() {
 
   const rec = recorder;
   const { cdp, ffmpeg, outputPath } = rec;
+  rec._releaseFrames();   // a recording shorter than the opening hold
 
   // Final frame flush, current slot included; the video ends here, so does the duration
   rec._flushFrames(true);
@@ -235,12 +277,16 @@ export async function stopRecording() {
 
   const stats = statSync(outputPath);
 
-  // Preserve captions for addNarration()
+  // Preserve captions (and music stretches) for addNarration(); a stretch still open ends with the video
+  const music = rec.music.map(({ start, end, music: m, mode, depth }) => ({
+    start, end: end ?? Math.round(rec.videoTimeMs), music: m, mode, depth,
+  }));
   setLastCaptions(rec.captions);
+  setLastMusic({ file: outputPath, cues: music });
   setLastRecordingDuration(duration);
-  if (lastCaptions.length) {
+  if (lastCaptions.length || music.length) {
     const captionsPath = outputPath.replace(/\.[^.]+$/, '.captions.json');
-    const captionsData = { recordingDuration: duration, videoTimestamps: true, captions: lastCaptions };
+    const captionsData = { recordingDuration: duration, videoTimestamps: true, captions: lastCaptions, ...(music.length ? { music } : {}) };
     writeFileSync(captionsPath, JSON.stringify(captionsData, null, 2), 'utf-8');
   }
 
@@ -250,6 +296,7 @@ export async function stopRecording() {
     file: outputPath,
     duration: Math.round(duration * 10) / 10,
     size: stats.size,
-    captions: lastCaptions.length
+    captions: lastCaptions.length,
+    ...(music.length ? { music: music.length } : {}),
   };
 }

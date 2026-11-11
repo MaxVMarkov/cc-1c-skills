@@ -1,0 +1,77 @@
+{
+  "name": "Форма с запросным динамическим списком проверяется (fake platform)",
+  "osOnly": "win32",
+  "fakePlatform": {
+    "exit": 0,
+    "log": ""
+  },
+  "preRun": [
+    {
+      "script": "epf-init/scripts/init",
+      "args": {
+        "-Name": "Тест",
+        "-SrcDir": "{workDir}/src"
+      }
+    },
+    {
+      "script": "form-add/scripts/form-add",
+      "args": {
+        "-ObjectPath": "{workDir}/src/Тест.xml",
+        "-FormName": "Форма"
+      }
+    },
+    {
+      "script": "form-compile/scripts/form-compile",
+      "input": {
+        "title": "Т",
+        "attributes": [
+          {
+            "name": "Список",
+            "type": "DynamicList",
+            "main": true,
+            "settings": {
+              "keyType": "RowNumber",
+              "query": "ВЫБРАТЬ Т.Ссылка ИЗ Справочник.С КАК Т"
+            }
+          }
+        ],
+        "elements": [
+          {
+            "table": "Т",
+            "path": "Список",
+            "columns": [
+              {
+                "input": "Ссылка",
+                "path": "Список.Ссылка"
+              }
+            ]
+          }
+        ]
+      },
+      "args": {
+        "-JsonPath": "{inputFile}",
+        "-OutputPath": "{workDir}/src/Тест/Forms/Форма/Ext/Form.xml"
+      }
+    }
+  ],
+  "args_extra": [
+    "-V8Path",
+    "{workDir}\\fake.cmd",
+    "-InfoBasePath",
+    "{workDir}\\ib",
+    "-SourceFile",
+    "{workDir}\\src\\Тест.xml",
+    "-OutputFile",
+    "{workDir}\\build\\Тест.epf"
+  ],
+  "expect": {
+    "stdoutContains": [
+      "/CheckConfig"
+    ],
+    "stdoutNotContains": [
+      "source check skipped"
+    ]
+  },
+  "expectError": true,
+  "noSnapshot": "платформа фейковая, EPF не собирается — проверяется командная строка"
+}

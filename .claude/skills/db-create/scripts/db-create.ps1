@@ -1,4 +1,4 @@
-﻿# db-create v1.21 — Create 1C information base
+﻿# db-create v1.24 — Create 1C information base
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 # NB: *nix-раскладку платформы (/opt/1cv8/<ver>/1cv8, без .exe) знает только .py-порт — PS на *nix не исполняется.
 <#
@@ -134,13 +134,6 @@ $script:V8SecretKeys = @('/P', '/UC', '/WSP', '/AWSP')
 # вырезало бы половину печатаемой строки (проверено: config save превращался в config ***ve).
 $script:IbcmdSecretKeys = @('--password', '--token', '--db-pwd', '--db-user')
 
-function Protect-Secrets {
-    # Redact literal secret values from a display string (String.Replace is literal, not regex).
-    param([string]$Text, [string[]]$Secrets)
-    foreach ($s in $Secrets) { if ($s) { $Text = $Text.Replace($s, '***') } }
-    return $Text
-}
-
 function Test-ArgKeyMatch {
     # A token matches a key when it equals the key, or starts with it and the next
     # character is not a letter — catches glued /N"user" and --password=x, while
@@ -170,6 +163,17 @@ function Get-ProjectExtraArgs {
         $dir = $parent
     }
     return @()
+}
+
+function ConvertTo-QuotedIfNeeded {
+    # Extra arguments come from the caller unquoted; the 1cv8 command line is joined
+    # verbatim, so a token with a space needs quotes of its own. Без кавычек платформа молча
+    # режет значение по пробелу (замер 2026-11-10: «/Out C:\a b\x.txt» пишет лог в «C:\a»).
+    param([string]$Token)
+    if ($Token -and ($Token.Contains(' ') -or $Token.Contains("`t")) -and -not $Token.Contains('"')) {
+        return '"' + $Token + '"'
+    }
+    return $Token
 }
 
 function Assert-ExtraArgs {
@@ -800,7 +804,7 @@ try {
         }
         $arguments += "--data=$tempDir"
         $arguments += $extraArgs
-        Write-Host "Running: ibcmd $(Protect-Secrets ((Format-ArgsForDisplay $arguments $engine) -join ' ') @($script:dbSettings.Password))"
+        Write-Host "Running: ibcmd $((Format-ArgsForDisplay $arguments $engine) -join ' ')"
         $__ib = Invoke-PlatformProcess $V8Path $arguments
         $output = $__ib.Output
         $exitCode = $__ib.ExitCode
@@ -852,7 +856,7 @@ try {
     $outFile = Join-Path $tempDir "create_log.txt"
     $arguments += "/Out", "`"$outFile`""
     $arguments += "/DisableStartupDialogs"
-    $arguments += $extraArgs
+    $arguments += @($extraArgs | ForEach-Object { ConvertTo-QuotedIfNeeded $_ })
 
     # --- Execute ---
     Write-Host "Running: 1cv8.exe $((Format-ArgsForDisplay $arguments $engine) -join ' ')"

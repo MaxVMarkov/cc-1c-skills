@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# db-load-cf v1.25 — Load 1C configuration from CF file
+# db-load-cf v1.27 — Load 1C configuration from CF file
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 
 import argparse
@@ -251,6 +251,9 @@ def project_extra_args(name):
                     data = json.load(f)
                 v = data.get(name)
                 if v:
+                    # Строка вместо массива — один аргумент, как у PS (@($x)), а не список символов
+                    if not isinstance(v, list):
+                        v = [v]
                     return [str(x) for x in v]
             except Exception:
                 pass
@@ -633,7 +636,7 @@ def run_apply_check(exe, conn_args, extension, extra_args):
             a += ["-Extension", f'"{extension}"']
         out_file = os.path.join(temp_dir, "check_log.txt")
         a += ["/Out", f'"{out_file}"', "/DisableStartupDialogs"]
-        a += list(extra_args)
+        a += [quote_if_needed(x) for x in extra_args]
         r = run_v8(v8, a)
         lines = []
         if os.path.isfile(out_file):

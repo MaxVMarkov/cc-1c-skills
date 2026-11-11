@@ -243,7 +243,6 @@ powershell.exe -NoProfile -File scripts/ref-mcp.ps1   # поднят ли и п�
 ├── form-decompile/      # Декомпиляция формы в JSON
 ├── form-validate/       # Валидация формы
 ├── form-edit/           # Правка формы: добавление, перенос, изменение, удаление
-├── form-patterns/       # Справочник паттернов компоновки форм
 ├── role-info/           # Анализ прав роли
 ├── role-compile/        # Создание роли из JSON DSL
 ├── role-edit/           # Точечная правка прав существующей роли
