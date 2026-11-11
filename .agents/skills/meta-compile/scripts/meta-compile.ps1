@@ -1,4 +1,4 @@
-﻿# meta-compile v1.114 — Compile 1C metadata object from JSON
+﻿# meta-compile v1.128 — Compile 1C metadata object from JSON
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 [CmdletBinding(PositionalBinding=$false)]
 param(
@@ -16,14 +16,23 @@ $ErrorActionPreference = "Stop"
 # идёт чинить скрипт, а не свой вызов. $source — файл или параметр. $expected заполняем только
 # для полиморфного входа: у файла подсказка была бы наполнителем. -Inline печатает ещё и то,
 # что доехало: у файла такого вопроса нет — путь назван, позицию дал парсер, файл на диске.
-# Возврат через -NoEnumerate: без него одноэлементный
-# JSON-массив разворачивался бы в скаляр вторым анруллингом.
+# Возврат через запятую: без неё одноэлементный JSON-массив разворачивался бы в скаляр
+# вторым анруллингом. Не Write-Output -NoEnumerate: pwsh 7.6 заворачивает им в List
+# и одиночный объект (issue #136).
 function ConvertFrom-JsonInput([string]$text, [string]$source, [string]$expected, [switch]$Inline) {
 	try {
 		# PS 5.1 на пустой строке отдаёт $null, а не ошибку — навык уходил дальше с $null,
 		# тогда как py-порт падал. Проверяем сами, чтобы порты вели себя одинаково.
 		if ([string]::IsNullOrWhiteSpace($text)) { throw 'input is empty' }
-		$parsed = $text | ConvertFrom-Json
+		# pwsh 7+ сам разворачивает массив верхнего уровня ([x] → x, [] → $null). Ключ -NoEnumerate
+		# появился там же: в 5.1 и pwsh 6 его нет, поэтому спрашиваем командлет, а не версию.
+		$cfj = @{}
+		$cfjKeys = (Get-Command ConvertFrom-Json).Parameters
+		if ($cfjKeys.ContainsKey('NoEnumerate')) { $cfj.NoEnumerate = $true }
+		# pwsh 7.5+ без -DateKind String превращает ISO-строки дат в DateTime, и в XML уходит формат
+		# локали; в 5.1 и pwsh до 7.5 ключа нет (5.1 даты и так не трогает).
+		if ($cfjKeys.ContainsKey('DateKind')) { $cfj.DateKind = 'String' }
+		$parsed = $text | ConvertFrom-Json @cfj
 	} catch {
 		$what = if ($expected) { "$source expects $expected" } else { "Invalid JSON in $source" }
 		if ($Inline) {
@@ -36,7 +45,7 @@ function ConvertFrom-JsonInput([string]$text, [string]$source, [string]$expected
 		[Console]::Error.WriteLine("[ERROR] ${what} ($($_.Exception.Message))")
 		exit 1
 	}
-	Write-Output -NoEnumerate $parsed
+	return ,$parsed
 }
 
 # --- Чтение входного JSON-файла ---
@@ -124,16 +133,20 @@ function Find-V8Project([string]$startDir) {
 }
 function Get-EditMode([string]$cfgDir) {
 	try {
-		$pj = Find-V8Project (Get-Location).Path
-		if (-not $pj) { $pj = Find-V8Project $cfgDir }
+		$pj = Find-V8Project (Get-Location).ProviderPath
+		if (-not $pj) { $pj = Find-V8Project ([System.IO.Path]::GetFullPath($cfgDir)) }
 		if (-not $pj) { return 'deny' }
-		$proj = Get-Content -Raw $pj | ConvertFrom-Json
+		# UTF-8 явно: PS 5.1 читает файл без BOM как ANSI, и configSrc с кириллицей не совпал бы
+		$proj = Get-Content -Raw -Encoding UTF8 $pj | ConvertFrom-Json
+		# configSrc — от каталога .v8-project.json, а не от рабочего каталога: иначе из подкаталога
+		# проекта база не сопоставляется и берётся правило проекта.
+		$projDir = [System.IO.Path]::GetDirectoryName($pj)
 		$cfgFull = [System.IO.Path]::GetFullPath($cfgDir).TrimEnd('\', '/')
 		if ($proj.databases) {
 			foreach ($db in $proj.databases) {
 				if ($db.configSrc) {
-					$src = [System.IO.Path]::GetFullPath($db.configSrc).TrimEnd('\', '/')
-					if ($cfgFull -eq $src -or $cfgFull.StartsWith($src + [System.IO.Path]::DirectorySeparatorChar)) {
+					$src = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($projDir, $db.configSrc)).TrimEnd('\', '/')
+					if ($cfgFull -eq $src -or $cfgFull.StartsWith($src + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
 						if ($db.editingAllowedCheck) { return $db.editingAllowedCheck }
 					}
 				}
@@ -146,7 +159,7 @@ function Get-EditMode([string]$cfgDir) {
 function Assert-EditAllowed([string]$targetPath, [string]$require) {
 	try {
 		$rp = $targetPath
-		try { $rp = (Resolve-Path $targetPath -ErrorAction Stop).Path } catch {}
+		try { $rp = (Resolve-Path $targetPath -ErrorAction Stop).ProviderPath } catch {}
 		# Autonomous external object (EPF/ERF): never part of a config on support (issue #39).
 		if (Test-ExternalObjectRoot $rp) { return }
 		$elemUuid = Get-RootUuid $rp
@@ -309,7 +322,7 @@ $script:enumValueAliases = @{
 	# DefaultPresentation
 	"ВВидеНаименования" = "AsDescription"; "ВВидеКода" = "AsCode"
 	# FillChecking
-	"НеПроверять" = "DontCheck"; "Ошибка" = "ShowError"; "Предупреждение" = "ShowWarning"
+	"НеПроверять" = "DontCheck"; "Ошибка" = "ShowError"
 	# Indexing
 	"НеИндексировать" = "DontIndex"; "Индексировать" = "Index"
 	"ИндексироватьСДопУпорядочиванием" = "IndexWithAdditionalOrder"
@@ -320,13 +333,17 @@ $script:validEnumValues = @{
 	"RegisterType"                   = @("Balance","Turnovers")
 	"WriteMode"                      = @("Independent","RecorderSubordinate")
 	"InformationRegisterPeriodicity" = @("Nonperiodical","Second","Day","Month","Quarter","Year","RecorderPosition")
-	"DependenceOnCalculationTypes"   = @("DontUse","OnActionPeriod")
+	"DependenceOnCalculationTypes"   = @("DontUse","OnActionPeriod","OnRegistrationPeriod")
 	# AutomaticAndManaged — только у внешнего источника данных и его таблиц: там режим может
 	# решаться на уровне таблицы, у прочих объектов такого значения нет.
 	"DataLockControlMode"            = @("Automatic","Managed","AutomaticAndManaged")
 	"FullTextSearch"                 = @("Use","DontUse")
 	"DataHistory"                    = @("Use","DontUse")
 	"DefaultPresentation"            = @("AsDescription","AsCode")
+	# Уточнение по виду объекта («Вид.Свойство») — проверяется раньше общего списка. AsNumber
+	# («в виде номера») есть только у задачи: у справочника и прочих платформа его отвергает
+	# («Неверное значение перечисления», 8.3.24 и 8.5.1).
+	"Task.DefaultPresentation"       = @("AsDescription","AsNumber")
 	"Posting"                        = @("Allow","Deny")
 	"RealTimePosting"                = @("Allow","Deny")
 	"EditType"                       = @("InDialog","InList","BothWays")
@@ -336,10 +353,10 @@ $script:validEnumValues = @{
 	"NumberType"                     = @("String","Number")
 	"NumberAllowedLength"            = @("Variable","Fixed")
 	"RegisterRecordsDeletion"        = @("AutoDelete","AutoDeleteOnUnpost","AutoDeleteOff")
-	"RegisterRecordsWritingOnPost"   = @("WriteModified","WriteSelected","WriteAll")
+	"RegisterRecordsWritingOnPost"   = @("WriteModified","WriteSelected")
 	"ReturnValuesReuse"              = @("DontUse","DuringRequest","DuringSession")
 	"ReuseSessions"                  = @("DontUse","Use","AutoUse")
-	"FillChecking"                   = @("DontCheck","ShowError","ShowWarning")
+	"FillChecking"                   = @("DontCheck","ShowError")
 	"Indexing"                       = @("DontIndex","Index","IndexWithAdditionalOrder")
 	"SubordinationUse"               = @("ToItems","ToFolders","ToFoldersAndItems")
 	"CodeSeries"                     = @("WholeCatalog","WithinSubordination","WithinOwnerSubordination","WholeCharacteristicKind","WholeChartOfAccounts")
@@ -350,6 +367,42 @@ $script:validEnumValues = @{
 	"SearchStringModeOnInputByString"= @("Begin","AnyPart")
 	"FullTextSearchOnInputByString"  = @("Use","DontUse")
 	"Category"                       = @("NavigationPanel","ActionsPanel","FormCommandBar","FormNavigationPanel")
+	# Значения — по XSD платформы; не встреченные в выгрузках БП/УНФ/ERP подтверждены загрузкой и
+	# выгрузкой на 8.3.24 и 8.5.1. Имя с разным смыслом у разных владельцев — только ключом «Контекст.Свойство».
+	"ChoiceFoldersAndItems"             = @("Items","Folders","FoldersAndItems")
+	"NumberPeriodicity"                 = @("Nonperiodical","Year","Quarter","Month","Day")
+	"ParameterUseMode"                  = @("Single","Multiple")
+	"Representation"                    = @("Auto","Text","Picture","PictureAndText")
+	"OnMainServerUnavalableBehavior"    = @("Auto","MakeDisable","DontChangeBehavior")
+	"FormType"                          = @("Managed","Ordinary")
+	"MoveBoundaryOnPosting"             = @("DontMove","Move")
+	"SequenceFilling"                   = @("AutoFill","AutoFillOff")
+	"TaskNumberAutoPrefix"              = @("BusinessProcessNumber","DontUse")
+	"AutoUse"                           = @("DontUse","Use")
+	"DataSeparation"                    = @("DontUse","Separate")
+	"UsersSeparation"                   = @("DontUse","Separate")
+	"AuthenticationSeparation"          = @("DontUse","Separate")
+	"ConfigurationExtensionsSeparation" = @("DontUse","Separate")
+	"SeparatedDataUse"                  = @("Independently","IndependentlyAndSimultaneously")
+	"TemplateType"                      = @("SpreadsheetDocument","BinaryData","ActiveDocument","HTMLDocument","TextDocument","GeographicalSchema","GraphicalSchema","DataCompositionSchema","DataCompositionAppearanceTemplate","AddIn")
+	"UseInInterfaceCompatibilityMode"   = @("Any","Taxi","Version85")
+	"TypeReductionMode"                 = @("TransformValues","DeleteData","Deny")
+	"TransactionsIsolationLevel"        = @("Auto","ReadUncommitted","ReadCommitted","RepeatableRead","Serializable")
+	"TableType"                         = @("Table","Expression")
+	"TableDataType"                     = @("NonobjectData","ObjectData")
+	"ChoiceDataGetModeOnInputByString"  = @("Directly","Background")
+	"HTTPMethod"                        = @("GET","HEAD","PUT","POST","DELETE","PATCH","MERGE","OPTIONS","TRACE","CONNECT","PROPFIND","PROPPATCH","MOVE","COPY","LOCK","UNLOCK","MKCOL","Any")
+	"TransferDirection"                 = @("In","Out","InOut")
+	"ValueChange"                       = @("Clear","DontChange")
+	# QuickChoice у справочника и других ссылочных — булево; перечислением он бывает здесь:
+	"Constant.QuickChoice"              = @("Auto","Use","DontUse")
+	"CommonAttribute.QuickChoice"       = @("Auto","Use","DontUse")
+	"Attribute.QuickChoice"             = @("Auto","Use","DontUse")
+	# Use: у реквизита и ТЧ — для групп/элементов; у состава общего реквизита — Auto/Use/DontUse;
+	# у регламентного задания — булево, у параметра функциональных опций — список (общего ключа нет).
+	"Attribute.Use"                     = @("ForItem","ForFolder","ForFolderAndItem")
+	"TabularSection.Use"                = @("ForItem","ForFolder","ForFolderAndItem")
+	"CommonAttributeContent.Use"        = @("Auto","Use","DontUse")
 }
 
 # --- Группы команд объекта (командный интерфейс) ---
@@ -394,12 +447,15 @@ function Resolve-CommandGroup {
 
 function Normalize-EnumValue {
 	param([string]$propName, [string]$value)
-	# 1. Check alias dictionary — silent auto-correct
+	$valid = $script:validEnumValues["$script:objType.$propName"]
+	if (-not $valid) { $valid = $script:validEnumValues[$propName] }
+	# 1. Check alias dictionary — silent auto-correct. Словарь общий для всех свойств: у свойства со
+	# списком алиас берётся, только если его результат в списке (иначе «None» дало бы Nonperiodical везде)
 	if ($script:enumValueAliases.ContainsKey($value)) {
-		return $script:enumValueAliases[$value]
+		$aliased = $script:enumValueAliases[$value]
+		if (-not $valid -or $valid -ccontains $aliased) { return $aliased }
 	}
-	# 2. Case-insensitive match against valid values — silent
-	$valid = $script:validEnumValues[$propName]
+	# 2. Case-insensitive match against valid values — silent. Список вида объекта — раньше общего.
 	if ($valid) {
 		foreach ($v in $valid) {
 			if ($v -ieq $value) { return $v }
@@ -412,12 +468,35 @@ function Normalize-EnumValue {
 	return $value
 }
 
+# Значение перечисления из поля объекта DSL (реквизит, таблица внешнего источника…). Не задано —
+# только null или пустая строка: false — значение, его проверит список, а не молча заменит умолчание.
+function Get-EnumField($obj, [string]$field, [string]$propName) {
+	if ($null -eq $obj) { return "" }
+	$v = $obj.$field
+	if ($null -eq $v -or "$v" -eq '') { return "" }
+	return (Normalize-EnumValue $propName "$v")
+}
+
+# QuickChoice-перечисление (реквизит, константа, общий реквизит) из булева: true → Use, false → DontUse;
+# строки "true"/"false" — так же (строчная форма). Иначе $null — значение идёт обычной нормализацией.
+function ConvertFrom-QuickChoiceBool($v) {
+	if ($v -is [bool]) { return $(if ($v) { 'Use' } else { 'DontUse' }) }
+	if ("$v" -eq 'true') { return 'Use' }
+	if ("$v" -eq 'false') { return 'DontUse' }
+	return $null
+}
+
 # Helper: read enum property from $def with default and normalization
 function Get-EnumProp {
 	param([string]$propName, [string]$fieldName, [string]$default)
 	$val = $def.$fieldName
-	$raw = if ($val) { "$val" } else { $default }
-	return (Normalize-EnumValue $propName $raw)
+	# Не задано — только null или пустая строка: false у перечисления — значение, а не «по умолчанию»
+	if ($null -eq $val -or "$val" -eq '') { return (Normalize-EnumValue $propName $default) }
+	if ($propName -ceq 'QuickChoice') {
+		$qcb = ConvertFrom-QuickChoiceBool $val
+		if ($qcb) { return $qcb }
+	}
+	return (Normalize-EnumValue $propName "$val")
 }
 
 # Bool object-свойство: presence-aware (иначе false-значение спутать с отсутствием). Прощаем строки.
@@ -601,9 +680,10 @@ $script:typeSynonyms["boolean"]  = "Boolean"
 $script:typeSynonyms["date"]     = "Date"
 $script:typeSynonyms["datetime"] = "DateTime"
 $script:typeSynonyms["bool"]     = "Boolean"
-# ValueStorage / UUID — прощающий ввод (модель может написать base64Binary / рус. форму → канон).
+# ValueStorage / UUID — прощающий ввод (рус. форма → канон).
 $script:typeSynonyms["valuestorage"]         = "ValueStorage"
-$script:typeSynonyms["base64binary"]         = "ValueStorage"
+# base64Binary — имя XML-типа ДвоичныхДанных: платформа читает xs:base64Binary как ДвоичныеДанные (замер 8.3.24).
+$script:typeSynonyms["base64binary"]         = "BinaryData"
 # ДвоичныеДанные — ОТДЕЛЬНЫЙ тип, не ХранилищеЗначения: платформа пишет его как
 # xs:base64Binary с квалификаторами. Встречается у полей внешних источников данных.
 $script:typeSynonyms["binarydata"]           = "BinaryData"
@@ -765,6 +845,61 @@ function Resolve-TypeStr {
 	return $typeStr
 }
 
+# Разбор примитивного типа DSL: Number / String / Date / DateTime / Time — с синонимами
+# (decimal, numeric, Число, Строка, Дата …), в любом регистре, с пробелами в скобках.
+# Тело общее у всех навыков-компиляторов (семья в check-inline-drift); умолчание для голого типа
+# зависит от места (хранимый реквизит — 10,0 и 10, СКД — без ограничения) и приходит аргументами.
+# Возврат: $null — не примитив (ссылки, Boolean, …); @{ Error } — база примитива узнана, а
+# параметры нет (вызывающий сообщает ошибку своим способом); иначе описание квалификаторов.
+function Parse-PrimitiveType {
+	param([string]$typeStr, [int]$defDigits, [int]$defFraction, [int]$defLength)
+	if ($typeStr -notmatch '^\s*([^\s(]+)\s*(\(.*)?$') { return $null }
+	$rest = if ($Matches.ContainsKey(2)) { $Matches[2] } else { '' }
+	$kind = switch -exact ($Matches[1].ToLowerInvariant()) {
+		'number' { 'Number' } 'decimal' { 'Number' } 'numeric' { 'Number' } 'число' { 'Number' }
+		'string' { 'String' } 'строка' { 'String' }
+		'date' { 'Date' } 'дата' { 'Date' } 'datetime' { 'DateTime' } 'датавремя' { 'DateTime' }
+		'time' { 'Time' } 'время' { 'Time' }
+		default { $null }
+	}
+	if (-not $kind) { return $null }
+	$bad = @{ Error = ("Invalid type '$typeStr'. Expected Number, Number(D), Number(D,F), Number(D,F,nonneg), " +
+		"String, String(N), String(N,fixed), Date, DateTime, Time") }
+	$parts = @()
+	if ($rest) {
+		if ($rest -notmatch '^\((.*)\)\s*$') { return $bad }
+		$parts = @($Matches[1] -split ',' | ForEach-Object { $_.Trim().ToLowerInvariant() })
+	}
+	if ($kind -eq 'Number') {
+		$sign = 'Any'
+		if ($parts.Count -gt 0 -and ($parts[-1] -eq 'nonneg' -or $parts[-1] -eq 'any')) {
+			if ($parts[-1] -eq 'nonneg') { $sign = 'Nonnegative' }
+			$parts = @(if ($parts.Count -gt 1) { $parts[0..($parts.Count - 2)] })
+		}
+		if ($parts.Count -gt 2) { return $bad }
+		foreach ($p in $parts) { if ($p -notmatch '^[0-9]{1,9}$') { return $bad } }
+		$d = if ($parts.Count -ge 1) { [int]$parts[0] } else { $defDigits }
+		$f = if ($parts.Count -ge 2) { [int]$parts[1] } elseif ($parts.Count -eq 1) { 0 } else { $defFraction }
+		# Дробная часть у числа без ограничения (0,F) платформа молча обнуляет — это ошибка ввода
+		if ($d -gt 38 -or $f -gt $d) { return $bad }
+		return @{ Kind = 'Number'; Digits = $d; Fraction = $f; Sign = $sign }
+	}
+	if ($kind -eq 'String') {
+		$allowed = 'Variable'
+		if ($parts.Count -eq 2) {
+			if ($parts[1] -eq 'fixed' -or $parts[1] -eq 'fix') { $allowed = 'Fixed' }
+			elseif ($parts[1] -ne 'variable') { return $bad }
+		}
+		if ($parts.Count -gt 2 -or ($parts.Count -ge 1 -and $parts[0] -notmatch '^[0-9]{1,9}$')) { return $bad }
+		$len = if ($parts.Count -ge 1) { [int]$parts[0] } else { $defLength }
+		# Фиксированную длину у неограниченной строки платформа молча снимает — это ошибка ввода
+		if ($allowed -eq 'Fixed' -and $len -eq 0) { return $bad }
+		return @{ Kind = 'String'; Length = $len; Allowed = $allowed }
+	}
+	if ($parts.Count -gt 0) { return $bad }
+	return @{ Kind = 'Date'; Fractions = $kind }
+}
+
 function Emit-TypeContent {
 	param([string]$indent, [string]$typeStr)
 	if (-not $typeStr) { return }
@@ -820,49 +955,31 @@ function Emit-TypeContent {
 		return
 	}
 
-	# String or String(N) or String(N,fixed|variable) — AllowedLength: Variable дефолт / Fixed (фикс. длина).
-	if ($typeStr -match '^String(\((\d+)(\s*,\s*(fixed|variable))?\))?$') {
-		$len = if ($Matches[2]) { $Matches[2] } else { "10" }
-		$al = if ($Matches[4] -and $Matches[4].ToLower() -eq 'fixed') { 'Fixed' } else { 'Variable' }
-		X "$indent<v8:Type>xs:string</v8:Type>"
-		X "$indent<v8:StringQualifiers>"
-		X "$indent`t<v8:Length>$len</v8:Length>"
-		X "$indent`t<v8:AllowedLength>$al</v8:AllowedLength>"
-		X "$indent</v8:StringQualifiers>"
-		return
-	}
-
-	# Number without params → Number(10,0)
-	if ($typeStr -eq "Number") {
-		X "$indent<v8:Type>xs:decimal</v8:Type>"
-		X "$indent<v8:NumberQualifiers>"
-		X "$indent`t<v8:Digits>10</v8:Digits>"
-		X "$indent`t<v8:FractionDigits>0</v8:FractionDigits>"
-		X "$indent`t<v8:AllowedSign>Any</v8:AllowedSign>"
-		X "$indent</v8:NumberQualifiers>"
-		return
-	}
-
-	# Number(D,F) or Number(D,F,nonneg)
-	if ($typeStr -match '^Number\((\d+),(\d+)(,nonneg)?\)$') {
-		$digits = $Matches[1]
-		$fraction = $Matches[2]
-		$sign = if ($Matches[3]) { "Nonnegative" } else { "Any" }
-		X "$indent<v8:Type>xs:decimal</v8:Type>"
-		X "$indent<v8:NumberQualifiers>"
-		X "$indent`t<v8:Digits>$digits</v8:Digits>"
-		X "$indent`t<v8:FractionDigits>$fraction</v8:FractionDigits>"
-		X "$indent`t<v8:AllowedSign>$sign</v8:AllowedSign>"
-		X "$indent</v8:NumberQualifiers>"
-		return
-	}
-
-	# Date / DateTime / Time — общая структура xs:dateTime + DateFractions (различаются лишь составом).
-	if ($typeStr -match '^(Date|DateTime|Time)$') {
-		X "$indent<v8:Type>xs:dateTime</v8:Type>"
-		X "$indent<v8:DateQualifiers>"
-		X "$indent`t<v8:DateFractions>$typeStr</v8:DateFractions>"
-		X "$indent</v8:DateQualifiers>"
+	# Примитивы: String / Number / Date / DateTime / Time. Голый тип хранимого реквизита — String(10)
+	# и Number(10,0): без ограничения платформа допускает, но по умолчанию его не даём.
+	$prim = Parse-PrimitiveType $typeStr 10 0 10
+	if ($prim) {
+		if ($prim.Error) { Write-Error $prim.Error; exit 1 }
+		if ($prim.Kind -eq 'String') {
+			X "$indent<v8:Type>xs:string</v8:Type>"
+			X "$indent<v8:StringQualifiers>"
+			X "$indent`t<v8:Length>$($prim.Length)</v8:Length>"
+			X "$indent`t<v8:AllowedLength>$($prim.Allowed)</v8:AllowedLength>"
+			X "$indent</v8:StringQualifiers>"
+		} elseif ($prim.Kind -eq 'Number') {
+			X "$indent<v8:Type>xs:decimal</v8:Type>"
+			X "$indent<v8:NumberQualifiers>"
+			X "$indent`t<v8:Digits>$($prim.Digits)</v8:Digits>"
+			X "$indent`t<v8:FractionDigits>$($prim.Fraction)</v8:FractionDigits>"
+			X "$indent`t<v8:AllowedSign>$($prim.Sign)</v8:AllowedSign>"
+			X "$indent</v8:NumberQualifiers>"
+		} else {
+			# Date / DateTime / Time — общая структура xs:dateTime + DateFractions.
+			X "$indent<v8:Type>xs:dateTime</v8:Type>"
+			X "$indent<v8:DateQualifiers>"
+			X "$indent`t<v8:DateFractions>$($prim.Fractions)</v8:DateFractions>"
+			X "$indent</v8:DateQualifiers>"
+		}
 		return
 	}
 
@@ -878,7 +995,7 @@ function Emit-TypeContent {
 		return
 	}
 
-	# ValueStorage (ХранилищеЗначения) — канон v8:ValueStorage (не xs:base64Binary, хоть 1С и принимает оба).
+	# ValueStorage (ХранилищеЗначения) — v8:ValueStorage. xs:base64Binary платформа читает как ДвоичныеДанные.
 	# ДвоичныеДанные — xs:base64Binary с квалификаторами (у полей внешних источников).
 	if ($typeStr -match '^BinaryData(\(|$)') {
 		# BinaryData — безлимит (так платформа пишет поле внешнего источника: 4294967292/Fixed).
@@ -1035,9 +1152,11 @@ function Get-FillTypeCategory {
 	if ($typeStr -match '\+') { return 'Other' }  # составной тип → nil-дефолт
 	$t = Resolve-TypeStr $typeStr
 	if ($t -match '^Boolean$')          { return 'Boolean' }
-	if ($t -match '^String(\(|$)')      { return 'String' }
-	if ($t -match '^Number(\(|$)')      { return 'Number' }
-	if ($t -match '^(Date|DateTime)$')  { return 'Date' }
+	$prim = Parse-PrimitiveType $t 10 0 10
+	if ($prim -and -not $prim.Error) {
+		if ($prim.Kind -ne 'Date') { return $prim.Kind }
+		if ($prim.Fractions -ne 'Time') { return 'Date' }
+	}
 	return 'Other'                                 # ссылки, TypeSet, ValueStorage, … → nil-дефолт
 }
 
@@ -1225,18 +1344,30 @@ function Emit-FillValue {
 
 # --- 5. Attribute shorthand parser ---
 
+# Флаг nonneg — то же, что хвост ,nonneg у числового типа; к нечисловому типу не применяется.
+function Add-NonnegFlag {
+	param([string]$typeStr, $flags)
+	if (-not $typeStr -or -not (@($flags) -contains 'nonneg')) { return $typeStr }
+	$prim = Parse-PrimitiveType (Resolve-TypeStr $typeStr) 10 0 10
+	if ($prim -and $prim.Kind -eq 'Number') { return "Number($($prim.Digits),$($prim.Fraction),nonneg)" }
+	return $typeStr
+}
+
 function Build-TypeStr {
 	# ValueTypeOnly — для корневого определения объекта: там ключ type означает ВИД объекта
 	# (Constant, Catalog, …), а не тип значения, и подхватывать его нельзя.
 	param($obj, [switch]$ValueTypeOnly)
 	$t = if ($obj.valueType) { "$($obj.valueType)" } elseif (-not $ValueTypeOnly -and $obj.type) { "$($obj.type)" } else { "" }
 	if ($t -and -not $t.Contains('(')) {
-		if ($t -eq "String" -and $obj.length) {
+		# Вид — по общему разбору: синонимы (Число, decimal, Строка …) те же, что в строковой записи
+		$prim = Parse-PrimitiveType (Resolve-TypeStr $t) 10 0 10
+		if ($prim -and $prim.Kind -eq 'String' -and $obj.length) {
 			$t = "String($($obj.length))"
-		} elseif ($t -eq "Number" -and $obj.length) {
+		} elseif ($prim -and $prim.Kind -eq 'Number' -and ($obj.length -or $obj.precision -or $obj.nonneg -or $obj.nonnegative)) {
+			$len = if ($obj.length) { $obj.length } else { $prim.Digits }
 			$p = if ($obj.precision) { $obj.precision } else { 0 }
 			$nn = if ($obj.nonneg -or $obj.nonnegative) { ",nonneg" } else { "" }
-			$t = "Number($($obj.length),$p$nn)"
+			$t = "Number($len,$p$nn)"
 		}
 	}
 	return $t
@@ -1272,6 +1403,7 @@ function Parse-AttributeShorthand {
 		if ($colonParts.Count -gt 1) {
 			$parsed.type = $colonParts[1].Trim()
 		}
+		$parsed.type = Add-NonnegFlag $parsed.type $parsed.flags
 
 		$parsed.synonym = Split-CamelCase $parsed.name
 		return $parsed
@@ -1283,10 +1415,11 @@ function Parse-AttributeShorthand {
 	$fc = if ($val.fillChecking) { "$($val.fillChecking)" }
 	      elseif ($null -ne $val.fillCheck) { if ($val.fillCheck -is [bool]) { if ($val.fillCheck) { 'ShowError' } else { '' } } else { "$($val.fillCheck)" } }
 	      else { "" }
-	$qc = if ($null -ne $val.quickChoice) { if ($val.quickChoice -is [bool]) { if ($val.quickChoice) { 'Use' } else { 'DontUse' } } else { "$($val.quickChoice)" } } else { "" }
+	# Через список допустимых значений, как свойства объекта: иначе опечатка из DSL уходит в XML как есть
+	$qc = if ($null -ne $val.quickChoice) { $qcb = ConvertFrom-QuickChoiceBool $val.quickChoice; if ($qcb) { $qcb } else { Normalize-EnumValue "Attribute.QuickChoice" "$($val.quickChoice)" } } else { "" }
 	return @{
 		name    = $name
-		type    = Build-TypeStr $val
+		type    = Add-NonnegFlag (Build-TypeStr $val) $val.flags
 		# Явный `type: ""` (ключ присутствует, значение пустое) ≠ отсутствие типа: означает пустой <Type/>
 		# (реквизит без типа / произвольный). Отличаем present-"" от absent через $null-проверку (PSCustomObject).
 		typeEmpty = ($null -ne $val.type -and "$($val.type)".Trim() -eq '' -and -not $val.valueType)
@@ -1294,16 +1427,18 @@ function Parse-AttributeShorthand {
 		tooltip = $val.tooltip
 		comment = if ($val.comment) { "$($val.comment)" } else { "" }
 		flags   = @(if ($val.flags) { $val.flags } else { @() })
-		fillChecking = $fc
-		indexing = if ($val.indexing) { "$($val.indexing)" } else { "" }
+		# Значения перечислений — через список допустимых, как свойства объекта: иначе значение из DSL
+		# (ShowWarning, «Ошибка») уходило в XML как есть, и конфигурация не загружалась.
+		fillChecking = if ($fc) { Normalize-EnumValue "FillChecking" $fc } else { "" }
+		indexing = if ($val.indexing) { Normalize-EnumValue "Indexing" "$($val.indexing)" } else { "" }
 		multiLine = if ($val.multiLine -eq $true) { $true } else { $false }
-		choiceHistoryOnInput = if ($val.choiceHistoryOnInput) { "$($val.choiceHistoryOnInput)" } else { "" }
-		fullTextSearch = if ($val.fullTextSearch) { "$($val.fullTextSearch)" } else { "" }
+		choiceHistoryOnInput = Get-EnumField $val 'choiceHistoryOnInput' 'ChoiceHistoryOnInput'
+		fullTextSearch = Get-EnumField $val 'fullTextSearch' 'FullTextSearch'
 		fillFromFillingValue = if ($val.fillFromFillingValue -eq $true) { $true } else { $false }
-		createOnInput = if ($val.createOnInput) { "$($val.createOnInput)" } else { "" }
+		createOnInput = Get-EnumField $val 'createOnInput' 'CreateOnInput'
 		quickChoice = $qc
-		dataHistory = if ($val.dataHistory) { "$($val.dataHistory)" } else { "" }
-		use = if ($val.use) { "$($val.use)" } else { "" }
+		dataHistory = Get-EnumField $val 'dataHistory' 'DataHistory'
+		use = if ($val.use) { Normalize-EnumValue "Attribute.Use" "$($val.use)" } else { "" }
 		passwordMode = if ($val.passwordMode -eq $true) { $true } else { $false }
 		format = $val.format
 		editFormat = $val.editFormat
@@ -1311,7 +1446,7 @@ function Parse-AttributeShorthand {
 		extendedEdit = if ($val.extendedEdit -eq $true) { $true } else { $false }
 		markNegatives = if ($val.markNegatives -eq $true) { $true } else { $false }
 		choiceForm = if ($val.choiceForm) { "$($val.choiceForm)" } else { "" }
-		choiceFoldersAndItems = if ($val.choiceFoldersAndItems) { "$($val.choiceFoldersAndItems)" } else { "" }
+		choiceFoldersAndItems = if ($val.choiceFoldersAndItems) { Normalize-EnumValue "ChoiceFoldersAndItems" "$($val.choiceFoldersAndItems)" } else { "" }
 		minValue = $val.minValue
 		maxValue = $val.maxValue
 		hasFillValue = ($val.PSObject -and $val.PSObject.Properties -and ($val.PSObject.Properties.Name -contains 'fillValue'))
@@ -1331,7 +1466,7 @@ function Parse-AttributeShorthand {
 		addressingDimension = $val.addressingDimension
 		# Режим приведения типов измерения РС (формат 2.18). Ключ обязан доехать до эмиттера:
 		# без него не-дефолтное значение (Deny / DeleteData) молча заменялось на TransformValues.
-		typeReductionMode = $val.typeReductionMode
+		typeReductionMode = if ($val.typeReductionMode) { Normalize-EnumValue "TypeReductionMode" "$($val.typeReductionMode)" } else { $null }
 		# Поле внешнего источника данных (контекст eds-field).
 		nameInDataSource = if ($val.nameInDataSource) { "$($val.nameInDataSource)" } else { "" }
 		readOnly = if ($val.readOnly -eq $true) { $true } else { $false }
@@ -1773,10 +1908,10 @@ function Emit-StandardAttributes {
 			if ($d) {
 				if ($null -ne $d.synonym) { $ov['Synonym'] = $d.synonym }   # строка ИЛИ {ru,en}
 				if ($null -ne $d.tooltip) { $ov['ToolTip'] = $d.tooltip }   # строка ИЛИ {ru,en}
-				if ($d.fillChecking) { $ov['FillChecking'] = "$($d.fillChecking)" }
+				if ($d.fillChecking) { $ov['FillChecking'] = Normalize-EnumValue "FillChecking" "$($d.fillChecking)" }
 				if ($null -ne $d.fillFromFillingValue) { $ov['FillFromFillingValue'] = if ($d.fillFromFillingValue) { 'true' } else { 'false' } }
-				if ($d.fullTextSearch) { $ov['FullTextSearch'] = "$($d.fullTextSearch)" }
-				if ($d.dataHistory) { $ov['DataHistory'] = "$($d.dataHistory)" }
+				if ($x = Get-EnumField $d 'fullTextSearch' 'FullTextSearch') { $ov['FullTextSearch'] = $x }
+				if ($x = Get-EnumField $d 'dataHistory' 'DataHistory') { $ov['DataHistory'] = $x }
 				if ($null -ne $d.fillValue) { $ov['FillValue'] = $d.fillValue }   # DTR-путь/строка/bool
 				if ($null -ne $d.choiceParameterLinks) { $ov['ChoiceParameterLinks'] = $d.choiceParameterLinks }
 				if ($null -ne $d.choiceParameters) { $ov['ChoiceParameters'] = $d.choiceParameters }
@@ -1803,11 +1938,11 @@ function Emit-TabularStandardAttributes {
 		$ov = @{}
 		if ($null -ne $lineNumber.synonym)            { $ov['Synonym'] = $lineNumber.synonym }
 		if ($lineNumber.comment)                      { $ov['Comment'] = "$($lineNumber.comment)" }
-		if ($lineNumber.fullTextSearch)               { $ov['FullTextSearch'] = "$($lineNumber.fullTextSearch)" }
+		if ($x = Get-EnumField $lineNumber 'fullTextSearch' 'FullTextSearch') { $ov['FullTextSearch'] = $x }
 		if ($null -ne $lineNumber.tooltip)            { $ov['ToolTip'] = $lineNumber.tooltip }
 		if ($null -ne $lineNumber.format)             { $ov['Format'] = $lineNumber.format }
 		if ($null -ne $lineNumber.editFormat)         { $ov['EditFormat'] = $lineNumber.editFormat }
-		if ($lineNumber.choiceHistoryOnInput)         { $ov['ChoiceHistoryOnInput'] = "$($lineNumber.choiceHistoryOnInput)" }
+		if ($x = Get-EnumField $lineNumber 'choiceHistoryOnInput' 'ChoiceHistoryOnInput') { $ov['ChoiceHistoryOnInput'] = $x }
 		if ($null -ne $lineNumber.fillValue)          { $ov['FillValue'] = $lineNumber.fillValue }
 	}
 	X "$indent<StandardAttributes>"
@@ -1828,6 +1963,34 @@ $script:reservedAttrNames = @{
 	"ThisNode"="ЭтотУзел"; "SentNo"="НомерОтправленного"; "ReceivedNo"="НомерПринятого"
 	"CalculationType"="ВидРасчета"; "RegistrationPeriod"="ПериодРегистрации"; "ReversingEntry"="СторноЗапись"
 	"Account"="Счет"; "ValueType"="ТипЗначения"; "ActionPeriodIsBasic"="ПериодДействияБазовый"
+}
+
+# Имена стандартных команд вида — англ. и рус., в нижнем регистре: команда объекта с таким именем
+# не загрузится («Имя команды не может совпадать с именем стандартной команды»; регистр не важен, от
+# UseStandardCommands не зависит — замер 8.3.24/8.3.27). Вида нет в карте — ограничения нет
+# (перечисление, план обмена; критерий отбора и таблица внешнего источника не замерены).
+function Get-ReservedCommandNames {
+	$openList = @("openlist", "открытьсписок")
+	$create = @("create", "создать")
+	$folder = @("createfolder", "создатьгруппу")
+	$byValue = @("openbyvalue", "открытьпозначению")
+	$basedOn = @("createbasedon", "создатьнаосновании")
+	return @{
+		"Catalog"                    = $openList + $create + $folder + $byValue + $basedOn
+		"ChartOfCharacteristicTypes" = $openList + $create + $folder + $basedOn
+		"Task"                       = $openList + $create + $byValue + $basedOn
+		"Document"                   = $openList + $create + $basedOn
+		"BusinessProcess"            = $openList + $create + $basedOn
+		"ChartOfAccounts"            = $openList + $create + $basedOn
+		"ChartOfCalculationTypes"    = $openList + $create + $basedOn
+		"InformationRegister"        = $openList + $create + $byValue
+		"AccumulationRegister"       = $openList
+		"AccountingRegister"         = $openList
+		"CalculationRegister"        = $openList
+		"DocumentJournal"            = $openList
+		"DataProcessor"              = @("open", "открыть")
+		"Report"                     = @("open", "открыть")
+	}
 }
 
 # Стандартные реквизиты по типу объекта (ключи из reservedAttrNames). Имя реквизита, совпадающее
@@ -2065,7 +2228,7 @@ function Emit-ChoiceParameterLinks {
 			$vc = switch -Regex ("$vcRaw".ToLower()) {
 				'^(clear|очистить|очистка)$'             { 'Clear'; break }
 				'^(dontchange|неизменять|неменять|нет)$' { 'DontChange'; break }
-				default                                  { "$vcRaw" }
+				default                                  { Normalize-EnumValue "ValueChange" "$vcRaw" }
 			}
 		}
 		X "$indent`t<xr:Link>"
@@ -2423,6 +2586,11 @@ function Emit-CommandPicture {
 # picture, shortcut, onMainServerUnavalableBehavior (Auto).
 function Emit-Command {
 	param([string]$indent, [string]$cmdName, $cmd)
+	$reservedCmd = (Get-ReservedCommandNames)[$objType]
+	if ($reservedCmd -and ($reservedCmd -contains $cmdName)) {
+		[Console]::Error.WriteLine("meta-compile: имя команды '$cmdName' совпадает со стандартной командой объекта '$objType'. Выберите другое имя.")
+		exit 1
+	}
 	X "$indent<Command uuid=`"$(New-Guid-String)`">"
 	X "$indent`t<Properties>"
 	X "$indent`t`t<Name>$(Esc-XmlText $cmdName)</Name>"
@@ -2442,16 +2610,16 @@ function Emit-Command {
 	} else {
 		X "$indent`t`t<CommandParameterType/>"
 	}
-	$pum = if ($cmd.parameterUseMode) { "$($cmd.parameterUseMode)" } else { "Single" }
+	$pum = if ($cmd.parameterUseMode) { Normalize-EnumValue "ParameterUseMode" "$($cmd.parameterUseMode)" } else { "Single" }
 	X "$indent`t`t<ParameterUseMode>$pum</ParameterUseMode>"
 	$md = if ($cmd.modifiesData -eq $true) { "true" } else { "false" }
 	X "$indent`t`t<ModifiesData>$md</ModifiesData>"
-	$rep = if ($cmd.representation) { "$($cmd.representation)" } else { "Auto" }
+	$rep = if ($cmd.representation) { Normalize-EnumValue "Representation" "$($cmd.representation)" } else { "Auto" }
 	X "$indent`t`t<Representation>$rep</Representation>"
 	Emit-MLText "$indent`t`t" "ToolTip" $cmd.tooltip
 	Emit-CommandPicture "$indent`t`t" $cmd
 	if ($cmd.shortcut) { X "$indent`t`t<Shortcut>$(Esc-XmlText "$($cmd.shortcut)")</Shortcut>" } else { X "$indent`t`t<Shortcut/>" }
-	$osu = if ($cmd.onMainServerUnavalableBehavior) { "$($cmd.onMainServerUnavalableBehavior)" } else { "Auto" }
+	$osu = if ($cmd.onMainServerUnavalableBehavior) { Normalize-EnumValue "OnMainServerUnavalableBehavior" "$($cmd.onMainServerUnavalableBehavior)" } else { "Auto" }
 	X "$indent`t`t<OnMainServerUnavalableBehavior>$osu</OnMainServerUnavalableBehavior>"
 	X "$indent`t</Properties>"
 	X "$indent</Command>"
@@ -2486,7 +2654,7 @@ function Emit-TabularSection {
 	Emit-MLText "$indent`t`t" "Synonym" $tsSynonym
 	if ($tsComment) { X "$indent`t`t<Comment>$(Esc-XmlText $tsComment)</Comment>" } else { X "$indent`t`t<Comment/>" }
 	Emit-MLText "$indent`t`t" "ToolTip" $tsTooltip
-	$tsFc = if ($tsFillChecking) { "$tsFillChecking" } else { "DontCheck" }
+	$tsFc = if ($tsFillChecking) { Normalize-EnumValue "FillChecking" "$tsFillChecking" } else { "DontCheck" }
 	X "$indent`t`t<FillChecking>$tsFc</FillChecking>"
 	# TS-блок стандартных реквизитов (LineNumber) эмитим ВСЕГДА, кроме подавления `lineNumber: ""` (дом-конвенция
 	# суппресса): ~6% ТЧ исторически опускают блок (правило не выводимо — Товары all-default его имеет, соседи нет).
@@ -2496,7 +2664,7 @@ function Emit-TabularSection {
 	# Use у ТЧ иерархических ссылочных типов (Catalog, ChartOfCharacteristicTypes); Document не имеет Use.
 	# Дефолт ForItem; ForFolderAndItem/ForFolder — при явном ключе `use` объектной формы ТЧ.
 	if ($objectType -in @("Catalog", "ChartOfCharacteristicTypes")) {
-		$use = if ($tsUse) { "$tsUse" } else { "ForItem" }
+		$use = if ($tsUse) { Normalize-EnumValue "TabularSection.Use" "$tsUse" } else { "ForItem" }
 		X "$indent`t`t<Use>$use</Use>"
 	}
 	# Формат 2.20 (8.3.27): длина номера строки ТЧ (5..9 → до 999 999 999 строк вместо 99 999).
@@ -2840,11 +3008,13 @@ function Emit-DocumentProperties {
 	Emit-Characteristics $i $def.characteristics
 	Emit-BasedOn $i $def.basedOn
 
-	# InputByString: override `inputByString` ЛИБО дефолт [Номер].
+	# InputByString: override `inputByString` ЛИБО дефолт [Номер при N>0].
+	# Номер — в дефолт ввода по строке только при ненулевой длине номера, как код у справочника:
+	# «Указано неверное поле для ввода по строке: Номер» (8.3.24, 8.5.1).
 	if (Test-DefKey 'inputByString') {
 		$ibFields = @($def.inputByString | ForEach-Object { Expand-DataPath "$_" })
 	} else {
-		$ibFields = @("Document.$objName.StandardAttribute.Number")
+		$ibFields = @(if ($null -eq $def.numberLength -or [int]"$($def.numberLength)" -gt 0) { "Document.$objName.StandardAttribute.Number" })
 	}
 	Emit-FieldBlock $i "InputByString" $ibFields
 	X "$i<CreateOnInput>$(Get-EnumProp 'CreateOnInput' 'createOnInput' 'Use')</CreateOnInput>"
@@ -3350,7 +3520,7 @@ function Emit-CommonAttributeProperties {
 		X "$i<Content>"
 		foreach ($c in $content) {
 			$md = if ($c -is [string]) { "$c" } else { "$($c.metadata)" }
-			$use = if ($c -is [string]) { 'Use' } elseif ($c.use) { "$($c.use)" } else { 'Use' }
+			$use = if ($c -is [string]) { 'Use' } elseif ($c.use) { Normalize-EnumValue "CommonAttributeContent.Use" "$($c.use)" } else { 'Use' }
 			X "$i`t<xr:Item>"
 			X "$i`t`t<xr:Metadata>$(Esc-XmlText (Normalize-MDObjectRef $md))</xr:Metadata>"
 			X "$i`t`t<xr:Use>$use</xr:Use>"
@@ -4122,7 +4292,7 @@ function Emit-BusinessProcessProperties {
 	X "$i<EditType>$(Get-EnumProp 'EditType' 'editType' 'InDialog')</EditType>"
 
 	if (Test-DefKey 'inputByString') { $ibFields = @($def.inputByString | ForEach-Object { Expand-DataPath "$_" }) }
-	else { $ibFields = @("BusinessProcess.$objName.StandardAttribute.Number") }
+	else { $ibFields = @(if ($null -eq $def.numberLength -or [int]"$($def.numberLength)" -gt 0) { "BusinessProcess.$objName.StandardAttribute.Number" }) }   # Номер — при N>0
 	Emit-FieldBlock $i "InputByString" $ibFields
 	X "$i<CreateOnInput>$(Get-EnumProp 'CreateOnInput' 'createOnInput' 'DontUse')</CreateOnInput>"
 	X "$i<SearchStringModeOnInputByString>$(Get-EnumProp 'SearchStringModeOnInputByString' 'searchStringModeOnInputByString' 'Begin')</SearchStringModeOnInputByString>"
@@ -4189,7 +4359,7 @@ function Emit-TaskProperties {
 	$numberAllowedLength = Get-EnumProp "NumberAllowedLength" "numberAllowedLength" "Variable"
 	$checkUnique = if ($def.checkUnique -eq $false) { "false" } else { "true" }
 	$autonumbering = if ($def.autonumbering -eq $false) { "false" } else { "true" }
-	$taskNumberAutoPrefix = if ($def.taskNumberAutoPrefix) { "$($def.taskNumberAutoPrefix)" } else { "BusinessProcessNumber" }
+	$taskNumberAutoPrefix = if ($def.taskNumberAutoPrefix) { Normalize-EnumValue "TaskNumberAutoPrefix" "$($def.taskNumberAutoPrefix)" } else { "BusinessProcessNumber" }
 	$descriptionLength = if ($null -ne $def.descriptionLength) { "$($def.descriptionLength)" } else { "150" }
 	X "$i<NumberType>$numberType</NumberType>"
 	X "$i<NumberLength>$numberLength</NumberLength>"
@@ -4207,7 +4377,7 @@ function Emit-TaskProperties {
 	X "$i<DefaultPresentation>$(Get-EnumProp 'DefaultPresentation' 'defaultPresentation' 'AsDescription')</DefaultPresentation>"
 	X "$i<EditType>$(Get-EnumProp 'EditType' 'editType' 'InDialog')</EditType>"
 	if (Test-DefKey 'inputByString') { $ibFields = @($def.inputByString | ForEach-Object { Expand-DataPath "$_" }) }
-	else { $ibFields = @("Task.$objName.StandardAttribute.Number") }
+	else { $ibFields = @(if ($null -eq $def.numberLength -or [int]"$($def.numberLength)" -gt 0) { "Task.$objName.StandardAttribute.Number" }) }   # Номер — при N>0
 	Emit-FieldBlock $i "InputByString" $ibFields
 	X "$i<SearchStringModeOnInputByString>$(Get-EnumProp 'SearchStringModeOnInputByString' 'searchStringModeOnInputByString' 'Begin')</SearchStringModeOnInputByString>"
 	X "$i<FullTextSearchOnInputByString>$(Get-EnumProp 'FullTextSearchOnInputByString' 'fullTextSearchOnInputByString' 'DontUse')</FullTextSearchOnInputByString>"
@@ -4395,10 +4565,10 @@ function Emit-URLTemplate {
 			# выводится как ИмяШаблона+ИмяМетода, но в реальных конфигурациях он произвольный,
 			# поэтому задаётся явно ключом handler.
 			if ($mDef -is [string]) {
-				$httpMethod = "$mDef"; $handler = "${tmplName}${methodName}"
+				$httpMethod = Normalize-EnumValue "HTTPMethod" "$mDef"; $handler = "${tmplName}${methodName}"
 				$methodSynonym = Split-CamelCase $methodName; $methodComment = ""
 			} else {
-				$httpMethod = if ($mDef.httpMethod) { "$($mDef.httpMethod)" } else { 'GET' }
+				$httpMethod = if ($mDef.httpMethod) { Normalize-EnumValue "HTTPMethod" "$($mDef.httpMethod)" } else { 'GET' }
 				$handler = if ($mDef.handler) { "$($mDef.handler)" } else { "${tmplName}${methodName}" }
 				$methodSynonym = if ($mDef.synonym) { $mDef.synonym } else { Split-CamelCase $methodName }
 				$methodComment = if ($mDef.comment) { "$($mDef.comment)" } else { "" }
@@ -4482,7 +4652,7 @@ function Emit-Operation {
 			} else {
 				if ($paramDef.type) { $paramType = "$($paramDef.type)" }
 				if ($paramDef.nillable -eq $false) { $paramNillable = "false" }
-				if ($paramDef.direction) { $paramDir = "$($paramDef.direction)" }
+				if ($paramDef.direction) { $paramDir = Normalize-EnumValue "TransferDirection" "$($paramDef.direction)" }
 				if ($paramDef.synonym) { $paramSynonym = $paramDef.synonym }
 				if ($paramDef.comment) { $paramComment = "$($paramDef.comment)" }
 			}
@@ -4626,14 +4796,14 @@ function Emit-EdsTableProperties {
 	Emit-MLText $i "Synonym" $tblSynonym
 	if ($t -and $t.comment) { X "$i<Comment>$(Esc-XmlText "$($t.comment)")</Comment>" } else { X "$i<Comment/>" }
 
-	$tableType = if ($t -and $t.tableType) { "$($t.tableType)" } else { "Table" }
+	$tableType = if ($t -and $t.tableType) { Normalize-EnumValue "TableType" "$($t.tableType)" } else { "Table" }
 	X "$i<TableType>$tableType</TableType>"
 	# Имя в источнике по умолчанию равно имени объекта — так поступает и платформа.
 	$nids = if ($t -and $t.nameInDataSource) { "$($t.nameInDataSource)" } elseif ($tableType -eq "Expression") { "" } else { $tableName }
 	if ($nids) { X "$i<NameInDataSource>$(Esc-XmlText $nids)</NameInDataSource>" } else { X "$i<NameInDataSource/>" }
 	$expr = if ($t -and $t.expressionInDataSource) { "$($t.expressionInDataSource)" } elseif ($t -and $t.expression) { "$($t.expression)" } else { "" }
 	if ($expr) { X "$i<ExpressionInDataSource>$(Esc-XmlText $expr)</ExpressionInDataSource>" } else { X "$i<ExpressionInDataSource/>" }
-	$dataType = if ($t -and $t.tableDataType) { "$($t.tableDataType)" } else { "NonobjectData" }
+	$dataType = if ($t -and $t.tableDataType) { Normalize-EnumValue "TableDataType" "$($t.tableDataType)" } else { "NonobjectData" }
 	X "$i<TableDataType>$dataType</TableDataType>"
 
 	Emit-EdsFieldRefList $i "KeyFields" $(if ($t) { $t.keyFields } else { $null }) $srcName $tableName
@@ -4655,10 +4825,10 @@ function Emit-EdsTableProperties {
 	$ibsGiven = ($t -and $t.PSObject -and $t.PSObject.Properties -and ($t.PSObject.Properties.Name -contains 'inputByString'))
 	$ibs = if ($ibsGiven) { $t.inputByString } elseif ($t -and $t.presentationField) { @($t.presentationField) } else { $null }
 	Emit-EdsFieldRefList $i "InputByString" $ibs $srcName $tableName
-	X "$i<CreateOnInput>$(if ($t -and $t.createOnInput) { "$($t.createOnInput)" } else { 'Auto' })</CreateOnInput>"
-	X "$i<SearchStringModeOnInputByString>$(if ($t -and $t.searchStringModeOnInputByString) { "$($t.searchStringModeOnInputByString)" } else { 'Begin' })</SearchStringModeOnInputByString>"
-	X "$i<ChoiceDataGetModeOnInputByString>$(if ($t -and $t.choiceDataGetModeOnInputByString) { "$($t.choiceDataGetModeOnInputByString)" } else { 'Directly' })</ChoiceDataGetModeOnInputByString>"
-	X "$i<ChoiceHistoryOnInput>$(if ($t -and $t.choiceHistoryOnInput) { "$($t.choiceHistoryOnInput)" } else { 'Auto' })</ChoiceHistoryOnInput>"
+	X "$i<CreateOnInput>$(if ($x = Get-EnumField $t 'createOnInput' 'CreateOnInput') { $x } else { 'Auto' })</CreateOnInput>"
+	X "$i<SearchStringModeOnInputByString>$(if ($x = Get-EnumField $t 'searchStringModeOnInputByString' 'SearchStringModeOnInputByString') { $x } else { 'Begin' })</SearchStringModeOnInputByString>"
+	X "$i<ChoiceDataGetModeOnInputByString>$(if ($t -and $t.choiceDataGetModeOnInputByString) { Normalize-EnumValue "ChoiceDataGetModeOnInputByString" "$($t.choiceDataGetModeOnInputByString)" } else { 'Directly' })</ChoiceDataGetModeOnInputByString>"
+	X "$i<ChoiceHistoryOnInput>$(if ($x = Get-EnumField $t 'choiceHistoryOnInput' 'ChoiceHistoryOnInput') { $x } else { 'Auto' })</ChoiceHistoryOnInput>"
 
 	# Пустая строка — четыре слота всё равно обязаны быть: в свойствах таблицы их ровно 38.
 	if ($defaultFormsXml) { X $defaultFormsXml.TrimEnd("`r", "`n") }
@@ -4670,9 +4840,9 @@ function Emit-EdsTableProperties {
 	}
 	X "$i<IncludeHelpInContents>$(if ($t -and $t.includeHelpInContents -eq $true) { 'true' } else { 'false' })</IncludeHelpInContents>"
 	X "$i<ReadOnly>$(if ($t -and $t.readOnly -eq $true) { 'true' } else { 'false' })</ReadOnly>"
-	X "$i<TransactionsIsolationLevel>$(if ($t -and $t.transactionsIsolationLevel) { "$($t.transactionsIsolationLevel)" } else { 'Auto' })</TransactionsIsolationLevel>"
+	X "$i<TransactionsIsolationLevel>$(if ($t -and $t.transactionsIsolationLevel) { Normalize-EnumValue "TransactionsIsolationLevel" "$($t.transactionsIsolationLevel)" } else { 'Auto' })</TransactionsIsolationLevel>"
 	Emit-EdsFieldRefScalar $i "DataVersionField" $(if ($t) { $t.dataVersionField } else { $null }) $srcName $tableName
-	X "$i<EditType>$(if ($t -and $t.editType) { "$($t.editType)" } else { 'InDialog' })</EditType>"
+	X "$i<EditType>$(if ($x = Get-EnumField $t 'editType' 'EditType') { $x } else { 'InDialog' })</EditType>"
 	Emit-MDRefList $i "BasedOn" $(if ($t) { $t.basedOn } else { $null })
 	Emit-EdsFieldRefList $i "DataLockFields" $(if ($t) { $t.dataLockFields } else { $null }) $srcName $tableName
 	X "$i<DataLockControlMode>$(if ($t -and $t.dataLockControlMode) { "$($t.dataLockControlMode)" } else { 'Automatic' })</DataLockControlMode>"
@@ -4787,7 +4957,7 @@ function Detect-CompatibilityMode([string]$dir) {
 
 # Номер версии режима совместимости для сравнений: "Version8_3_27" → 80327, "Version8_5_1" → 80501.
 function Get-CompatModeRank([string]$mode) {
-	if ($mode -match '^Version(\d+)_(\d+)_(\d+)$') {
+	if ($mode -match '^Version(\d+)_(\d+)(?:_(\d+))?$') {   # и двухчастный Version8_1
 		return [int]$Matches[1] * 10000 + [int]$Matches[2] * 100 + [int]$Matches[3]
 	}
 	return 0
@@ -5615,6 +5785,12 @@ if ($objType -eq "CommonForm") {
 		$cfFormNs = 'xmlns="http://v8.1c.ru/8.3/xcf/logform" xmlns:app="http://v8.1c.ru/8.2/managed-application/core" xmlns:cfg="http://v8.1c.ru/8.1/data/enterprise/current-config" xmlns:dcscor="http://v8.1c.ru/8.1/data-composition-system/core" xmlns:dcsset="http://v8.1c.ru/8.1/data-composition-system/settings" xmlns:ent="http://v8.1c.ru/8.1/data/enterprise" xmlns:lf="http://v8.1c.ru/8.2/managed-application/logform" xmlns:style="http://v8.1c.ru/8.1/data/ui/style" xmlns:sys="http://v8.1c.ru/8.1/data/ui/fonts/system" xmlns:v8="http://v8.1c.ru/8.1/data/core" xmlns:v8ui="http://v8.1c.ru/8.1/data/ui" xmlns:web="http://v8.1c.ru/8.1/data/ui/colors/web" xmlns:win="http://v8.1c.ru/8.1/data/ui/colors/windows" xmlns:xr="http://v8.1c.ru/8.3/xcf/readable" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"'
 		# Шапка Form на 2.21 тоже несёт палитру — см. комментарий у $script:xmlnsDecl.
 		if ($script:isFormat221) { $cfFormNs = $cfFormNs -replace ' xmlns:style=', ' xmlns:pal="http://v8.1c.ru/8.1/data/ui/colors/palette" xmlns:style=' }
+		# xmlns:dcssch платформа пишет в шапку всегда, кроме режима совместимости ниже 8.3.19 (там —
+		# только при использовании; пустая заготовка его не использует). Как у form-add.
+		$cfRank = Get-CompatModeRank $script:compatMode
+		if (-not ($cfRank -gt 0 -and $cfRank -lt 80319)) {
+			$cfFormNs = $cfFormNs -replace ' xmlns:dcsset=', ' xmlns:dcssch="http://v8.1c.ru/8.1/data-composition-system/schema" xmlns:dcsset='
+		}
 		$cfFormXml = "<?xml version=`"1.0`" encoding=`"UTF-8`"?>`r`n<Form $cfFormNs version=`"$($script:formatVersion)`">`r`n`t<AutoCommandBar name=`"ФормаКоманднаяПанель`" id=`"-1`">`r`n`t`t<Autofill>true</Autofill>`r`n`t</AutoCommandBar>`r`n`t<ChildItems/>`r`n</Form>`r`n"
 		Write-XmlFileKeepEol $cfFormXmlPath $cfFormXml $enc
 		$modulesCreated += $cfFormXmlPath
@@ -5744,17 +5920,18 @@ if ($commands -and $commands.Count -gt 0) {
 function Get-NewObjectPosition([string]$cfgDir) {
 	try {
 		if (-not $cfgDir) { $cfgDir = "." }
-		$pj = Find-V8Project (Get-Location).Path
+		$pj = Find-V8Project (Get-Location).ProviderPath
 		if (-not $pj) { $pj = Find-V8Project ([System.IO.Path]::GetFullPath($cfgDir)) }
 		if (-not $pj) { return "end" }
-		$proj = Get-Content -Raw $pj | ConvertFrom-Json
+		# UTF-8 явно: PS 5.1 читает файл без BOM как ANSI, и configSrc с кириллицей не совпал бы
+		$proj = Get-Content -Raw -Encoding UTF8 $pj | ConvertFrom-Json
 		$projDir = [System.IO.Path]::GetDirectoryName($pj)
 		$cfgFull = [System.IO.Path]::GetFullPath($cfgDir).TrimEnd('\', '/')
 		if ($proj.databases) {
 			foreach ($db in $proj.databases) {
 				if ($db.configSrc -and $db.newObjectPosition) {
 					$src = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($projDir, $db.configSrc)).TrimEnd('\', '/')
-					if ($cfgFull -eq $src -or $cfgFull.StartsWith($src + [System.IO.Path]::DirectorySeparatorChar)) {
+					if ($cfgFull -eq $src -or $cfgFull.StartsWith($src + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
 						if ("$($db.newObjectPosition)" -eq "byName") { return "byName" }
 						return "end"
 					}

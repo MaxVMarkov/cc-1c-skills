@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# skd-decompile v0.96 — Decompile 1C DCS Template.xml to JSON DSL (draft)
+# skd-decompile v0.109 — Decompile 1C DCS Template.xml to JSON DSL (draft)
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 import argparse
 import os
@@ -605,6 +605,9 @@ def get_one_type_shorthand(type_node, qual_number, qual_string, qual_date):
                     sign_suf = ''
                     if sign == 'Nonnegative':
                         sign_suf = ',nonneg'
+                    # Голое decimal у skd-compile — 0,0 (без ограничения); остальное явно
+                    if d == 0 and f == 0 and not sign_suf:
+                        return 'decimal'
                     if f == 0:
                         return "decimal(%d%s)" % (d, sign_suf)
                     if sign_suf:
@@ -808,6 +811,16 @@ def read_input_parameters(parent_node):
                         cpl_entry['mode'] = mode
                     cpl.append(cpl_entry)
                 entry['choiceParameterLinks'] = cpl
+            elif v_type == 'TypeLink':
+                # Связь по типу: поле + номер элемента связи (оба необязательны)
+                tl = {}
+                tl_field = get_text(val, "dcscor:field")
+                tl_item = get_text(val, "dcscor:linkItem")
+                if tl_field:
+                    tl['field'] = tl_field
+                if tl_item:
+                    tl['linkItem'] = int(tl_item) if re.match(r'^-?\d+$', tl_item) else tl_item
+                entry['typeLink'] = tl
             elif v_type == 'LocalStringType':
                 ml = get_ml_text(val)
                 entry['value'] = ml if ml else ''
@@ -877,26 +890,7 @@ def build_field(field_node, loc):
     av_nodes = field_node.select_nodes("r:availableValue")
     available_values = []
     for av in av_nodes:
-        av_vn = av.select_single_node("r:value")
-        av_pn = av.select_single_node("r:presentation")
-        av_entry = {}
-        if av_vn:
-            av_type = get_local_xsi_type(av_vn)
-            av_text = av_vn.inner_text
-            if av_type == 'boolean':
-                av_entry['value'] = (av_text == 'true')
-            elif av_type == 'decimal':
-                if re.match(r'^-?\d+$', av_text or ''):
-                    av_entry['value'] = int(av_text)
-                else:
-                    av_entry['value'] = float(av_text)
-            else:
-                av_entry['value'] = av_text
-        if av_pn:
-            av_pres = get_ml_text(av_pn)
-            if av_pres:
-                av_entry['presentation'] = av_pres
-        available_values.append(av_entry)
+        available_values.append(convert_available_value_entry(av))
 
     role_in_string = role_rendered and role_rendered['isString']
     needs_object = bool(title) or bool(appearance) or bool(pres_expr) or isinstance(type_short, list) \
@@ -955,9 +949,10 @@ def build_calc_field(cf_node, loc):
     restrict_tokens = get_restriction_tokens(cf_node.select_single_node("r:useRestriction"))
     app_node = cf_node.select_single_node("r:appearance")
     appearance = get_appearance_dict(app_node)
+    available_values = [convert_available_value_entry(av) for av in cf_node.select_nodes("r:availableValue")]
 
     title_needs_object = isinstance(title, dict) or isinstance(type_short, list)
-    needs_object = bool(appearance) or title_needs_object
+    needs_object = bool(appearance) or title_needs_object or len(available_values) > 0
 
     if not needs_object:
         s = data_path
@@ -982,6 +977,8 @@ def build_calc_field(cf_node, loc):
         obj['restrict'] = [re.sub(r'^#', '', t) for t in restrict_tokens]
     if appearance:
         obj['appearance'] = appearance
+    if len(available_values) > 0:
+        obj['availableValues'] = available_values
     return obj
 
 
@@ -1017,6 +1014,120 @@ def get_standard_period_variant(value_node):
     return None
 
 
+# Элемент списка значений (<value>/<dcscor:value>) → типизированное JSON-значение; xsi:nil → None.
+def convert_list_item_value(vn):
+    if vn.get_attribute("nil", NS_XSI) == 'true':
+        return None
+    vt = get_local_xsi_type(vn)
+    v_txt = vn.inner_text
+    if vt == 'boolean':
+        return v_txt == 'true'
+    if vt == 'decimal':
+        if re.match(r'^-?\d+$', v_txt or ''):
+            return int(v_txt)
+        return float(v_txt)
+    return v_txt
+
+
+def _list_item_str(v):
+    # Как "$v" в PS: целое double без дробной части — без ".0"
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return str(v)
+
+
+# Списки значений равны поэлементно: тип JSON и текст (Ordinal).
+def same_value_list(a, b):
+    if not isinstance(a, list) or not isinstance(b, list) or len(a) != len(b):
+        return False
+    for x, y in zip(a, b):
+        if x is None or y is None:
+            if x is not None or y is not None:
+                return False
+            continue
+        if type(x) is not type(y):
+            return False
+        if _list_item_str(x) != _list_item_str(y):
+            return False
+    return True
+
+
+# Варианты стандартного периода: краткая запись значения читает их как период, а не строку.
+# Копия в skd-compile, skd-edit и skd-decompile — держит check-inline-drift.
+def standard_period_variants():
+    return [
+        "Custom", "Today", "ThisWeek", "ThisTenDays", "ThisMonth", "ThisQuarter", "ThisHalfYear",
+        "ThisYear", "FromBeginningOfThisWeek", "FromBeginningOfThisTenDays", "FromBeginningOfThisMonth",
+        "FromBeginningOfThisQuarter", "FromBeginningOfThisHalfYear", "FromBeginningOfThisYear",
+        "Yesterday", "LastWeek", "LastTenDays", "LastMonth", "LastQuarter", "LastHalfYear", "LastYear",
+        "LastWeekTillSameWeekDay", "LastTenDaysTillSameDayNumber", "LastMonthTillSameDate",
+        "LastQuarterTillSameDate", "LastHalfYearTillSameDate", "LastYearTillSameDate", "Tomorrow",
+        "NextWeek", "NextTenDays", "NextMonth", "NextQuarter", "NextHalfYear", "NextYear",
+        "NextWeekTillSameWeekDay", "NextTenDaysTillSameDayNumber", "NextMonthTillSameDate",
+        "NextQuarterTillSameDate", "NextHalfYearTillSameDate", "NextYearTillSameDate",
+        "TillEndOfThisWeek", "TillEndOfThisTenDays", "TillEndOfThisMonth", "TillEndOfThisQuarter",
+        "TillEndOfThisHalfYear", "TillEndOfThisYear", "Last7Days", "Next7Days", "Month",
+    ]
+
+
+# Значение-ссылка в краткой записи (Справочник.X.Y, Catalog.X.Y) — пишется как DesignTimeValue.
+# Копия в skd-compile, skd-edit и skd-decompile — держит check-inline-drift.
+def is_ref_value_literal(s):
+    return re.match(r'^(Справочник|Перечисление|ПланСчетов|Документ|ПланВидовХарактеристик|ПланВидовРасчета|БизнесПроцесс|Задача|РегистрСведений|ПланОбмена|Catalog|Enum|ChartOfAccounts|Document|ChartOfCharacteristicTypes|ChartOfCalculationTypes|BusinessProcess|Task|InformationRegister|ExchangePlan)\.', str(s), re.I) is not None
+
+
+# Слова, которые краткая запись compile читает не как строку: варианты стандартного периода,
+# булевы (регистр не важен — compile сравнивает без учёта регистра).
+_SHORTHAND_KEYWORDS = {k.lower() for k in standard_period_variants() + ["true", "false"]}
+
+
+# Строку не передать краткой записью как есть: пробелы по краям, флаги (@), заголовок ([…]),
+# маркер пустого значения (_ / null).
+def shorthand_unsafe(s):
+    return s != s.strip() or bool(re.search(r'[@\[\]]', s)) or s == '_' or s.lower() == 'null'
+
+
+# Список значений → "a, b, 'c, d'" для краткой записи (compile разбирает через запятую,
+# элемент с запятой — в кавычках). None — элемент так не выразить, нужна объектная форма.
+def format_value_list_shorthand(items):
+    parts = []
+    for it in items:
+        if isinstance(it, bool):
+            return None
+        if isinstance(it, str):
+            s = it
+        elif isinstance(it, (int, float)):
+            s = _list_item_str(it)
+        else:
+            return None
+        # Экспоненциальная запись числа у портов разная — только объектной формой
+        if s == '' or shorthand_unsafe(s) or re.search(r"['\"]", s) or (not isinstance(it, str) and re.search(r'[eE]', s)):
+            return None
+        if ',' in s:
+            s = "'%s'" % s
+        parts.append(s)
+    return ', '.join(parts)
+
+
+# Одиночное значение для краткой записи: с запятой — в кавычках (иначе compile разобьёт
+# его в список). None — так не выразить: обрамлено кавычками, апостроф при запятой,
+# shorthand_unsafe; у строкового значения ещё и слово, которое краткая запись читает
+# как период/булево/дату/ссылку (as_string).
+def format_scalar_shorthand(s, as_string=False):
+    if len(s) >= 2 and s[0] in ("'", '"') and s[-1] == s[0]:
+        return None
+    if shorthand_unsafe(s):
+        return None
+    if as_string and (s.lower() in _SHORTHAND_KEYWORDS or re.match(r'^\d{4}-\d{2}-\d{2}T', s) or
+                      is_ref_value_literal(s)):
+        return None
+    if ',' in s:
+        if "'" in s:
+            return None
+        return "'%s'" % s
+    return s
+
+
 # Build parameter → shorthand or object form
 def build_parameter(p_node, loc):
     name = get_text(p_node, "r:name")
@@ -1031,17 +1142,7 @@ def build_parameter(p_node, loc):
     if len(value_nodes) > 1:
         value_arr = []
         for vn in value_nodes:
-            vt = get_local_xsi_type(vn)
-            v_txt = vn.inner_text
-            if vt == 'boolean':
-                value_arr.append(v_txt == 'true')
-            elif vt == 'decimal':
-                if re.match(r'^-?\d+$', v_txt or ''):
-                    value_arr.append(int(v_txt))
-                else:
-                    value_arr.append(float(v_txt))
-            else:
-                value_arr.append(v_txt)
+            value_arr.append(convert_list_item_value(vn))
         value_display = value_arr
     elif len(value_nodes) == 1:
         value_node = value_nodes[0]
@@ -1085,24 +1186,7 @@ def build_parameter(p_node, loc):
     av_nodes = p_node.select_nodes("r:availableValue")
     available_values = []
     for av in av_nodes:
-        av_val_node = av.select_single_node("r:value")
-        av_pres_node = av.select_single_node("r:presentation")
-        av_entry = {}
-        if av_val_node:
-            av_type = get_local_xsi_type(av_val_node)
-            av_text = av_val_node.inner_text
-            if av_type == 'boolean':
-                av_entry['value'] = (av_text == 'true')
-            elif av_type == 'decimal':
-                if re.match(r'^-?\d+$', av_text or ''):
-                    av_entry['value'] = int(av_text)
-                else:
-                    av_entry['value'] = float(av_text)
-            else:
-                av_entry['value'] = av_text
-        if av_pres_node:
-            av_entry['presentation'] = get_ml_text(av_pres_node)
-        available_values.append(av_entry)
+        available_values.append(convert_available_value_entry(av, True))
 
     result = {
         'name': name,
@@ -1143,6 +1227,18 @@ def render_parameter(p):
     value_is_dict = isinstance(value_display, dict)
 
     needs_object = False
+    # Список значений по умолчанию: в краткой записи — через запятую; элемент, который так
+    # не выразить, требует объектной формы (value — массив).
+    value_short = value_display
+    if isinstance(value_display, list):
+        value_short = format_value_list_shorthand(value_display)
+        if value_short is None:
+            needs_object = True
+    elif isinstance(value_display, str) and value_display != '':
+        # Тип в краткой записи параметра указан — значение пишется по нему, ключевые слова не мешают
+        value_short = format_scalar_shorthand(value_display)
+        if value_short is None:
+            needs_object = True
     if p['availableValues'] and len(p['availableValues']) > 0:
         needs_object = True
     if p['inputParameters']:
@@ -1179,8 +1275,8 @@ def render_parameter(p):
             s += " [%s]" % title
         if type_short:
             s += ": %s" % type_short
-        if not value_is_nil and value_display is not None and value_display != '':
-            s += " = %s" % value_display
+        if not value_is_nil and value_short is not None and value_short != '':
+            s += " = %s" % value_short
         if flags:
             s += ' ' + ' '.join(flags)
         return s
@@ -1718,6 +1814,26 @@ filter_op_map = {
 }
 
 
+# Значение Standard{Period,BeginningDate} → {variant[, date | startDate, endDate]} — форма, по которой
+# compile восстанавливает тип (date → SBD, BeginningOf* → SBD, иначе SP). Даты есть только у Custom.
+def to_standard_period_object(val_node):
+    obj = {'variant': get_text(val_node, "v8:variant")}
+    if obj['variant'] != 'Custom':
+        return obj
+    if get_local_xsi_type(val_node) == 'StandardBeginningDate':
+        d = get_text(val_node, "v8:date")
+        # date обязателен: без него Custom прочитается как StandardPeriod
+        obj['date'] = d if d else '0001-01-01T00:00:00'
+    else:
+        sd = get_text(val_node, "v8:startDate")
+        ed = get_text(val_node, "v8:endDate")
+        if sd:
+            obj['startDate'] = sd
+        if ed:
+            obj['endDate'] = ed
+    return obj
+
+
 def get_filter_value(val_node):
     if not val_node:
         return '_'
@@ -1725,6 +1841,8 @@ def get_filter_value(val_node):
     if nil == 'true':
         return '_'
     v_type = get_local_xsi_type(val_node)
+    if v_type in ('StandardPeriod', 'StandardBeginningDate'):
+        return to_standard_period_object(val_node)
     if v_type == 'DesignTimeValue':
         return val_node.inner_text
     if v_type == 'LocalStringType':
@@ -1733,6 +1851,70 @@ def get_filter_value(val_node):
     if not txt:
         return '_'
     return txt
+
+
+# xsi:type значения для valueType в DSL. Префикс, который compile объявляет в корне, — строкой
+# с этим префиксом; тип из другого пространства имён (d8p1:AccountType, d6p1:CatalogRef.X —
+# xmlns на самом узле) — {uri, name}: строкой его префикс в результате compile не объявлен.
+_COMPILE_ROOT_PREFIXES = {
+    'http://www.w3.org/2001/XMLSchema': 'xs',
+    'http://www.w3.org/2001/XMLSchema-instance': 'xsi',
+    'http://v8.1c.ru/8.1/data/core': 'v8',
+    'http://v8.1c.ru/8.1/data/ui': 'v8ui',
+    'http://v8.1c.ru/8.1/data-composition-system/common': 'dcscom',
+    'http://v8.1c.ru/8.1/data-composition-system/core': 'dcscor',
+    'http://v8.1c.ru/8.1/data-composition-system/settings': 'dcsset',
+}
+
+
+def get_dsl_value_type(val_node):
+    raw = val_node.get_attribute("type", NS_XSI)
+    m = re.match(r'^([^:]+):(.+)$', raw or '')
+    if not m:
+        return raw
+    pfx, name = m.group(1), m.group(2)
+    uri = val_node.get_namespace_of_prefix(pfx)
+    if not uri:
+        return raw
+    root_pfx = _COMPILE_ROOT_PREFIXES.get(uri)
+    if root_pfx:
+        return f'{root_pfx}:{name}'
+    return {'uri': uri, 'name': name}
+
+
+# <availableValue> поля, вычисляемого поля или параметра → {value[, valueType][, presentation]}.
+# xsi:nil → value None; период — объектом {variant[, date | startDate, endDate]}. valueType —
+# только если compile вывел бы из значения другой тип: ссылку он узнаёт по литералу, дату (кроме
+# параметра) — по виду, остальное — xs:string; у параметра ""/"_"/"null" без valueType — пустое
+# значение его типа, поэтому такой строке valueType пишется всегда.
+def convert_available_value_entry(av, is_param=False):
+    vn = av.select_single_node("r:value")
+    pn = av.select_single_node("r:presentation")
+    entry = {}
+    if vn:
+        v_type = get_local_xsi_type(vn)
+        if v_type in ('StandardPeriod', 'StandardBeginningDate'):
+            entry['value'] = to_standard_period_object(vn)
+        else:
+            val = convert_list_item_value(vn)
+            entry['value'] = val
+            if isinstance(val, str):
+                dt = get_dsl_value_type(vn)
+                if is_ref_value_literal(val):
+                    inferred = 'dcscor:DesignTimeValue'
+                elif not is_param and re.match(r'^\d{4}-\d{2}-\d{2}T', val):
+                    inferred = 'xs:dateTime'
+                else:
+                    inferred = 'xs:string'
+                t = val.strip()
+                looks_empty = is_param and (t == '' or t == '_' or t.lower() == 'null')
+                if dt and (looks_empty or not (isinstance(dt, str) and dt == inferred)):
+                    entry['valueType'] = dt
+    if pn:
+        pres = get_ml_text(pn)
+        if pres:
+            entry['presentation'] = pres
+    return entry
 
 
 def get_filter_value_with_type(val_node):
@@ -1745,6 +1927,9 @@ def get_filter_value_with_type(val_node):
     v_type = get_local_xsi_type(val_node)
     if v_type == 'LocalStringType':
         return {'value': get_ml_text(val_node), 'type': raw_type}
+    # Тип периода compile выводит из формы объекта — valueType не нужен
+    if v_type in ('StandardPeriod', 'StandardBeginningDate'):
+        return {'value': to_standard_period_object(val_node), 'type': None}
     txt = val_node.inner_text
     if not txt:
         return {'value': '_', 'type': raw_type}
@@ -1812,9 +1997,15 @@ def build_filter_item(item_node, loc):
             vt = get_filter_value_with_type(rn)
             value = vt['value']
             auto_detects_dtv = (vt['type'] == 'dcscor:DesignTimeValue') and \
-                re.match(r'^(Перечисление|Справочник|ПланСчетов|Документ|ПланВидовХарактеристик|ПланВидовРасчета|БизнесПроцесс|Задача|РегистрСведений|ПланОбмена|Catalog|Enum|Document|ChartOfAccounts|ChartOfCharacteristicTypes|ChartOfCalculationTypes|BusinessProcess|Task|InformationRegister|ExchangePlan)\.', str(vt['value']))
-            if vt['type'] and not re.match(r'^xs:', vt['type']) and not auto_detects_dtv:
-                value_type_attr = vt['type']
+                is_ref_value_literal(str(vt['value']))
+            # Строка, которую compile по виду прочитал бы иначе (ссылка, число, дата, true/false), —
+            # тип сохраняем явно, иначе круг меняет её тип
+            v = vt['value']
+            str_looks_typed = get_local_xsi_type(rn) == 'string' and isinstance(v, str) and (
+                is_ref_value_literal(v) or re.match(r'^-?\d+(\.\d+)?$', v) or
+                re.match(r'^\d{4}-\d{2}-\d{2}T', v) or v.lower() in ('true', 'false'))
+            if (vt['type'] and not re.match(r'^xs:', vt['type']) and not auto_detects_dtv) or str_looks_typed:
+                value_type_attr = get_dsl_value_type(rn)
     elif len(right_nodes) > 1:
         arr = []
         raw_types = []
@@ -1826,15 +2017,17 @@ def build_filter_item(item_node, loc):
         uniq_types = sorted(set(t for t in raw_types if t))
         # PS does Sort-Object -Unique, preserves None as well; we filtered. Replicate "all same":
         uniq_all = sorted(set(raw_types))
-        if len(uniq_all) == 1 and uniq_all[0]:
+        first_local = get_local_xsi_type(right_nodes[0])
+        is_period_list = first_local in ('StandardPeriod', 'StandardBeginningDate')
+        if len(uniq_all) == 1 and uniq_all[0] and not is_period_list:
             t0 = uniq_all[0]
             if t0 == 'dcscor:DesignTimeValue' and len(arr) > 0:
-                all_match = all(re.match(r'^(Перечисление|Справочник|ПланСчетов|Документ|ПланВидовХарактеристик|ПланВидовРасчета|БизнесПроцесс|Задача|РегистрСведений|ПланОбмена|Catalog|Enum|Document|ChartOfAccounts|ChartOfCharacteristicTypes|ChartOfCalculationTypes|BusinessProcess|Task|InformationRegister|ExchangePlan)\.', str(x)) for x in arr)
+                all_match = all(is_ref_value_literal(str(x)) for x in arr)
                 auto_detects_dtv = all_match
             else:
                 auto_detects_dtv = False
             if not auto_detects_dtv:
-                value_type_attr = t0
+                value_type_attr = get_dsl_value_type(right_nodes[0])
 
     use = get_text(item_node, "dcsset:use")
     user_id = get_text(item_node, "dcsset:userSettingID")
@@ -1861,10 +2054,15 @@ def build_filter_item(item_node, loc):
         flags.append('@normal')
 
     no_value_ops = ('filled', 'notFilled')
+    # ...но если правая часть в XML всё же есть (платформа её хранит, смысла она не несёт) —
+    # сохраняем для раундтрипа
+    keep_no_op_right = op in no_value_ops and len(right_nodes) > 0 and value is not None and value != '_'
 
-    if user_pres_node or value_is_array_flag or value_type_attr or fi_pres:
+    # значение-объект (период {variant, ...}; многоязычная строка — тоже, но compile её не восстанавливает) краткой записью не выражается — объектная форма
+    value_is_period = isinstance(value, dict)
+    if user_pres_node or value_is_array_flag or value_type_attr or fi_pres or value_is_period or keep_no_op_right:
         obj = {'field': field, 'op': op}
-        if op not in no_value_ops and value is not None:
+        if (op not in no_value_ops or keep_no_op_right) and value is not None:
             if value_is_array_flag:
                 obj['value'] = list(value)
             else:
@@ -2234,15 +2432,21 @@ def build_data_parameters(dp_node, top_params):
     if len(items) == 0:
         return None
     visible_top = {}
+    # Объявленный тип каждого параметра (и скрытого): краткая запись compile у строки/числа/булева
+    # оставляет слово-вариант строкой — период у такого параметра пишем объектом
+    decl_prim = {}
+    for tp in top_params:
+        ts = tp['typeShort']
+        decl_prim[str(tp['name']).lower()] = isinstance(ts, str) and bool(re.match(r'^(string|decimal|boolean)', ts, re.I))
     for tp in top_params:
         if not tp['hidden'] and tp['name'] not in auto_dates_companions:
-            visible_top[tp['name']] = tp
+            visible_top[str(tp['name']).lower()] = tp
     can_auto = True
     present_names = {}
     entries = []
     for it in items:
         pn = get_text(it, "dcscor:parameter")
-        present_names[pn] = True
+        present_names[str(pn).lower()] = True
         usid = get_text(it, "dcsset:userSettingID")
         if not usid:
             can_auto = False
@@ -2254,12 +2458,45 @@ def build_data_parameters(dp_node, top_params):
         usp_n = it.select_single_node("dcsset:userSettingPresentation")
         if vm_n or usp_n:
             can_auto = False
-        tp = visible_top.get(pn)
+        tp = visible_top.get(str(pn).lower())
+        # «auto» пишет имя как объявлено — при другом регистре свёртка потеряла бы написание
+        if tp and tp['name'] != pn:
+            can_auto = False
         flags = []
         if usid:
             flags.append('@user')
         if use == 'false':
             flags.append('@off')
+        # Список значений: по <dcscor:value> на элемент. «auto» — только при поэлементном
+        # совпадении с умолчанием параметра; явно — объектная форма с полным xsi:type.
+        val_nodes = it.select_nodes("dcscor:value")
+        if len(val_nodes) > 1:
+            v_list = [convert_list_item_value(vn) for vn in val_nodes]
+            if not tp or not same_value_list(tp['valueDisplay'], v_list):
+                can_auto = False
+            obj = {'parameter': pn, 'value': v_list}
+            v_types = []
+            typed_node = None
+            for vn in val_nodes:
+                ta = vn.get_attr_raw('xsi:type')
+                if ta and ta not in v_types:
+                    v_types.append(ta)
+                if ta and typed_node is None:
+                    typed_node = vn
+            if len(v_types) == 1 and v_types[0]:
+                obj['valueType'] = get_dsl_value_type(typed_node)
+            if use == 'false':
+                obj['use'] = False
+            if usid:
+                obj['userSettingID'] = 'auto'
+            if vm_n:
+                obj['viewMode'] = vm_n.inner_text
+            if usp_n:
+                usp_v = get_ml_text(usp_n)
+                if usp_v:
+                    obj['userSettingPresentation'] = usp_v
+            entries.append(obj)
+            continue
         vt = get_local_xsi_type(val_node)
         v_display = None
         std_period_obj = None
@@ -2277,17 +2514,15 @@ def build_data_parameters(dp_node, top_params):
                 can_auto = False
             elif variant:
                 v_display = variant
-                if vm_n or usp_n:
+                if vm_n or usp_n or decl_prim.get(str(pn).lower()):
                     std_period_obj = {'variant': variant}
+                if decl_prim.get(str(pn).lower()):
+                    can_auto = False
         elif vt == 'StandardBeginningDate':
-            variant = get_text(val_node, "v8:variant")
-            d_ = get_text(val_node, "v8:date")
-            has_explicit_date = d_ and d_ != '0001-01-01T00:00:00'
-            if has_explicit_date:
-                std_period_obj = {'variant': variant, 'date': d_}
-                can_auto = False
-            elif variant:
-                std_period_obj = {'variant': variant}
+            # Shape inference в compile: {variant, date} → SBD, либо variant начинается с BeginningOf*.
+            # У Custom date пишется всегда, даже нулевая: без него compile прочитает StandardPeriod.
+            if get_text(val_node, "v8:variant"):
+                std_period_obj = to_standard_period_object(val_node)
                 can_auto = False
         elif vt == 'DesignTimeValue':
             v_display = val_node.inner_text
@@ -2296,14 +2531,21 @@ def build_data_parameters(dp_node, top_params):
         else:
             if val_node:
                 v_display = val_node.inner_text
-        if tp and tp['valueDisplay'] != v_display:
+        if tp and (isinstance(tp['valueDisplay'], list) or tp['valueDisplay'] != v_display):
             can_auto = False
         if not tp:
             can_auto = False
         is_empty_string_placeholder = (vt == 'string') and (not val_node.inner_text) and (use == 'false')
         if is_empty_string_placeholder:
             can_auto = False
-        if std_period_obj or vm_n or usp_n or is_empty_string_placeholder:
+        # Значение, которое краткая запись не выражает (кавычки по краям, апостроф при запятой)
+        v_short = v_display
+        scalar_needs_object = False
+        if isinstance(v_display, str) and v_display != '':
+            v_short = format_scalar_shorthand(v_display, vt == 'string')
+            if v_short is None:
+                scalar_needs_object = True
+        if std_period_obj or vm_n or usp_n or is_empty_string_placeholder or scalar_needs_object:
             obj = {'parameter': pn}
             if std_period_obj:
                 obj['value'] = std_period_obj
@@ -2320,9 +2562,8 @@ def build_data_parameters(dp_node, top_params):
                         obj['value'] = float(v_display)
                 else:
                     obj['value'] = v_display
-                ta = val_node.get_attr_raw('xsi:type')
-                if ta:
-                    obj['valueType'] = ta
+                if val_node.get_attribute('type', NS_XSI):
+                    obj['valueType'] = get_dsl_value_type(val_node)
             if use == 'false':
                 obj['use'] = False
             if usid:
@@ -2336,8 +2577,8 @@ def build_data_parameters(dp_node, top_params):
             entries.append(obj)
         else:
             s = pn
-            if v_display is not None and v_display != '':
-                s += " = %s" % v_display
+            if v_short is not None and v_short != '':
+                s += " = %s" % v_short
             if flags:
                 s += ' ' + ' '.join(flags)
             entries.append(s)
@@ -2748,6 +2989,10 @@ def build_data_set(ds_node, loc, emit_data_sources):
     if xsi_type == 'DataSetQuery':
         query_text = get_text(ds_node, "r:query")
         ds['query'] = maybe_externalize_query(query_text, name)
+        # Platform default is true (element omitted) — emit only false
+        for flag in ('autoFillFields', 'useQueryGroupIfPossible'):
+            if get_text(ds_node, f"r:{flag}") == 'false':
+                ds[flag] = False
     elif xsi_type == 'DataSetObject':
         ds['objectName'] = get_text(ds_node, "r:objectName")
     elif xsi_type == 'DataSetUnion':
@@ -2787,7 +3032,7 @@ def build_data_set(ds_node, loc, emit_data_sources):
     if xsi_type != 'DataSetUnion':
         ds_src = get_text(ds_node, "r:dataSource")
         if emit_data_sources and ds_src:
-            ds['dataSource'] = ds_src
+            ds['source'] = ds_src
 
     return ds
 
@@ -3092,8 +3337,9 @@ def run(root):
         # selection (top-level)
         sel_top = settings_node.select_single_node("dcsset:selection") if settings_node else None
         sel_items = build_selection(sel_top, "variant[%d]/selection" % vi)
-        if len(sel_items) > 0:
-            settings['selection'] = sel_items
+        # selection и structure варианта — всегда явные: без ключа compile достроит вариант сам (поля наборов,
+        # детальные записи), и пустой в XML вариант после круга начнёт выводить данные. [] = «нет».
+        settings['selection'] = sel_items if len(sel_items) > 0 else []
         svm = get_block_vm(sel_top)
         if svm is not None:
             settings['selectionViewMode'] = svm
@@ -3160,6 +3406,8 @@ def run(root):
                 settings['structure'] = short
             else:
                 settings['structure'] = struct_items
+        else:
+            settings['structure'] = []
 
         sivm_node = settings_node.select_single_node("dcsset:itemsViewMode") if settings_node else None
         if sivm_node:
@@ -3177,15 +3425,11 @@ def run(root):
             if len(ap_dict) > 0:
                 settings['additionalProperties'] = ap_dict
 
-        non_struct_keys = [k for k in settings if k != 'structure']
-        struct_only_details = ('structure' not in settings) or (settings.get('structure') == 'details')
-        is_default = (len(non_struct_keys) == 0) and struct_only_details and (vname == 'Основной') and (not presentation or presentation == vname)
-        if not is_default:
-            entry = {'name': vname}
-            if presentation and presentation != vname:
-                entry['title'] = presentation
-            entry['settings'] = settings
-            settings_variants.append(entry)
+        entry = {'name': vname}
+        if presentation and presentation != vname:
+            entry['title'] = presentation
+        entry['settings'] = settings
+        settings_variants.append(entry)
         vi += 1
     if len(settings_variants) > 0:
         out['settingsVariants'] = settings_variants

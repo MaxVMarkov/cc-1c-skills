@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# role-validate v1.7 — Validate 1C role Rights.xml structure
+# role-validate v1.10 — Validate 1C role Rights.xml structure
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 """Validates role Rights.xml: root element, global flags, objects, rights, RLS, templates."""
 import sys, os, argparse, re
@@ -205,9 +205,9 @@ KIND_OWNERS = {
 
 # Подсказка формата для каждого вида сервиса: {0} подставляется как `Тип.Имя` из роли.
 SERVICE_LEAF_HINTS = {
-    'WebService': '{0}.Operation.<Операция>',
-    'HTTPService': '{0}.URLTemplate.<Шаблон>.Method.<Метод>',
-    'IntegrationService': '{0}.IntegrationServiceChannel.<Канал>',
+    'WebService': '{0}.Operation.<Operation>',
+    'HTTPService': '{0}.URLTemplate.<Template>.Method.<Method>',
+    'IntegrationService': '{0}.IntegrationServiceChannel.<Channel>',
 }
 
 # Один и тот же вид под разными родителями имеет разный набор: измерение регистра —
@@ -272,10 +272,10 @@ def format_type_error(obj_name, object_type):
     """Запрещённый тип и незнакомый тип — разные диагнозы: первый документирован,
     второй скорее опечатка или пробел в таблице."""
     if object_type in NO_RIGHTS_TYPES:
-        return f"{obj_name}: тип '{object_type}' не имеет прав в роли — блок нужно удалить"
+        return f"{obj_name}: type '{object_type}' has no rights in roles — remove the block"
     similar = find_similar(object_type, list(KNOWN_RIGHTS.keys()))
-    sug = f" Возможно: {', '.join(similar)}?" if similar else ''
-    return f"{obj_name}: неизвестный тип объекта '{object_type}'.{sug}"
+    sug = f" Did you mean: {', '.join(similar)}?" if similar else ''
+    return f"{obj_name}: unknown object type '{object_type}'.{sug}"
 
 
 def get_child_text(parent, local_name, ns):
@@ -492,6 +492,8 @@ def main():
     rls_count = 0
 
     for obj in objects:
+        if stopped:
+            break
         obj_name = ''
         for child in obj:
             if not isinstance(child.tag, str):
@@ -514,20 +516,22 @@ def main():
         if not type_known:
             report_error(format_type_error(obj_name, object_type))
         elif is_nested and nested_kind in KIND_OWNERS and object_type != KIND_OWNERS[nested_kind]:
-            report_error(f"{obj_name}: вид '{nested_kind}' бывает только у {KIND_OWNERS[nested_kind]}")
+            report_error(f"{obj_name}: kind '{nested_kind}' exists only under {KIND_OWNERS[nested_kind]}")
         elif is_nested and get_nested_rights(object_type, nested_kind) is None:
-            report_error(f"{obj_name}: неизвестный вид вложенности '{nested_kind}'")
+            report_error(f"{obj_name}: unknown nested kind '{nested_kind}'")
         elif not is_nested and object_type in SERVICE_LEAF_HINTS:
             # Право на сервис целиком платформа игнорирует: проверяется лист (метод шаблона
             # URL, операция, канал). Роль формально валидна и молча не работает — 403 на всех
             # маршрутах, причина по симптому не читается. В Конфигураторе галки на корне
             # сервиса нет вовсе, так что это недостижимое состояние, а не стилистика.
             hint = SERVICE_LEAF_HINTS[object_type].format(obj_name)
-            report_error(f"{obj_name}: право на сервис целиком не действует — "
-                         f"назначайте права на вложенные объекты: {hint}")
+            report_error(f"{obj_name}: a right on the whole service has no effect — "
+                         f"grant rights on nested objects: {hint}")
 
         # Check rights
         for child in obj:
+            if stopped:
+                break
             if not isinstance(child.tag, str):
                 continue
             if etree.QName(child.tag).localname != 'right' or etree.QName(child.tag).namespace != RIGHTS_NS:
@@ -573,21 +577,23 @@ def main():
             elif is_nested:
                 valid_nested = get_nested_rights(object_type, nested_kind)
                 if valid_nested is not None and r_name not in valid_nested:
-                    report_error(f"{obj_name}: право '{r_name}' недопустимо для вида '{nested_kind}' (допустимо: {', '.join(valid_nested)})")
+                    report_error(f"{obj_name}: right '{r_name}' is not allowed for kind '{nested_kind}' (allowed: {', '.join(valid_nested)})")
             else:
                 valid_rights = KNOWN_RIGHTS[object_type]
                 if r_name not in valid_rights:
                     similar = find_similar(r_name, valid_rights)
-                    sug_str = f" Возможно: {', '.join(similar)}?" if similar else ''
-                    report_error(f"{obj_name}: право '{r_name}' не существует у типа '{object_type}'.{sug_str}")
+                    sug_str = f" Did you mean: {', '.join(similar)}?" if similar else ''
+                    report_error(f"{obj_name}: right '{r_name}' does not exist for type '{object_type}'.{sug_str}")
 
-    report_ok(f'{obj_count} objects, {right_count} rights')
-    if rls_count > 0:
-        report_ok(f'{rls_count} RLS restrictions')
+    # После остановки счётчики частичные — сводку не печатаем, чтобы не выдавать её за полную.
+    if not stopped:
+        report_ok(f'{obj_count} objects, {right_count} rights')
+        if rls_count > 0:
+            report_ok(f'{rls_count} RLS restrictions')
 
     # 3e. Templates
     templates = root.findall(f'{{{RIGHTS_NS}}}restrictionTemplate')
-    if len(templates) > 0:
+    if not stopped and len(templates) > 0:
         tpl_names = []
         for tpl in templates:
             t_name = ''
@@ -615,7 +621,7 @@ def main():
 
     # --- 4. Validate metadata (optional) ---
     inferred_role_name = ''
-    if os.path.isfile(metadata_path):
+    if not stopped and os.path.isfile(metadata_path):
         lines.append('')
 
         try:
@@ -671,7 +677,7 @@ def main():
     # роль может расходиться — платформа такое грузит, это лишь неоднородность выгрузки (типично после
     # мержа веток, выгруженных разными платформами).
     rights_ver = root.get('version', '')
-    if rights_ver:
+    if not stopped and rights_ver:
         owner_path = ext_body_owner(resolved_path)
         owner_ver = root_version(owner_path) if owner_path else None
         dump_anchor = find_dump_anchor(os.path.dirname(resolved_path))
@@ -690,10 +696,22 @@ def main():
     config_dir = os.path.dirname(roles_dir)            # config root
     config_xml_path = os.path.join(config_dir, 'Configuration.xml')
 
+    # После остановки секция 4 пропущена — имя роли всё равно берём из метаданных (как PS).
+    if not inferred_role_name and os.path.isfile(metadata_path):
+        try:
+            for el in etree.parse(metadata_path).getroot().iter():
+                if isinstance(el.tag, str) and etree.QName(el.tag).localname == 'Role':
+                    for nel in el.iter():
+                        if isinstance(nel.tag, str) and etree.QName(nel.tag).localname == 'Name':
+                            inferred_role_name = nel.text or ''
+                            break
+                    break
+        except Exception:
+            pass
     if not inferred_role_name:
         inferred_role_name = os.path.basename(role_dir)
 
-    if os.path.exists(config_xml_path):
+    if not stopped and os.path.exists(config_xml_path):
         lines.append('')
         try:
             cfg_parser = etree.XMLParser(remove_blank_text=False)
@@ -724,6 +742,8 @@ def main():
         result = f'=== Validation OK: Role.{inferred_role_name} ({checks} checks) ==='
     else:
         lines.append('')
+        if stopped:
+            lines.append(f'Stopped after {args.MaxErrors} errors. Fix and re-run.')
         lines.append(f'=== Result: {errors} errors, {warnings} warnings ({checks} checks) ===')
         result = '\n'.join(lines)
     write_output(result)

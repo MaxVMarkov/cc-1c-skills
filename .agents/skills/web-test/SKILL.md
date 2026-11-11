@@ -35,10 +35,10 @@ SCRIPT
 ## Setup (first time)
 
 ```bash
-cd ".agents/skills/web-test/scripts" && npm install
+cd ".agents/skills/web-test/scripts" && npm install && npx playwright install chromium
 ```
 
-Requires Node.js 18+. `npm install` downloads Playwright and Chromium.
+Requires Node.js 18+. `npm install` fetches Playwright; `npx playwright install chromium` downloads the browser.
 
 ## URL resolution
 
@@ -46,13 +46,28 @@ Read `.v8-project.json` from project root. Each database has `id` and optional `
 Construct URL as `http://localhost:8081/<id>` or use `webUrl` if set.
 Use `/web-publish` first if the database is not published.
 
+## Who logs in
+
+By default the session runs as the publication's user — pass nothing. To work as another infobase
+user, or when the publication has no user and 1C asks to log in, add `--user=` (and `--password=` unless
+it is empty) to `start` or `run`. The given user wins over the one in the publication.
+
+```bash
+node $RUN start <url> "--user=Иванов И.И." --password=secret
+```
+
+Take the password from the `.v8-project.json` entry with that `user`; no entry — ask the user.
+
 ## Execution modes
 
 ### Autonomous mode (preferred for complete scenarios)
 
 ```bash
 node $RUN run <url> script.js   # exits when done, no session
+node $RUN run <url> script.js --timeout-min=10   # bound the script (default 30 min)
 ```
+
+The bound covers the script, not the 1C startup: `--timeout=<ms>`, `--timeout-min=<min>` or `WEB_TEST_EXEC_TIMEOUT_MS`. Exit code of `run`: `0` — ok, `1` — script error, `2` — timeout.
 
 ### Interactive mode (step-by-step development)
 
@@ -134,7 +149,7 @@ Returns current form structure. This is the primary way to understand what's on 
 
 **form** — active form number, or `null` when no form is open (desktop).
 
-**formCount** — number of open forms. Use this to know how many windows are stacked. `0` means desktop.
+**formCount** — number of open forms.
 
 **openForms** — array of all open form numbers (e.g. `[0, 1]`). Works even when the open-windows tab bar is hidden in 1C settings.
 
@@ -166,6 +181,8 @@ await clickElement(r.clicked.group, { expand: false });      // stable key — s
 
 **table** — backward-compatible alias for the first grid: `{ present, columns, rowCount }`.
 
+**htmlFields** — HTML document fields on screen: `[{ name, label? }]`. Enter one with `getHtmlFrame()`. A field on an inactive page, in a collapsed group or hidden by the form is not listed until shown.
+
 **reportSettings** — for DCS reports: human-readable filter settings instead of raw technical names:
 ```js
 const form = await getFormState();
@@ -180,6 +197,15 @@ const form = await getFormState();
 **confirmation** — if present, a Yes/No dialog is shown. Call `clickElement('Да')` or `clickElement('Нет')`.
 
 **errors.stateText** — array of SpreadsheetDocument state messages (e.g. `"Не установлено значение параметра \"X\""`, `"Отчет не сформирован..."`, `"Изменились настройки..."`). Present when the report area shows an info bar instead of data. The same info bar carries `"Поиск..."` while a list is still searching — actions do not return while it is up, so a filtered list never hands you the previous rows.
+
+#### `getHtmlFrame(name?)` → Playwright FrameLocator
+Entry into an HTML document field (its HTML or React app) of the active form, by field name or title from `htmlFields`. `name` may be omitted when the form shows one HTML field. Inside the frame the page is the application's own — work with it in plain Playwright:
+```js
+const app = await getHtmlFrame('Чат');
+await app.getByTestId('chat-message').filter({ visible: true }).fill('text');  // hidden duplicates
+await app.getByRole('button', { name: 'Отправить' }).click();
+```
+Throws (with the list of fields) when the name is unknown, when several fields are shown and no name is given, or when the field is not visible yet — open its page or expand its group first. Raw Playwright actions don't auto-detect 1C errors: after one that calls the 1C server, check `getFormState().errors`. Don't keep using a frame after a modal window opened over the form — clicks would land on the modal.
 
 ### Reading data
 
@@ -273,7 +299,7 @@ Sections + all open tabs.
 
 **Return shape convention.** All action functions return a **flat form state** (same shape as `getFormState()`) with action-specific extras: `clicked`, `focused`, `selected`, `filled`, `notFilled`, `closed`, `opened`, `navigated`, `deleted`, `filtered`, `unfiltered`. Errors always sit at the top level under `.errors` (when present) — the exec-wrapper automatically throws on `.errors.modal` / `.errors.balloon`.
 
-#### `clickElement(text, { dblclick?, table?, expand?, modifier?, scroll? })` → form state
+#### `clickElement(text, { dblclick?, table?, expand?, modifier?, scroll?, file? })` → form state
 Click button, hyperlink, tab, navigation panel link, or grid row (fuzzy match).
 
 **Disabled controls throw.** `clickElement`, `fillFields`, and `selectValue` throw `"X" is disabled` on an unavailable control instead of reporting a fake success — check `getFormState().buttons[].disabled` / `fields[].disabled` first.
@@ -296,6 +322,11 @@ Click button, hyperlink, tab, navigation panel link, or grid row (fuzzy match).
   ```js
   await clickElement('ИСУ ФХД');                      // select row
   await clickElement('ИСУ ФХД', { expand: true });    // expand/collapse
+  ```
+- **Choose a file or folder** with `file`: for a button that opens a file selection dialog («Добавить из файла...», «Загрузить»), clicks it and picks the path in whatever dialog appears — the 1C «Выбор файлов» window, or (Windows) the native file/folder dialog of the 1C file system extension. A folder can be chosen only in the native dialog. Returns `file: { path, via: 'html' | 'native' }`; throws if the path is missing or no dialog appears within `timeout` (default 10 s):
+  ```js
+  await clickElement('Добавить из файла...', { file: 'build/МоёРасширение.cfe' });
+  await clickElement('Выбрать каталог', { file: 'C:/Exchange/out' });
   ```
 - **Focus a field** (last resort, when no `table` given): if `text` matches no clickable control but matches a form field's name/label, clicks the input to focus it **without changing its value**. Returns `focused: { field, id, ok }` (`ok: false` if the field couldn't take focus). Use it to drive focus-dependent keys:
   ```js
@@ -478,7 +509,7 @@ Clear filters. Without arguments clears all, with `{ field }` clears specific ba
 
 See [recording.md](recording.md) for setup (ffmpeg), highlight mode, TTS narration, API details, and examples.
 If `.v8-project.json` has `ffmpegPath`, pass it to `startRecording({ ffmpegPath })`.
-If `.v8-project.json` has `tts` config, pass it to `addNarration()` (provider, voice, apiKey).
+If `.v8-project.json` has `tts` config, pass the whole object to `addNarration()` as options.
 
 ## Common patterns
 
@@ -602,6 +633,11 @@ await page.keyboard.press('F8');  // example: create new item in focused referen
 On error (auto-screenshot taken):
 ```json
 { "ok": false, "error": "Element not found", "output": "...", "screenshot": "error-shot.png", "elapsed": 1.5 }
+```
+
+On `run` timeout:
+```json
+{ "ok": false, "error": "Script timed out after 600000ms (--timeout)", "output": "...", "timedOut": true, "elapsed": 600.1 }
 ```
 
 ## Avoiding loops

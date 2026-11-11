@@ -1,4 +1,4 @@
-# meta-validate v1.32 — Validate 1C metadata object structure (Python port)
+# meta-validate v1.47 — Validate 1C metadata object structure (Python port)
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 import argparse
 import os
@@ -189,6 +189,8 @@ def finalize():
         result = f"=== Validation OK: {md_type}.{obj_name} ({checks} checks) ==="
     else:
         out_line("")
+        if stopped and errors >= max_errors:
+            out_line(f"Stopped after {max_errors} errors. Fix and re-run.")
         out_line(f"=== Result: {errors} errors, {warnings} warnings ({checks} checks) ===")
         result = "\n".join(output_lines)
     print(result)
@@ -370,6 +372,66 @@ types_with_std_attrs = (
     "BusinessProcess", "Task", "ExchangePlan", "DocumentJournal",
 )
 
+def reserved_command_names():
+    """Имена стандартных команд вида — англ. и рус., в нижнем регистре: команда объекта с таким именем
+    не загрузится («Имя команды не может совпадать с именем стандартной команды»; регистр не важен, от
+    UseStandardCommands не зависит — замер 8.3.24/8.3.27). Вида нет в карте — ограничения нет
+    (перечисление, план обмена; критерий отбора и таблица внешнего источника не замерены)."""
+    open_list = {"openlist", "открытьсписок"}
+    create = {"create", "создать"}
+    folder = {"createfolder", "создатьгруппу"}
+    by_value = {"openbyvalue", "открытьпозначению"}
+    based_on = {"createbasedon", "создатьнаосновании"}
+    return {
+        "Catalog":                    open_list | create | folder | by_value | based_on,
+        "ChartOfCharacteristicTypes": open_list | create | folder | based_on,
+        "Task":                       open_list | create | by_value | based_on,
+        "Document":                   open_list | create | based_on,
+        "BusinessProcess":            open_list | create | based_on,
+        "ChartOfAccounts":            open_list | create | based_on,
+        "ChartOfCalculationTypes":    open_list | create | based_on,
+        "InformationRegister":        open_list | create | by_value,
+        "AccumulationRegister":       open_list,
+        "AccountingRegister":         open_list,
+        "CalculationRegister":        open_list,
+        "DocumentJournal":            open_list,
+        "DataProcessor":              {"open", "открыть"},
+        "Report":                     {"open", "открыть"},
+    }
+
+def object_child_order():
+    """Порядок групп в <ChildObjects> объекта по виду. Это xs:sequence <Вид>ChildObjects из MDClasses XSD,
+    сверенный выгрузкой платформы: выгрузка сама ставит группы в этот порядок, так что вставка не на место
+    даёт дифф при следующей выгрузке. Единого порядка нет — у документа Form стоит до TabularSection."""
+    return {
+        "Catalog":                    ["Attribute", "TabularSection", "Form", "Template", "Command"],
+        "Document":                   ["Attribute", "Form", "TabularSection", "Template", "Command"],
+        "ExchangePlan":               ["Attribute", "TabularSection", "Form", "Template", "Command"],
+        "ChartOfCharacteristicTypes": ["Attribute", "TabularSection", "Form", "Template", "Command"],
+        "ChartOfAccounts":            ["Attribute", "TabularSection", "AccountingFlag", "ExtDimensionAccountingFlag", "Form", "Template", "Command"],
+        "ChartOfCalculationTypes":    ["Attribute", "TabularSection", "Form", "Template", "Command"],
+        "BusinessProcess":            ["Attribute", "TabularSection", "Form", "Template", "Command"],
+        "Task":                       ["Attribute", "TabularSection", "Form", "Template", "AddressingAttribute", "Command"],
+        "DataProcessor":              ["Attribute", "TabularSection", "Form", "Template", "Command"],
+        "Report":                     ["Attribute", "TabularSection", "Form", "Template", "Command"],
+        "ExternalDataProcessor":      ["Attribute", "TabularSection", "Form", "Template"],
+        "ExternalReport":             ["Attribute", "TabularSection", "Form", "Template"],
+        "Enum":                       ["EnumValue", "Form", "Template", "Command"],
+        "InformationRegister":        ["Resource", "Attribute", "Dimension", "Form", "Template", "Command"],
+        "AccumulationRegister":       ["Resource", "Attribute", "Dimension", "Form", "Template", "Command"],
+        "AccountingRegister":         ["Dimension", "Resource", "Attribute", "Form", "Template", "Command"],
+        "CalculationRegister":        ["Resource", "Attribute", "Dimension", "Recalculation", "Form", "Template", "Command"],
+        "DocumentJournal":            ["Column", "Form", "Template", "Command"],
+        "Table":                      ["Field", "Form", "Command", "Template"],
+        "ExternalDataSource":         ["Table", "Cube", "Function"],
+        "Cube":                       ["DimensionTable", "Dimension", "Resource", "Form", "Command", "Template"],
+        "DimensionTable":             ["Field", "Form", "Command", "Template"],
+        "FilterCriterion":            ["Form", "Command"],
+        "SettingsStorage":            ["Form", "Template"],
+        "TabularSection":             ["Attribute"],
+    }
+
+
 # ChildObjects rules
 child_object_rules = {
     "Catalog":                    ["Attribute", "TabularSection", "Form", "Template", "Command"],
@@ -416,11 +478,14 @@ valid_property_values = {
     "Posting":                      ["Allow", "Deny"],
     "RealTimePosting":              ["Allow", "Deny"],
     "RegisterRecordsDeletion":      ["AutoDelete", "AutoDeleteOnUnpost", "AutoDeleteOff"],
-    "RegisterRecordsWritingOnPost": ["WriteModified", "WriteSelected", "WriteAll"],
+    "RegisterRecordsWritingOnPost": ["WriteModified", "WriteSelected"],
     # AutomaticAndManaged — только у внешнего источника данных и его таблиц.
     "DataLockControlMode":          ["Automatic", "Managed", "AutomaticAndManaged"],
     "FullTextSearch":               ["Use", "DontUse"],
     "DefaultPresentation":          ["AsDescription", "AsCode"],
+    # Уточнение по виду объекта («Вид.Свойство») — раньше общего списка. AsNumber («в виде номера»)
+    # есть только у задачи: у справочника и прочих платформа его отвергает (8.3.24 и 8.5.1).
+    "Task.DefaultPresentation":     ["AsDescription", "AsNumber"],
     "HierarchyType":                ["HierarchyFoldersAndItems", "HierarchyOfItems"],
     "EditType":                     ["InDialog", "InList", "BothWays"],
     "WriteMode":                    ["Independent", "RecorderSubordinate"],
@@ -428,10 +493,48 @@ valid_property_values = {
     "RegisterType":                 ["Balance", "Turnovers"],
     "ReturnValuesReuse":            ["DontUse", "DuringRequest", "DuringSession"],
     "ReuseSessions":                ["DontUse", "Use", "AutoUse"],
-    "FillChecking":                 ["DontCheck", "ShowError", "ShowWarning"],
+    "FillChecking":                 ["DontCheck", "ShowError"],
     "Indexing":                     ["DontIndex", "Index", "IndexWithAdditionalOrder"],
     "DataHistory":                  ["Use", "DontUse"],
-    "DependenceOnCalculationTypes": ["DontUse", "OnActionPeriod"],
+    "CreateOnInput":                ["Auto", "Use", "DontUse"],
+    "ChoiceHistoryOnInput":         ["Auto", "DontUse"],
+    "DependenceOnCalculationTypes": ["DontUse", "OnActionPeriod", "OnRegistrationPeriod"],
+    # Значения — по XSD платформы; не встреченные в выгрузках БП/УНФ/ERP подтверждены загрузкой и
+    # выгрузкой на 8.3.24 и 8.5.1. Имя с разным смыслом у разных владельцев — только ключом «Контекст.Свойство».
+    "ChoiceFoldersAndItems": ["Items", "Folders", "FoldersAndItems"],
+    "NumberPeriodicity": ["Nonperiodical", "Year", "Quarter", "Month", "Day"],
+    "ParameterUseMode": ["Single", "Multiple"],
+    "Representation": ["Auto", "Text", "Picture", "PictureAndText"],
+    "OnMainServerUnavalableBehavior": ["Auto", "MakeDisable", "DontChangeBehavior"],
+    "FormType": ["Managed", "Ordinary"],
+    "MoveBoundaryOnPosting": ["DontMove", "Move"],
+    "SequenceFilling": ["AutoFill", "AutoFillOff"],
+    "TaskNumberAutoPrefix": ["BusinessProcessNumber", "DontUse"],
+    "AutoUse": ["DontUse", "Use"],
+    "DataSeparation": ["DontUse", "Separate"],
+    "UsersSeparation": ["DontUse", "Separate"],
+    "AuthenticationSeparation": ["DontUse", "Separate"],
+    "ConfigurationExtensionsSeparation": ["DontUse", "Separate"],
+    "SeparatedDataUse": ["Independently", "IndependentlyAndSimultaneously"],
+    "TemplateType": ["SpreadsheetDocument", "BinaryData", "ActiveDocument", "HTMLDocument", "TextDocument", "GeographicalSchema", "GraphicalSchema", "DataCompositionSchema", "DataCompositionAppearanceTemplate", "AddIn"],
+    "UseInInterfaceCompatibilityMode": ["Any", "Taxi", "Version85"],
+    "TypeReductionMode": ["TransformValues", "DeleteData", "Deny"],
+    "TransactionsIsolationLevel": ["Auto", "ReadUncommitted", "ReadCommitted", "RepeatableRead", "Serializable"],
+    "TableType": ["Table", "Expression"],
+    "TableDataType": ["NonobjectData", "ObjectData"],
+    "ChoiceDataGetModeOnInputByString": ["Directly", "Background"],
+    "HTTPMethod": ["GET", "HEAD", "PUT", "POST", "DELETE", "PATCH", "MERGE", "OPTIONS", "TRACE", "CONNECT", "PROPFIND", "PROPPATCH", "MOVE", "COPY", "LOCK", "UNLOCK", "MKCOL", "Any"],
+    "TransferDirection": ["In", "Out", "InOut"],
+    "ValueChange": ["Clear", "DontChange"],
+    # QuickChoice у справочника и других ссылочных — булево; перечислением он бывает здесь:
+    "Constant.QuickChoice": ["Auto", "Use", "DontUse"],
+    "CommonAttribute.QuickChoice": ["Auto", "Use", "DontUse"],
+    "Attribute.QuickChoice": ["Auto", "Use", "DontUse"],
+    # Use: у реквизита и ТЧ — для групп/элементов; у состава общего реквизита — Auto/Use/DontUse;
+    # у регламентного задания — булево, у параметра функциональных опций — список (общего ключа нет).
+    "Attribute.Use": ["ForItem", "ForFolder", "ForFolderAndItem"],
+    "TabularSection.Use": ["ForItem", "ForFolder", "ForFolderAndItem"],
+    "CommonAttributeContent.Use": ["Auto", "Use", "DontUse"],
 }
 
 # Properties forbidden per type (would cause LoadConfigFromFiles error)
@@ -653,14 +756,141 @@ if dump_ver:
     else:
         report_ok(f"24. Format version: matches the dump ({dump_ver})")
 
-# ── Structural-only types: базовая проверка (Name), без type-specific правил ──
+# Проверка 4 — значения свойств-перечислений. Блоком: её зовут и для видов без глубоких правил
+# (общая форма, команда, общий реквизит, макет…) — иначе их перечисления не проверялись вовсе.
+def check4():
+    if props_node is not None:
+        enum_checked = 0
+        check4_ok = True
+
+        # Общие свойства плюс свойства, заданные только для своего вида («Constant.QuickChoice»):
+        # остальные ключи с точкой — уточнения чужих видов и контекстов (реквизит, состав), не корня
+        root_props = [k for k in valid_property_values if "." not in k]
+        root_props += [k[len(md_type) + 1:] for k in valid_property_values if k.startswith(f"{md_type}.")]
+        for prop_name in dict.fromkeys(root_props):
+            allowed = valid_property_values.get(prop_name)
+            prop_node = find(props_node, f"md:{prop_name}")
+            if prop_node is not None and inner_text(prop_node):
+                val = inner_text(prop_node)
+                allowed = valid_property_values.get(f"{md_type}.{prop_name}") or allowed
+                if val not in allowed:
+                    report_error(f"4. Property '{prop_name}' has invalid value '{val}' (allowed: {', '.join(allowed)})")
+                    check4_ok = False
+                enum_checked += 1
+
+        # Значения у реквизитов, измерений, ресурсов и табличных частей: QuickChoice здесь — перечисление
+        # (в корне справочника — булево), Use у реквизита и ТЧ — для групп/элементов. Ключи «Attribute.*»,
+        # «TabularSection.*»; иначе — общий ключ свойства.
+        child_common4 = ["CreateOnInput", "FullTextSearch", "DataHistory", "ChoiceHistoryOnInput"]
+        co_node4 = find(type_node, "md:ChildObjects")
+        items4 = []
+        if co_node4 is not None:
+            for ch in co_node4:
+                if not isinstance(ch.tag, str):
+                    continue
+                items4.append(ch)
+                if local_name(ch) == "TabularSection":
+                    items4.extend(find_all(ch, "md:ChildObjects/md:Attribute"))
+        for it in items4:
+            it_props = find(it, "md:Properties")
+            if it_props is None:
+                continue
+            ctx = "TabularSection" if local_name(it) == "TabularSection" else "Attribute"
+            if ctx == "TabularSection":
+                names = ["Use"]
+            elif local_name(it) == "Attribute":
+                names = ["QuickChoice", "ChoiceFoldersAndItems", "Use"] + child_common4
+            else:
+                names = ["QuickChoice", "ChoiceFoldersAndItems"] + child_common4
+            it_name = find(it_props, "md:Name")
+            for pn in names:
+                pnode = find(it_props, f"md:{pn}")
+                if pnode is None or not inner_text(pnode):
+                    continue
+                allowed = valid_property_values.get(f"{ctx}.{pn}") or valid_property_values.get(pn)
+                if not allowed:
+                    continue
+                if inner_text(pnode) not in allowed:
+                    report_error(f"4. {local_name(it)} '{inner_text(it_name) if it_name is not None else ''}': property '{pn}' has invalid value '{inner_text(pnode)}' (allowed: {', '.join(allowed)})")
+                    check4_ok = False
+                enum_checked += 1
+        # Состав общего реквизита: Use элемента состава — Auto/Use/DontUse
+        for cu in find_all(props_node, "md:Content/xr:Item/xr:Use"):
+            allowed = valid_property_values.get("CommonAttributeContent.Use")
+            if inner_text(cu) and inner_text(cu) not in allowed:
+                report_error(f"4. Content item: property 'Use' has invalid value '{inner_text(cu)}' (allowed: {', '.join(allowed)})")
+                check4_ok = False
+            enum_checked += 1
+
+        # Корневой <Type> (дескриптор типа значения — Константа, ПВХ) должен быть структурным:
+        # <v8:Type>/<v8:TypeSet>, а не скалярный текст. Скаляр = повреждённый тип (напр. после
+        # старого meta-edit modify-property Type). См. issue #42. У элемента стиля <Type> — вид элемента
+        # (Color/Font/Border), скаляр там штатный.
+        root_type_el = find(props_node, "md:Type") if md_type != "StyleItem" else None
+        if root_type_el is not None:
+            scalar_text = inner_text(root_type_el).strip()
+            v8_types = find_all(root_type_el, "v8:Type")
+            v8_type_sets = find_all(root_type_el, "v8:TypeSet")
+            if len(v8_types) == 0 and len(v8_type_sets) == 0 and scalar_text:
+                report_error(f"4. Property <Type> contains scalar text '{scalar_text}' without a type structure (<v8:Type>/<v8:TypeSet>) — corrupted value type descriptor")
+                check4_ok = False
+
+        if check4_ok:
+            report_ok(f"4. Property values: {enum_checked} enum properties checked")
+    else:
+        report_warn("4. No Properties block to check")
+
+
+# ── Check 26: неограниченная строка там, где платформе нужен индекс ──
+# Замер 8.3.24: измерение регистра со строкой длины 0 (в том числе в составном типе) загружается
+# молча, а /UpdateDBCfg падает ошибкой СУБД; индексируемый реквизит с таким типом платформа отвергает
+# при загрузке («При установленном типе недопустимо индексирование»). Общий реквизит-разделитель
+# (DataSeparation=Separate) участвует в хеше при любом Indexing: загрузка молчит, /UpdateDBCfg падает
+# ошибкой SDBL. Строка без StringQualifiers — та же длина 0.
+def is_unlimited_string(type_node):
+    if type_node is None:
+        return False
+    if not [t for t in find_all(type_node, "v8:Type") if re.search(r'(^|:)string$', inner_text(t).strip(), re.I)]:
+        return False
+    ln = find_all(type_node, "v8:StringQualifiers/v8:Length")
+    return not ln or inner_text(ln[0]).strip() == '0'
+
+
+def check26():
+    # Измерения — всегда; прочие (реквизиты, реквизиты ТЧ, ресурсы, реквизиты адресации, общий реквизит) —
+    # если у них есть Indexing, отличный от DontIndex.
+    idx_targets = find_all(root, "//md:Dimension/md:Properties|//md:Properties[md:Indexing]")
+    for p26 in idx_targets:
+        is_dim = local_name(p26.getparent()) == 'Dimension'
+        sep = find_all(p26, "md:DataSeparation")
+        is_sep = local_name(p26.getparent()) == 'CommonAttribute' and bool(sep) and inner_text(sep[0]).strip() == 'Separate'
+        ix = find_all(p26, "md:Indexing")
+        ix_val = inner_text(ix[0]).strip() if ix else ''
+        if not is_dim and not is_sep and (not ix_val or ix_val == 'DontIndex'):
+            continue
+        t26 = find_all(p26, "md:Type")
+        if not is_unlimited_string(t26[0] if t26 else None):
+            continue
+        n26 = find_all(p26, "md:Name")
+        nm26 = inner_text(n26[0]).strip() if n26 else '?'
+        if is_sep:
+            report_error(f"26. CommonAttribute '{nm26}': unlimited String in a data separator — the load passes but /UpdateDBCfg fails; set a length (e.g. String(150))")
+        elif is_dim:
+            report_error(f"26. Dimension '{nm26}': unlimited String — a dimension is indexed, the load passes but /UpdateDBCfg fails; set a length (e.g. String(150))")
+        else:
+            report_error(f"26. {local_name(p26.getparent())} '{nm26}': unlimited String with Indexing={ix_val} — the platform rejects the load; set a length or DontIndex")
+
+
+# ── Structural-only types: базовая проверка (Name) и значения перечислений, без type-specific правил ──
 if md_type in structural_only_types:
     if obj_name == "(unknown)":
         report_error("3. Properties: missing or empty Name")
     elif not ident_pattern.match(obj_name):
         report_error(f"3. Properties: Name '{obj_name}' is not a valid 1C identifier")
     else:
-        report_ok(f'3. Properties: Name="{obj_name}" (базовая структурная проверка для {md_type})')
+        report_ok(f'3. Properties: Name="{obj_name}" (basic structure check for {md_type})')
+    check4()
+    check26()
     finalize()
     sys.exit(1 if errors > 0 else 0)
 
@@ -671,7 +901,7 @@ if md_type in nested_descriptor_types:
     elif not ident_pattern.match(obj_name):
         report_error(f"3. Properties: Name '{obj_name}' is not a valid 1C identifier")
     else:
-        report_ok(f'3. Properties: Name="{obj_name}" (базовая структурная проверка для {md_type})')
+        report_ok(f'3. Properties: Name="{obj_name}" (basic structure check for {md_type})')
     kind_prop = "FormType" if md_type == "Form" else "TemplateType"
     kind_node = find(props_node, f"md:{kind_prop}") if props_node is not None else None
     kind_value = inner_text(kind_node) if kind_node is not None else ""
@@ -797,35 +1027,7 @@ if stopped:
 
 # ── Check 4: Property values -- enum properties ──────────────
 
-if props_node is not None:
-    enum_checked = 0
-    check4_ok = True
-
-    for prop_name, allowed in valid_property_values.items():
-        prop_node = find(props_node, f"md:{prop_name}")
-        if prop_node is not None and inner_text(prop_node):
-            val = inner_text(prop_node)
-            if val not in allowed:
-                report_error(f"4. Property '{prop_name}' has invalid value '{val}' (allowed: {', '.join(allowed)})")
-                check4_ok = False
-            enum_checked += 1
-
-    # Корневой <Type> (дескриптор типа значения — Константа, ПВХ) должен быть структурным:
-    # <v8:Type>/<v8:TypeSet>, а не скалярный текст. Скаляр = повреждённый тип (напр. после
-    # старого meta-edit modify-property Type). См. issue #42.
-    root_type_el = find(props_node, "md:Type")
-    if root_type_el is not None:
-        scalar_text = inner_text(root_type_el).strip()
-        v8_types = find_all(root_type_el, "v8:Type")
-        v8_type_sets = find_all(root_type_el, "v8:TypeSet")
-        if len(v8_types) == 0 and len(v8_type_sets) == 0 and scalar_text:
-            report_error(f"4. Property <Type> содержит скалярный текст '{scalar_text}' без структуры типа (<v8:Type>/<v8:TypeSet>) — повреждённый дескриптор типа значения")
-            check4_ok = False
-
-    if check4_ok:
-        report_ok(f"4. Property values: {enum_checked} enum properties checked")
-else:
-    report_warn("4. No Properties block to check")
+check4()
 
 if stopped:
     finalize()
@@ -891,6 +1093,22 @@ if child_obj_node is not None:
 
         child_counts[child_tag] = child_counts.get(child_tag, 0) + 1
 
+    # Порядок групп: загрузка примет любой, но выгрузка переставит по канону вида — дифф без правок
+    order = object_child_order().get(md_type)
+    if order:
+        prev_tag, prev_rank = None, -1
+        for child in child_obj_node:
+            if not isinstance(child.tag, str) or local_name(child) not in order:
+                continue
+            group_tag = local_name(child)
+            rank = order.index(group_tag)
+            if rank < prev_rank:
+                present = [t for t in order if t in child_counts]
+                report_warn(f"6. ChildObjects order: <{group_tag}> after <{prev_tag}>; platform dump reorders "
+                            f"{md_type} children as {' -> '.join(present)}")
+                break
+            prev_tag, prev_rank = group_tag, rank
+
     if check6_ok:
         summary = ", ".join(f"{k}({v})" for k, v in sorted(child_counts.items()))
         if summary:
@@ -941,7 +1159,7 @@ def check_child_element(node, kind, require_type):
         if type_el is None:
             # Блока Type нет вовсе: загрузка проходит, но платформа молча подставляет тип нового
             # реквизита — Строка(10). Загрузку это не рвёт, а замысел теряет, отсюда WARN.
-            report_warn(f"7. {kind} '{name_val}' — блок Type не задан; при загрузке платформа подставит Строка(10)")
+            report_warn(f"7. {kind} '{name_val}' — no Type block; on load the platform substitutes String(10)")
 
     return True
 
@@ -988,6 +1206,24 @@ RESERVED_EN_RU = {
 }
 
 std_for_type = standard_attributes_by_type.get(md_type)
+
+# Колонка ТЧ — стандартные реквизиты строки: «ТабличнаяЧасть.X - Недопустимое имя реквизита -
+# НомерСтроки» (замер 8.3.24). НомерСтроки — у любого объекта, Ссылка — только у ссылочного (у обработки
+# колонка Ссылка законна — замер и ERP); Номер — можно.
+check7b_col_ok = True
+if child_obj_node is not None:
+    ts_row_reserved = {"linenumber", "номерстроки"}
+    if std_for_type and "Ref" in std_for_type:
+        ts_row_reserved |= {"ref", "ссылка"}
+    for ts_node in find_all(child_obj_node, "md:TabularSection"):
+        ts_name_node = find(ts_node, "md:Properties/md:Name")
+        ts_label = inner_text(ts_name_node) if ts_name_node is not None else "?"
+        for col_node in find_all(ts_node, "md:ChildObjects/md:Attribute"):
+            col_name = find(col_node, "md:Properties/md:Name")
+            if col_name is not None and inner_text(col_name).lower() in ts_row_reserved:
+                report_error(f"7b. TabularSection.{ts_label}: column '{inner_text(col_name)}' conflicts with a standard attribute of a tabular section row")
+                check7b_col_ok = False
+
 if child_obj_node is not None and std_for_type:
     reserved_set = set()
     for en in std_for_type:
@@ -996,18 +1232,20 @@ if child_obj_node is not None and std_for_type:
         if ru:
             reserved_set.add(ru.lower())
     check7b_ok = True
-    for attr_node in find_all(child_obj_node, 'md:Attribute'):
+    # Измерение и ресурс регистра — те же зарезервированные имена, что у реквизита («Недопустимое имя
+    # измерения - Период», замер 8.3.24)
+    for attr_node in find_all(child_obj_node, 'md:Attribute | md:Dimension | md:Resource'):
         attr_props = find(attr_node, 'md:Properties')
         if attr_props is not None:
             attr_name_node = find(attr_props, 'md:Name')
             if attr_name_node is not None and inner_text(attr_name_node):
                 an = inner_text(attr_name_node)
                 if an.lower() in reserved_set:
-                    report_error(f"7b. Attribute '{an}' conflicts with a standard attribute of {md_type}")
+                    report_error(f"7b. {local_name(attr_node)} '{an}' conflicts with a standard attribute of {md_type}")
                     check7b_ok = False
-    if check7b_ok:
+    if check7b_ok and check7b_col_ok:
         report_ok("7b. Reserved attribute names: no conflicts")
-elif child_obj_node is not None:
+elif child_obj_node is not None and check7b_col_ok:
     report_ok(f"7b. Reserved attribute names: no conflicts (no standard set for {md_type})")
 
 if stopped:
@@ -1028,11 +1266,12 @@ def check_uniqueness(nodes, kind):
         if el_name is None or not inner_text(el_name):
             continue
         name_val = inner_text(el_name)
-        if name_val in names:
+        # Без учёта регистра, как в языке 1С (и как Hashtable в PS-мастере)
+        if name_val.lower() in names:
             report_error(f"8. Duplicate {kind} name: '{name_val}'")
             has_dupes = True
         else:
-            names[name_val] = True
+            names[name_val.lower()] = True
     return not has_dupes
 
 
@@ -1086,6 +1325,25 @@ if child_obj_node is not None:
     if len(ops) > 0:
         if not check_uniqueness(ops, "Operation"):
             check8_ok = False
+
+    # Реквизит, ТЧ, измерение, ресурс, реквизит адресации и признак учёта объекта — одно пространство имён
+    # без учёта регистра: платформа отвергает загрузку («Задано одинаковое имя для реквизита и табличной
+    # части / измерения / ресурса / реквизита адресации», замер 8.3.24). Колонке ТЧ имя реквизита объекта
+    # не мешает, признаку учёта субконто — тоже (он колонка ТЧ видов субконто).
+    cross_seen = {}
+    for cn in child_obj_node:
+        if not isinstance(cn.tag, str) or local_name(cn) not in ("Attribute", "TabularSection", "Dimension", "Resource", "AddressingAttribute", "AccountingFlag"):
+            continue
+        cn_name = find(cn, "md:Properties/md:Name")
+        if cn_name is None or not inner_text(cn_name):
+            continue
+        nm = inner_text(cn_name)
+        prev = cross_seen.get(nm.lower())
+        if prev is not None and prev != local_name(cn):
+            report_error(f"8. Name '{nm}' is used by both {prev} and {local_name(cn)}")
+            check8_ok = False
+        elif prev is None:
+            cross_seen[nm.lower()] = local_name(cn)
 
     if check8_ok:
         report_ok("8. Name uniqueness: all names unique")
@@ -1189,6 +1447,20 @@ if props_node is not None:
         report_warn(f"10. HierarchyType='{inner_text(hierarchy_type)}' but Hierarchical=false")
         check10_issues += 1
 
+    # Код/номер нулевой длины во вводе по строке: платформа отвергает загрузку — «Указано неверное
+    # поле для ввода по строке: Код/Номер» (8.3.24, 8.5.1). Бывает после правки длины в 0 без чистки
+    # InputByString (meta-edit так больше не делает, но ручную правку это не страхует).
+    ibs_fields = [inner_text(f).strip() for f in find_all(props_node, "md:InputByString/xr:Field")]
+    for len_prop, std_attr in (("CodeLength", "Code"), ("NumberLength", "Number")):
+        len_node = find(props_node, f"md:{len_prop}")
+        if len_node is None or inner_text(len_node).strip() != "0":
+            continue
+        hit = next((f for f in ibs_fields if f.endswith(f".StandardAttribute.{std_attr}")), None)
+        if hit:
+            report_error(f"10. InputByString contains '{hit}' but {len_prop}=0 — the platform rejects it (invalid input-by-string field)")
+            check10_ok = False
+            check10_issues += 1
+
     # CommonModule: no context enabled
     if md_type == "CommonModule":
         contexts = ("Server", "ClientManagedApplication", "ClientOrdinaryApplication",
@@ -1223,7 +1495,7 @@ if props_node is not None:
             if len(source_types) > 0 or len(source_type_sets) > 0:
                 has_source = True
         if not has_source:
-            report_error("10. EventSubscription: источник событий не задан — платформа отвергнет загрузку")
+            report_error("10. EventSubscription: event source is not set — the platform rejects the load")
             check10_issues += 1
 
     # ScheduledJob: empty MethodName
@@ -1282,7 +1554,7 @@ if props_node is not None:
             if len(items) > 0 or len(ref_items) > 0:
                 has_reg_docs = True
         if not has_reg_docs:
-            report_error('10. DocumentJournal: регистрируемые документы не заданы — платформа отвергнет загрузку')
+            report_error('10. DocumentJournal: no registered documents — the platform rejects the load')
             check10_issues += 1
 
     # ChartOfAccounts: ExtDimensionTypes should be set if MaxExtDimensionCount > 0
@@ -1577,6 +1849,7 @@ if child_obj_node is not None:
     commands = find_all(child_obj_node, "md:Command")
     check15_ok = True
     cmd_count = 0
+    reserved_cmd = reserved_command_names().get(md_type, set())
     for cmd in commands:
         if stopped:
             break
@@ -1591,21 +1864,24 @@ if child_obj_node is not None:
         if cmd_name == "(unnamed)":
             report_error(f"15. Command (uuid={cuuid}): missing or empty Name")
             check15_ok = False
+        elif cmd_name.lower() in reserved_cmd:
+            report_error(f"15. Command '{cmd_name}': name conflicts with a standard command of {md_type}")
+            check15_ok = False
         group_node = find(cmd_props, "md:Group") if cmd_props is not None else None
         group_val = inner_text(group_node).strip() if group_node is not None else ""
         if not group_val:
-            report_error(f"15. Command '{cmd_name}': не задана группа (Group) — 1С отвергает при загрузке")
+            report_error(f"15. Command '{cmd_name}': group (Group) is not set — the platform rejects the load")
             check15_ok = False
         elif group_val not in VALID_COMMAND_GROUPS and not group_val.startswith("CommandGroup."):
-            report_error(f"15. Command '{cmd_name}': неизвестная группа '{group_val}'. "
-                         f"Валидные: {', '.join(VALID_COMMAND_GROUPS)}; либо CommandGroup.<Имя>")
+            report_error(f"15. Command '{cmd_name}': unknown group '{group_val}'. "
+                         f"Valid: {', '.join(VALID_COMMAND_GROUPS)}; or CommandGroup.<Name>")
             check15_ok = False
         elif group_val in SECTION_COMMAND_GROUPS:
             cpt_node = find(cmd_props, "md:CommandParameterType") if cmd_props is not None else None
             has_cpt = cpt_node is not None and (len(find_all(cpt_node, "v8:Type")) > 0 or len(find_all(cpt_node, "v8:TypeSet")) > 0)
             if has_cpt:
-                report_error(f"15. Command '{cmd_name}': тип параметра (CommandParameterType) недоступен "
-                             f"для команд командного интерфейса раздела ('{group_val}')")
+                report_error(f"15. Command '{cmd_name}': parameter type (CommandParameterType) is not available "
+                             f"for commands of the section command interface ('{group_val}')")
                 check15_ok = False
     if check15_ok and cmd_count > 0:
         report_ok(f"15. Commands: {cmd_count} command(s), groups valid")
@@ -1728,11 +2004,11 @@ if config_dir:
                 else:
                     unknown_refs[ref_key] = ref_dir
         for ak in sorted(absent_refs):
-            report_error(f"16. Ссылочный тип '{ak}' — объекта нет в составе конфигурации ({absent_refs[ak]}/) — «Неизвестное имя типа» при загрузке")
+            report_error(f"16. Reference type '{ak}' — the object is not in the configuration ({absent_refs[ak]}/) — «Неизвестное имя типа» on load")
         for mk in sorted(missing_refs):
-            report_warn(f"16. Ссылочный тип '{mk}' — объект есть в составе конфигурации, файла объекта в выгрузке нет ({missing_refs[mk]}/)")
+            report_warn(f"16. Reference type '{mk}' — the object is in the configuration, but its file is not in the dump ({missing_refs[mk]}/)")
         for uk in sorted(unknown_refs):
-            report_warn(f"16. Ссылочный тип '{uk}' не найден в конфигурации ({unknown_refs[uk]}/)")
+            report_warn(f"16. Reference type '{uk}' not found in the configuration ({unknown_refs[uk]}/)")
         if not absent_refs and not missing_refs and not unknown_refs and checked_refs:
             report_ok(f"16. Reference types: {len(checked_refs)} resolved")
 
@@ -1822,14 +2098,14 @@ for tn in type_nodes_22:
             not_storable[t] = etree.QName(child).localname
 
 for bk in sorted(bad_grammar):
-    report_error(f"22. Тип '{bk}' — не имя типа платформы: нет префикса пространства имён либо "
-                 "неверна форма ссылочного типа. При загрузке — «Неизвестное имя типа»")
+    report_error(f"22. Type '{bk}' — not a platform type name: the namespace prefix is missing or "
+                 "the reference type form is wrong. On load: «Неизвестное имя типа»")
 for nk in sorted(not_storable):
-    report_warn(f"22. Тип '{nk}' у элемента {not_storable[nk]} объекта {md_type}: такие типы "
-                "бывают у реквизитов обработок и отчётов, но не у хранимых в базе")
+    report_warn(f"22. Type '{nk}' on element {not_storable[nk]} of object {md_type}: such types "
+                "occur on attributes of data processors and reports, but not of objects stored in the infobase")
 for uk in sorted(unknown_vocab):
-    report_warn(f"22. Тип '{uk}' не в списке известных платформенных типов — проверьте написание "
-                "(список пополняется с версиями платформы)")
+    report_warn(f"22. Type '{uk}' is not in the list of known platform types — check the spelling "
+                "(the list grows with platform versions)")
 if not bad_grammar and not not_storable and not unknown_vocab and types_seen:
     report_ok(f"22. Type names: {types_seen} checked")
 
@@ -1858,14 +2134,14 @@ for tb in root.xpath("//md:Type | //md:ValueType", namespaces=NS):
         raw = re.sub(r'^(?:cfg|d\d+p\d+):', '', (st.text or "").strip())
         if owner_kind == "DefinedType":
             dt_sets_bad = True
-            report_error(f"23. Определяемый тип '{obj_name}': в составе тип-множество '{raw}' — платформа не загрузит такой файл («Недопустимый тип»). Состав определяемого типа — только конкретные типы")
+            report_error(f"23. Defined type '{obj_name}': contains the type set '{raw}' — the platform will not load such a file («Недопустимый тип»). A defined type may contain only concrete types")
             continue
         if owner_kind == "ChartOfCharacteristicTypes" and not re.match(r'^DefinedType[.]', raw):
             dt_sets_bad = True
-            report_warn(f"23. План видов характеристик '{obj_name}': тип значения '{raw}' Конфигуратор не предлагает (в дереве выбора это папка без флажка); ЛюбаяСсылка на выгрузке вернётся как ЛюбаяСсылкаИБ")
+            report_warn(f"23. Chart of characteristic types '{obj_name}': value type '{raw}' is not offered by Designer (in the type picker it is a folder without a checkbox); AnyRef comes back as AnyIBRef on dump")
         if members > 1 and re.match(r'^(DefinedType|Characteristic)[.]', raw):
             dt_sets_bad = True
-            report_warn(f"23. Составной тип содержит '{raw}' — Конфигуратор даёт выбрать определяемый тип и характеристику только единственным; платформа загрузит")
+            report_warn(f"23. Composite type contains '{raw}' — Designer allows a defined type or a characteristic only as the sole type; the platform loads it")
 if dt_sets_seen and not dt_sets_bad:
     report_ok(f"23. Type sets: {dt_sets_seen} block(s) checked")
 
@@ -1888,16 +2164,31 @@ if file_rank > 0:
     for vp in sorted(versioned_props):
         nodes = find_all(root, f"//md:{vp} | //xr:{vp}")
         if nodes and file_rank < format_rank(versioned_props[vp]):
-            report_error(f"18. <{vp}> появился в формате {versioned_props[vp]}, а файл объявлен как {version} — на платформе этой версии свойство будет отброшено при загрузке")
+            report_error(f"18. <{vp}> appeared in format {versioned_props[vp]}, but the file declares {version} — the platform of that version drops the property on load")
 
 # ── Check 19: LineNumberLength — допустимый диапазон 5..9 ──
 # Длина номера строки ТЧ: 5 (до 99 999 строк) … 9 (до 999 999 999). Границы — из документации 1С.
 for lnl in find_all(root, "//md:LineNumberLength"):
     raw = inner_text(lnl).strip()
     if not re.match(r'^\d+$', raw):
-        report_error(f"19. LineNumberLength='{raw}' — должно быть целое число 5..9")
+        report_error(f"19. LineNumberLength='{raw}' — must be an integer 5..9")
     elif int(raw) < 5 or int(raw) > 9:
-        report_error(f"19. LineNumberLength={raw} вне допустимого диапазона 5..9")
+        report_error(f"19. LineNumberLength={raw} is out of range 5..9")
+
+# ── Check 25: многоязычная строка (LocalStringType) — только элементы v8:item, без простого текста ──
+# Простой текст в таком теге платформа не загружает: «Ошибка преобразования данных XDTO … LocalStringType».
+local_string_tags = ['Synonym', 'ToolTip', 'Explanation', 'ObjectPresentation', 'ExtendedObjectPresentation', 'ListPresentation',
+                     'ExtendedListPresentation', 'RecordPresentation', 'ExtendedRecordPresentation', 'ExtendedPresentation', 'Format', 'EditFormat']
+for ls in find_all(root, '|'.join(f"//md:{t}|//xr:{t}" for t in local_string_tags)):
+    plain = ((ls.text or '') + ''.join(ch.tail or '' for ch in ls)).strip()
+    if not plain:
+        continue
+    owner = find_all(ls.getparent(), "md:Name|xr:Name")
+    owner_name = inner_text(owner[0]).strip() if owner else ''
+    where = f" of '{owner_name}'" if owner_name and owner_name != obj_name else ''
+    report_error(f"25. <{local_name(ls)}>{where} holds plain text '{plain}' — a multilingual string needs <v8:item> elements; the platform rejects the load")
+
+check26()
 
 # ── Check 17: MDObjectRef form — ссылка на ОБЪЕКТ метаданных, а не на тип ссылки ──
 # Owners/BasedOn/RegisterRecords/RegisteredDocuments/References содержат путь вида "Catalog.Валюты".
@@ -1923,9 +2214,9 @@ if md_ref_nodes:
             unknown_root[rv] = rroot
     for bk in sorted(bad_ref_form):
         fixed = re.sub(r'^([A-Za-z]+)Ref\.', r'\1.', bk)
-        report_error(f"17. MDObjectRef '{bk}' — ссылка на ТИП, а не на объект метаданных; нужно '{fixed}' (иначе «Неизвестный объект метаданных» при загрузке)")
+        report_error(f"17. MDObjectRef '{bk}' — refers to a TYPE, not to a metadata object; should be '{fixed}' (otherwise «Неизвестный объект метаданных» on load)")
     for uk in sorted(unknown_root):
-        report_warn(f"17. MDObjectRef '{uk}' — неизвестный вид метаданных '{unknown_root[uk]}' (опечатка?)")
+        report_warn(f"17. MDObjectRef '{uk}' — unknown metadata kind '{unknown_root[uk]}' (typo?)")
     if not bad_ref_form and not unknown_root:
         report_ok(f"17. MDObjectRef form: {len(md_ref_nodes)} checked")
 
@@ -2008,11 +2299,11 @@ if not is_adopted:
                      or os.path.exists(os.path.join(cf_dir, "Form.xml")))
             if not cf_ok:
                 if in_config_composition("CommonForm", parts[1]) is True:
-                    report_warn(f"20. {tag} '{ref}' — общая форма есть в составе конфигурации, "
-                                f"файла формы в выгрузке нет (CommonForms/{parts[1]})")
+                    report_warn(f"20. {tag} '{ref}' — the common form is in the configuration, "
+                                f"but the form file is not in the dump (CommonForms/{parts[1]})")
                 else:
-                    report_error(f"20. {tag} '{ref}' — общей формы нет в составе конфигурации "
-                                 f"(CommonForms/{parts[1]}) — «Неизвестный объект метаданных» при загрузке")
+                    report_error(f"20. {tag} '{ref}' — the common form is not in the configuration "
+                                 f"(CommonForms/{parts[1]}) — «Неизвестный объект метаданных» on load")
                     form_ref_bad = True
             continue
 
@@ -2024,17 +2315,17 @@ if not is_adopted:
             parts = ["Table", parts[3], "Form", parts[5]]
 
         if len(parts) != 4 or parts[2] != "Form":
-            report_warn(f"20. {tag} '{ref}' — неожиданный вид ссылки на форму "
-                        f"(ожидается 'CommonForm.Имя' или '<Вид>.<Объект>.Form.<Форма>')")
+            report_warn(f"20. {tag} '{ref}' — unexpected form reference shape "
+                        f"(expected 'CommonForm.<Name>' or '<Kind>.<Object>.Form.<Form>')")
             continue
 
         ref_kind, ref_obj, ref_form = parts[0], parts[1], parts[3]
 
         if ref_kind.lower() == md_type.lower() and ref_obj.lower() == obj_name.lower():
             if ref_form.lower() not in own_forms:
-                known = ", ".join(sorted(own_forms.values())) if own_forms else "нет форм"
-                report_error(f"20. {tag} '{ref}' — форма '{ref_form}' не зарегистрирована в "
-                             f"ChildObjects объекта (есть: {known}) — «Неизвестный объект метаданных» при загрузке")
+                known = ", ".join(sorted(own_forms.values())) if own_forms else "no forms"
+                report_error(f"20. {tag} '{ref}' — form '{ref_form}' is not registered in "
+                             f"the object's ChildObjects (present: {known}) — «Неизвестный объект метаданных» on load")
                 form_ref_bad = True
             elif os.path.isdir(own_dir) and not _form_file_exists_20(own_dir, ref_form):
                 # Форма в составе объекта есть, файла нет. Для дерева, претендующего на полноту
@@ -2042,12 +2333,12 @@ if not is_adopted:
                 # на «Файл объекта не существует». Для фрагмента частичной выгрузки — норма:
                 # такой файл грузится через -listFile слиянием с конфигурацией БД.
                 if config_dir:
-                    report_error(f"20. {tag} '{ref}' — форма зарегистрирована в ChildObjects, но файл "
-                                 f"формы отсутствует ({obj_name}/Forms/{ref_form})")
+                    report_error(f"20. {tag} '{ref}' — the form is registered in ChildObjects, but the form "
+                                 f"file is missing ({obj_name}/Forms/{ref_form})")
                     form_ref_bad = True
                 else:
-                    report_warn(f"20. {tag} '{ref}' — форма есть в ChildObjects, файла формы "
-                                f"в выгрузке нет ({obj_name}/Forms/{ref_form})")
+                    report_warn(f"20. {tag} '{ref}' — the form is in ChildObjects, but the form file "
+                                f"is not in the dump ({obj_name}/Forms/{ref_form})")
             continue
 
         # чужой объект (например журнал документов) — нужна конфигурация
@@ -2055,24 +2346,24 @@ if not is_adopted:
             continue
         ref_dir_20 = form_owner_dir_map.get(ref_kind)
         if not ref_dir_20:
-            report_warn(f"20. {tag} '{ref}' — неизвестный вид метаданных '{ref_kind}' (опечатка?)")
+            report_warn(f"20. {tag} '{ref}' — unknown metadata kind '{ref_kind}' (typo?)")
             continue
         ref_obj_xml = os.path.join(config_dir, ref_dir_20, ref_obj + ".xml")
         if not os.path.exists(ref_obj_xml):
             obj_in_composition = in_config_composition(ref_kind, ref_obj)
             if obj_in_composition is False:
-                report_error(f"20. {tag} '{ref}' — объекта '{ref_kind}.{ref_obj}' нет в составе "
-                             f"конфигурации ({ref_dir_20}/) — «Неизвестный объект метаданных» при загрузке")
+                report_error(f"20. {tag} '{ref}' — object '{ref_kind}.{ref_obj}' is not in the "
+                             f"configuration ({ref_dir_20}/) — «Неизвестный объект метаданных» on load")
                 form_ref_bad = True
             elif obj_in_composition is True:
-                report_warn(f"20. {tag} '{ref}' — объект '{ref_kind}.{ref_obj}' есть в составе "
-                            f"конфигурации, файла объекта в выгрузке нет ({ref_dir_20}/)")
+                report_warn(f"20. {tag} '{ref}' — object '{ref_kind}.{ref_obj}' is in the "
+                            f"configuration, but its file is not in the dump ({ref_dir_20}/)")
             else:
-                report_warn(f"20. {tag} '{ref}' — объект '{ref_kind}.{ref_obj}' не найден в конфигурации ({ref_dir_20}/)")
+                report_warn(f"20. {tag} '{ref}' — object '{ref_kind}.{ref_obj}' not found in the configuration ({ref_dir_20}/)")
             continue
         if not _form_file_exists_20(os.path.join(config_dir, ref_dir_20, ref_obj), ref_form):
-            report_error(f"20. {tag} '{ref}' — форма '{ref_form}' не найдена у объекта "
-                         f"'{ref_kind}.{ref_obj}' — «Неизвестный объект метаданных» при загрузке")
+            report_error(f"20. {tag} '{ref}' — form '{ref_form}' not found on object "
+                         f"'{ref_kind}.{ref_obj}' — «Неизвестный объект метаданных» on load")
             form_ref_bad = True
 
     if form_refs_checked > 0 and not form_ref_bad:
@@ -2100,16 +2391,16 @@ if md_type == "Table":
             parts = ref.split(".")
             # Ожидается ExternalDataSource.<Источник>.Table.<Таблица>.Field.<Поле>
             if len(parts) != 6 or parts[0] != "ExternalDataSource" or parts[2] != "Table" or parts[4] != "Field":
-                report_error(f"21. {tag} '{ref}' — ожидается ExternalDataSource.<Источник>.Table.<Таблица>.Field.<Поле>")
+                report_error(f"21. {tag} '{ref}' — expected ExternalDataSource.<Source>.Table.<Table>.Field.<Field>")
                 eds_refs_bad = True
                 continue
             if parts[3] != obj_name:
-                report_error(f"21. {tag} '{ref}' — ссылка на поле ЧУЖОЙ таблицы (эта: {obj_name})")
+                report_error(f"21. {tag} '{ref}' — refers to a field of ANOTHER table (this one: {obj_name})")
                 eds_refs_bad = True
                 continue
             if parts[5] not in field_names:
-                known = ", ".join(sorted(field_names)) if field_names else "полей нет"
-                report_error(f"21. {tag} '{ref}' — поля '{parts[5]}' нет в таблице (есть: {known})")
+                known = ", ".join(sorted(field_names)) if field_names else "no fields"
+                report_error(f"21. {tag} '{ref}' — field '{parts[5]}' is not in the table (present: {known})")
                 eds_refs_bad = True
     if eds_refs_checked > 0 and not eds_refs_bad:
         report_ok(f"21. Field refs: {eds_refs_checked} resolved")
@@ -2117,7 +2408,7 @@ if md_type == "Table":
     # Ключ: загрузка XML таблицу без ключа принимает (проверено на платформе), а Конфигуратор
     # интерактивно требует. Отсюда предупреждение, а не ошибка: рабочие конфигурации без ключа есть.
     if not find_all(props_node, "md:KeyFields/xr:Field"):
-        report_warn("21. KeyFields пуст — платформа такую таблицу загрузит, но форма записи и набор записей будут недоступны")
+        report_warn("21. KeyFields is empty — the platform loads such a table, but the record form and the record set will be unavailable")
 
 
 # ── Final output ──────────────────────────────────────────────

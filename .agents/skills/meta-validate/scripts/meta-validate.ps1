@@ -1,4 +1,4 @@
-﻿# meta-validate v1.32 — Validate 1C metadata object structure
+﻿# meta-validate v1.47 — Validate 1C metadata object structure
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 [CmdletBinding(PositionalBinding=$false)]
 param(
@@ -23,7 +23,7 @@ if ($pathList.Count -gt 1) {
 	$batchOk = 0
 	$batchFail = 0
 	foreach ($singlePath in $pathList) {
-		$callArgs = @{ ObjectPath = $singlePath; MaxErrors = $MaxErrors; Verbose = $Detailed }
+		$callArgs = @{ ObjectPath = $singlePath; MaxErrors = $MaxErrors; Detailed = $Detailed }
 		if ($OutFile) {
 			$baseName = [System.IO.Path]::GetFileNameWithoutExtension($OutFile)
 			$ext = [System.IO.Path]::GetExtension($OutFile)
@@ -44,7 +44,7 @@ if ($pathList.Count -gt 1) {
 # --- Resolve path ---
 
 if (-not [System.IO.Path]::IsPathRooted($ObjectPath)) {
-	$ObjectPath = Join-Path (Get-Location).Path $ObjectPath
+	$ObjectPath = Join-Path (Get-Location).ProviderPath $ObjectPath
 }
 
 if (Test-Path $ObjectPath -PathType Container) {
@@ -87,7 +87,7 @@ if (-not (Test-Path $ObjectPath)) {
 	exit 1
 }
 
-$resolvedPath = (Resolve-Path $ObjectPath).Path
+$resolvedPath = (Resolve-Path $ObjectPath).ProviderPath
 
 # --- Detect config directory (for cross-object checks) ---
 
@@ -142,6 +142,7 @@ $finalize = {
 		$result = "=== Validation OK: $mdType.$objName ($checks checks) ==="
 	} else {
 		Out-Line ""
+		if ($script:stopped -and $script:errors -ge $MaxErrors) { Out-Line "Stopped after $MaxErrors errors. Fix and re-run." }
 		Out-Line "=== Result: $($script:errors) errors, $($script:warnings) warnings ($checks checks) ==="
 		$result = $script:output.ToString()
 	}
@@ -317,6 +318,68 @@ $typesWithStdAttrs = @(
 	"BusinessProcess","Task","ExchangePlan","DocumentJournal"
 )
 
+# Имена стандартных команд вида — англ. и рус., в нижнем регистре: команда объекта с таким именем
+# не загрузится («Имя команды не может совпадать с именем стандартной команды»; регистр не важен, от
+# UseStandardCommands не зависит — замер 8.3.24/8.3.27). Вида нет в карте — ограничения нет
+# (перечисление, план обмена; критерий отбора и таблица внешнего источника не замерены).
+function Get-ReservedCommandNames {
+	$openList = @("openlist", "открытьсписок")
+	$create = @("create", "создать")
+	$folder = @("createfolder", "создатьгруппу")
+	$byValue = @("openbyvalue", "открытьпозначению")
+	$basedOn = @("createbasedon", "создатьнаосновании")
+	return @{
+		"Catalog"                    = $openList + $create + $folder + $byValue + $basedOn
+		"ChartOfCharacteristicTypes" = $openList + $create + $folder + $basedOn
+		"Task"                       = $openList + $create + $byValue + $basedOn
+		"Document"                   = $openList + $create + $basedOn
+		"BusinessProcess"            = $openList + $create + $basedOn
+		"ChartOfAccounts"            = $openList + $create + $basedOn
+		"ChartOfCalculationTypes"    = $openList + $create + $basedOn
+		"InformationRegister"        = $openList + $create + $byValue
+		"AccumulationRegister"       = $openList
+		"AccountingRegister"         = $openList
+		"CalculationRegister"        = $openList
+		"DocumentJournal"            = $openList
+		"DataProcessor"              = @("open", "открыть")
+		"Report"                     = @("open", "открыть")
+	}
+}
+
+# Порядок групп в <ChildObjects> объекта по виду. Это xs:sequence <Вид>ChildObjects из MDClasses XSD,
+# сверенный выгрузкой платформы: выгрузка сама ставит группы в этот порядок, так что вставка не на место
+# даёт дифф при следующей выгрузке. Единого порядка нет — у документа Form стоит до TabularSection.
+function Get-ObjectChildOrder {
+	return @{
+		"Catalog"                    = @("Attribute", "TabularSection", "Form", "Template", "Command")
+		"Document"                   = @("Attribute", "Form", "TabularSection", "Template", "Command")
+		"ExchangePlan"               = @("Attribute", "TabularSection", "Form", "Template", "Command")
+		"ChartOfCharacteristicTypes" = @("Attribute", "TabularSection", "Form", "Template", "Command")
+		"ChartOfAccounts"            = @("Attribute", "TabularSection", "AccountingFlag", "ExtDimensionAccountingFlag", "Form", "Template", "Command")
+		"ChartOfCalculationTypes"    = @("Attribute", "TabularSection", "Form", "Template", "Command")
+		"BusinessProcess"            = @("Attribute", "TabularSection", "Form", "Template", "Command")
+		"Task"                       = @("Attribute", "TabularSection", "Form", "Template", "AddressingAttribute", "Command")
+		"DataProcessor"              = @("Attribute", "TabularSection", "Form", "Template", "Command")
+		"Report"                     = @("Attribute", "TabularSection", "Form", "Template", "Command")
+		"ExternalDataProcessor"      = @("Attribute", "TabularSection", "Form", "Template")
+		"ExternalReport"             = @("Attribute", "TabularSection", "Form", "Template")
+		"Enum"                       = @("EnumValue", "Form", "Template", "Command")
+		"InformationRegister"        = @("Resource", "Attribute", "Dimension", "Form", "Template", "Command")
+		"AccumulationRegister"       = @("Resource", "Attribute", "Dimension", "Form", "Template", "Command")
+		"AccountingRegister"         = @("Dimension", "Resource", "Attribute", "Form", "Template", "Command")
+		"CalculationRegister"        = @("Resource", "Attribute", "Dimension", "Recalculation", "Form", "Template", "Command")
+		"DocumentJournal"            = @("Column", "Form", "Template", "Command")
+		"Table"                      = @("Field", "Form", "Command", "Template")
+		"ExternalDataSource"         = @("Table", "Cube", "Function")
+		"Cube"                       = @("DimensionTable", "Dimension", "Resource", "Form", "Command", "Template")
+		"DimensionTable"             = @("Field", "Form", "Command", "Template")
+		"FilterCriterion"            = @("Form", "Command")
+		"SettingsStorage"            = @("Form", "Template")
+		"TabularSection"             = @("Attribute")
+	}
+}
+
+
 # ChildObjects rules: what child element types are valid for each metadata type
 $childObjectRules = @{
 	"Catalog"                    = @("Attribute","TabularSection","Form","Template","Command")
@@ -361,11 +424,14 @@ $validPropertyValues = @{
 	"Posting"                        = @("Allow","Deny")
 	"RealTimePosting"                = @("Allow","Deny")
 	"RegisterRecordsDeletion"        = @("AutoDelete","AutoDeleteOnUnpost","AutoDeleteOff")
-	"RegisterRecordsWritingOnPost"   = @("WriteModified","WriteSelected","WriteAll")
+	"RegisterRecordsWritingOnPost"   = @("WriteModified","WriteSelected")
 	# AutomaticAndManaged — только у внешнего источника данных и его таблиц.
 	"DataLockControlMode"            = @("Automatic","Managed","AutomaticAndManaged")
 	"FullTextSearch"                 = @("Use","DontUse")
 	"DefaultPresentation"            = @("AsDescription","AsCode")
+	# Уточнение по виду объекта («Вид.Свойство») — раньше общего списка. AsNumber («в виде номера»)
+	# есть только у задачи: у справочника и прочих платформа его отвергает (8.3.24 и 8.5.1).
+	"Task.DefaultPresentation"       = @("AsDescription","AsNumber")
 	"HierarchyType"                  = @("HierarchyFoldersAndItems","HierarchyOfItems")
 	"EditType"                       = @("InDialog","InList","BothWays")
 	"WriteMode"                      = @("Independent","RecorderSubordinate")
@@ -373,10 +439,48 @@ $validPropertyValues = @{
 	"RegisterType"                   = @("Balance","Turnovers")
 	"ReturnValuesReuse"              = @("DontUse","DuringRequest","DuringSession")
 	"ReuseSessions"                  = @("DontUse","Use","AutoUse")
-	"FillChecking"                   = @("DontCheck","ShowError","ShowWarning")
+	"FillChecking"                   = @("DontCheck","ShowError")
 	"Indexing"                       = @("DontIndex","Index","IndexWithAdditionalOrder")
 	"DataHistory"                    = @("Use","DontUse")
-	"DependenceOnCalculationTypes"   = @("DontUse","OnActionPeriod")
+	"CreateOnInput"                  = @("Auto","Use","DontUse")
+	"ChoiceHistoryOnInput"           = @("Auto","DontUse")
+	"DependenceOnCalculationTypes"   = @("DontUse","OnActionPeriod","OnRegistrationPeriod")
+	# Значения — по XSD платформы; не встреченные в выгрузках БП/УНФ/ERP подтверждены загрузкой и
+	# выгрузкой на 8.3.24 и 8.5.1. Имя с разным смыслом у разных владельцев — только ключом «Контекст.Свойство».
+	"ChoiceFoldersAndItems"             = @("Items","Folders","FoldersAndItems")
+	"NumberPeriodicity"                 = @("Nonperiodical","Year","Quarter","Month","Day")
+	"ParameterUseMode"                  = @("Single","Multiple")
+	"Representation"                    = @("Auto","Text","Picture","PictureAndText")
+	"OnMainServerUnavalableBehavior"    = @("Auto","MakeDisable","DontChangeBehavior")
+	"FormType"                          = @("Managed","Ordinary")
+	"MoveBoundaryOnPosting"             = @("DontMove","Move")
+	"SequenceFilling"                   = @("AutoFill","AutoFillOff")
+	"TaskNumberAutoPrefix"              = @("BusinessProcessNumber","DontUse")
+	"AutoUse"                           = @("DontUse","Use")
+	"DataSeparation"                    = @("DontUse","Separate")
+	"UsersSeparation"                   = @("DontUse","Separate")
+	"AuthenticationSeparation"          = @("DontUse","Separate")
+	"ConfigurationExtensionsSeparation" = @("DontUse","Separate")
+	"SeparatedDataUse"                  = @("Independently","IndependentlyAndSimultaneously")
+	"TemplateType"                      = @("SpreadsheetDocument","BinaryData","ActiveDocument","HTMLDocument","TextDocument","GeographicalSchema","GraphicalSchema","DataCompositionSchema","DataCompositionAppearanceTemplate","AddIn")
+	"UseInInterfaceCompatibilityMode"   = @("Any","Taxi","Version85")
+	"TypeReductionMode"                 = @("TransformValues","DeleteData","Deny")
+	"TransactionsIsolationLevel"        = @("Auto","ReadUncommitted","ReadCommitted","RepeatableRead","Serializable")
+	"TableType"                         = @("Table","Expression")
+	"TableDataType"                     = @("NonobjectData","ObjectData")
+	"ChoiceDataGetModeOnInputByString"  = @("Directly","Background")
+	"HTTPMethod"                        = @("GET","HEAD","PUT","POST","DELETE","PATCH","MERGE","OPTIONS","TRACE","CONNECT","PROPFIND","PROPPATCH","MOVE","COPY","LOCK","UNLOCK","MKCOL","Any")
+	"TransferDirection"                 = @("In","Out","InOut")
+	"ValueChange"                       = @("Clear","DontChange")
+	# QuickChoice у справочника и других ссылочных — булево; перечислением он бывает здесь:
+	"Constant.QuickChoice"              = @("Auto","Use","DontUse")
+	"CommonAttribute.QuickChoice"       = @("Auto","Use","DontUse")
+	"Attribute.QuickChoice"             = @("Auto","Use","DontUse")
+	# Use: у реквизита и ТЧ — для групп/элементов; у состава общего реквизита — Auto/Use/DontUse;
+	# у регламентного задания — булево, у параметра функциональных опций — список (общего ключа нет).
+	"Attribute.Use"                     = @("ForItem","ForFolder","ForFolderAndItem")
+	"TabularSection.Use"                = @("ForItem","ForFolder","ForFolderAndItem")
+	"CommonAttributeContent.Use"        = @("Auto","Use","DontUse")
 }
 
 # Properties forbidden per type (would cause LoadConfigFromFiles error)
@@ -565,15 +669,153 @@ if ($dumpVer) {
 	}
 }
 
-# --- Structural-only types: базовая проверка (Name), без type-specific правил ---
+# Проверка 4 — значения свойств-перечислений. Блоком: её зовут и для видов без глубоких правил
+# (общая форма, команда, общий реквизит, макет…) — иначе их перечисления не проверялись вовсе.
+$check4 = {
+	if ($propsNode) {
+		$enumChecked = 0
+		$check4Ok = $true
+
+		# Общие свойства плюс свойства, заданные только для своего вида («Constant.QuickChoice»):
+		# остальные ключи с точкой — уточнения чужих видов и контекстов (реквизит, состав), не корня
+		$rootProps = @($validPropertyValues.Keys | Where-Object { -not $_.Contains('.') })
+		$rootProps += @($validPropertyValues.Keys | Where-Object { $_.StartsWith("$mdType.") } | ForEach-Object { $_.Substring($mdType.Length + 1) })
+		foreach ($propName in ($rootProps | Select-Object -Unique)) {
+			$propNode = $propsNode.SelectSingleNode("md:$propName", $ns)
+			if ($propNode -and $propNode.InnerText) {
+				$val = $propNode.InnerText
+				$allowed = $validPropertyValues["$mdType.$propName"]
+				if (-not $allowed) { $allowed = $validPropertyValues[$propName] }
+				# Регистр значим: платформа читает перечисление по точному имени (-notcontains его не различал)
+				if ($allowed -cnotcontains $val) {
+					Report-Error "4. Property '$propName' has invalid value '$val' (allowed: $($allowed -join ', '))"
+					$check4Ok = $false
+				}
+				$enumChecked++
+			}
+		}
+
+		# Значения у реквизитов, измерений, ресурсов и табличных частей: QuickChoice здесь — перечисление
+		# (в корне справочника — булево), Use у реквизита и ТЧ — для групп/элементов. Ключи «Attribute.*»,
+		# «TabularSection.*»; иначе — общий ключ свойства.
+		$childCommon4 = @('CreateOnInput', 'FullTextSearch', 'DataHistory', 'ChoiceHistoryOnInput')
+		$coNode4 = $typeNode.SelectSingleNode("md:ChildObjects", $ns)
+		$items4 = New-Object System.Collections.ArrayList
+		if ($coNode4) {
+			foreach ($ch in $coNode4.ChildNodes) {
+				if ($ch.NodeType -ne 'Element') { continue }
+				[void]$items4.Add($ch)
+				if ($ch.LocalName -eq 'TabularSection') {
+					foreach ($tsAttr in $ch.SelectNodes("md:ChildObjects/md:Attribute", $ns)) { [void]$items4.Add($tsAttr) }
+				}
+			}
+		}
+		foreach ($it in $items4) {
+			$itProps = $it.SelectSingleNode("md:Properties", $ns)
+			if (-not $itProps) { continue }
+			$ctx = if ($it.LocalName -eq 'TabularSection') { 'TabularSection' } else { 'Attribute' }
+			$names = if ($ctx -eq 'TabularSection') { @('Use') } elseif ($it.LocalName -eq 'Attribute') { @('QuickChoice', 'ChoiceFoldersAndItems', 'Use') + $childCommon4 } else { @('QuickChoice', 'ChoiceFoldersAndItems') + $childCommon4 }
+			$itName = $itProps.SelectSingleNode("md:Name", $ns)
+			foreach ($pn in $names) {
+				$pnode = $itProps.SelectSingleNode("md:$pn", $ns)
+				if (-not $pnode -or -not $pnode.InnerText) { continue }
+				$allowed = $validPropertyValues["$ctx.$pn"]
+				if (-not $allowed) { $allowed = $validPropertyValues[$pn] }
+				if (-not $allowed) { continue }
+				if ($allowed -cnotcontains $pnode.InnerText) {
+					Report-Error "4. $($it.LocalName) '$(if ($itName) { $itName.InnerText })': property '$pn' has invalid value '$($pnode.InnerText)' (allowed: $($allowed -join ', '))"
+					$check4Ok = $false
+				}
+				$enumChecked++
+			}
+		}
+		# Состав общего реквизита: Use элемента состава — Auto/Use/DontUse
+		foreach ($cu in $propsNode.SelectNodes("md:Content/xr:Item/xr:Use", $ns)) {
+			$allowed = $validPropertyValues["CommonAttributeContent.Use"]
+			if ($cu.InnerText -and $allowed -cnotcontains $cu.InnerText) {
+				Report-Error "4. Content item: property 'Use' has invalid value '$($cu.InnerText)' (allowed: $($allowed -join ', '))"
+				$check4Ok = $false
+			}
+			$enumChecked++
+		}
+
+		# Корневой <Type> (дескриптор типа значения — Константа, ПВХ) должен быть структурным:
+		# <v8:Type>/<v8:TypeSet>, а не скалярный текст. Скаляр = повреждённый тип (напр. после
+		# старого meta-edit modify-property Type). См. issue #42. У элемента стиля <Type> — вид элемента
+		# (Color/Font/Border), скаляр там штатный.
+		$rootTypeEl = if ($mdType -ne 'StyleItem') { $propsNode.SelectSingleNode("md:Type", $ns) } else { $null }
+		if ($rootTypeEl) {
+			$v8Types = $rootTypeEl.SelectNodes("v8:Type", $ns)
+			$v8TypeSets = $rootTypeEl.SelectNodes("v8:TypeSet", $ns)
+			$scalarText = ""
+			foreach ($cn in $rootTypeEl.ChildNodes) {
+				if ($cn.NodeType -eq 'Text' -or $cn.NodeType -eq 'CDATA') {
+					$t = $cn.Value.Trim()
+					if ($t) { $scalarText = $t; break }
+				}
+			}
+			if ($v8Types.Count -eq 0 -and $v8TypeSets.Count -eq 0 -and $scalarText) {
+				Report-Error "4. Property <Type> contains scalar text '$scalarText' without a type structure (<v8:Type>/<v8:TypeSet>) — corrupted value type descriptor"
+				$check4Ok = $false
+			}
+		}
+
+		if ($check4Ok) {
+			Report-OK "4. Property values: $enumChecked enum properties checked"
+		}
+	} else {
+		Report-Warn "4. No Properties block to check"
+	}
+}
+
+# --- Check 26: неограниченная строка там, где платформе нужен индекс ---
+# Замер 8.3.24: измерение регистра со строкой длины 0 (в том числе в составном типе) загружается
+# молча, а /UpdateDBCfg падает ошибкой СУБД; индексируемый реквизит с таким типом платформа отвергает
+# при загрузке («При установленном типе недопустимо индексирование»). Общий реквизит-разделитель
+# (DataSeparation=Separate) участвует в хеше при любом Indexing: загрузка молчит, /UpdateDBCfg падает
+# ошибкой SDBL. Строка без StringQualifiers — та же длина 0.
+function Test-UnlimitedString($typeNode) {
+	if (-not $typeNode) { return $false }
+	$str = @($typeNode.SelectNodes("v8:Type", $ns) | Where-Object { $_.InnerText.Trim() -match '(^|:)string$' })
+	if ($str.Count -eq 0) { return $false }
+	$len = $typeNode.SelectSingleNode("v8:StringQualifiers/v8:Length", $ns)
+	return (-not $len -or $len.InnerText.Trim() -eq '0')
+}
+$check26 = {
+	# Измерения — всегда; прочие (реквизиты, реквизиты ТЧ, ресурсы, реквизиты адресации, общий реквизит) —
+	# если у них есть Indexing, отличный от DontIndex.
+	$idxTargets = @($xmlDoc.SelectNodes("//md:Dimension/md:Properties|//md:Properties[md:Indexing]", $ns))
+	foreach ($p26 in $idxTargets) {
+		$isDim = $p26.ParentNode.LocalName -eq 'Dimension'
+		$sep = $p26.SelectSingleNode("md:DataSeparation", $ns)
+		$isSep = $p26.ParentNode.LocalName -eq 'CommonAttribute' -and $sep -and $sep.InnerText.Trim() -eq 'Separate'
+		$ix = $p26.SelectSingleNode("md:Indexing", $ns)
+		if (-not $isDim -and -not $isSep -and (-not $ix -or $ix.InnerText.Trim() -eq 'DontIndex')) { continue }
+		if (-not (Test-UnlimitedString ($p26.SelectSingleNode("md:Type", $ns)))) { continue }
+		$n26 = $p26.SelectSingleNode("md:Name", $ns)
+		$nm26 = if ($n26) { $n26.InnerText.Trim() } else { '?' }
+		if ($isSep) {
+			Report-Error "26. CommonAttribute '$nm26': unlimited String in a data separator — the load passes but /UpdateDBCfg fails; set a length (e.g. String(150))"
+		} elseif ($isDim) {
+			Report-Error "26. Dimension '$nm26': unlimited String — a dimension is indexed, the load passes but /UpdateDBCfg fails; set a length (e.g. String(150))"
+		} else {
+			Report-Error "26. $($p26.ParentNode.LocalName) '$nm26': unlimited String with Indexing=$($ix.InnerText.Trim()) — the platform rejects the load; set a length or DontIndex"
+		}
+	}
+}
+
+
+# --- Structural-only types: базовая проверка (Name) и значения перечислений, без type-specific правил ---
 if ($structuralOnlyTypes -contains $mdType) {
 	if ($objName -eq "(unknown)") {
 		Report-Error "3. Properties: missing or empty Name"
 	} elseif ($objName -notmatch $identPattern) {
 		Report-Error "3. Properties: Name '$objName' is not a valid 1C identifier"
 	} else {
-		Report-OK "3. Properties: Name=`"$objName`" (базовая структурная проверка для $mdType)"
+		Report-OK "3. Properties: Name=`"$objName`" (basic structure check for $mdType)"
 	}
+	& $check4
+	& $check26
 	& $finalize
 	if ($script:errors -gt 0) { exit 1 }
 	exit 0
@@ -586,7 +828,7 @@ if ($nestedDescriptorTypes -contains $mdType) {
 	} elseif ($objName -notmatch $identPattern) {
 		Report-Error "3. Properties: Name '$objName' is not a valid 1C identifier"
 	} else {
-		Report-OK "3. Properties: Name=`"$objName`" (базовая структурная проверка для $mdType)"
+		Report-OK "3. Properties: Name=`"$objName`" (basic structure check for $mdType)"
 	}
 	$kindProp = if ($mdType -eq "Form") { "FormType" } else { "TemplateType" }
 	$kindNode = if ($propsNode) { $propsNode.SelectSingleNode("md:$kindProp", $ns) } else { $null }
@@ -734,49 +976,7 @@ if ($script:stopped) { & $finalize; exit 1 }
 
 # --- Check 4: Property values — enum properties ---
 
-if ($propsNode) {
-	$enumChecked = 0
-	$check4Ok = $true
-
-	foreach ($propName in $validPropertyValues.Keys) {
-		$propNode = $propsNode.SelectSingleNode("md:$propName", $ns)
-		if ($propNode -and $propNode.InnerText) {
-			$val = $propNode.InnerText
-			$allowed = $validPropertyValues[$propName]
-			if ($allowed -notcontains $val) {
-				Report-Error "4. Property '$propName' has invalid value '$val' (allowed: $($allowed -join ', '))"
-				$check4Ok = $false
-			}
-			$enumChecked++
-		}
-	}
-
-	# Корневой <Type> (дескриптор типа значения — Константа, ПВХ) должен быть структурным:
-	# <v8:Type>/<v8:TypeSet>, а не скалярный текст. Скаляр = повреждённый тип (напр. после
-	# старого meta-edit modify-property Type). См. issue #42.
-	$rootTypeEl = $propsNode.SelectSingleNode("md:Type", $ns)
-	if ($rootTypeEl) {
-		$v8Types = $rootTypeEl.SelectNodes("v8:Type", $ns)
-		$v8TypeSets = $rootTypeEl.SelectNodes("v8:TypeSet", $ns)
-		$scalarText = ""
-		foreach ($cn in $rootTypeEl.ChildNodes) {
-			if ($cn.NodeType -eq 'Text' -or $cn.NodeType -eq 'CDATA') {
-				$t = $cn.Value.Trim()
-				if ($t) { $scalarText = $t; break }
-			}
-		}
-		if ($v8Types.Count -eq 0 -and $v8TypeSets.Count -eq 0 -and $scalarText) {
-			Report-Error "4. Property <Type> содержит скалярный текст '$scalarText' без структуры типа (<v8:Type>/<v8:TypeSet>) — повреждённый дескриптор типа значения"
-			$check4Ok = $false
-		}
-	}
-
-	if ($check4Ok) {
-		Report-OK "4. Property values: $enumChecked enum properties checked"
-	}
-} else {
-	Report-Warn "4. No Properties block to check"
-}
+& $check4
 
 if ($script:stopped) { & $finalize; exit 1 }
 
@@ -850,6 +1050,22 @@ if ($childObjNode) {
 		$childCounts[$childTag]++
 	}
 
+	# Порядок групп: загрузка примет любой, но выгрузка переставит по канону вида — дифф без правок
+	$order = (Get-ObjectChildOrder)[$mdType]
+	if ($order) {
+		$prevTag = $null; $prevRank = -1
+		foreach ($child in $childObjNode.ChildNodes) {
+			if ($child.NodeType -ne 'Element' -or -not ($order -ccontains $child.LocalName)) { continue }
+			$rank = [array]::IndexOf([string[]]$order, $child.LocalName)
+			if ($rank -lt $prevRank) {
+				$present = @($order | Where-Object { $childCounts.ContainsKey($_) })
+				Report-Warn "6. ChildObjects order: <$($child.LocalName)> after <$prevTag>; platform dump reorders $mdType children as $($present -join ' -> ')"
+				break
+			}
+			$prevTag = $child.LocalName; $prevRank = $rank
+		}
+	}
+
 	if ($check6Ok) {
 		$summary = ($childCounts.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Name)($($_.Value))" }) -join ", "
 		if ($summary) {
@@ -911,7 +1127,7 @@ function Check-ChildElement {
 		if (-not $typeEl) {
 			# Блока Type нет вовсе: загрузка проходит, но платформа молча подставляет тип нового
 			# реквизита — Строка(10). Загрузку это не рвёт, а замысел теряет, отсюда WARN.
-			Report-Warn "7. $kind '$nameVal' — блок Type не задан; при загрузке платформа подставит Строка(10)"
+			Report-Warn "7. $kind '$nameVal' — no Type block; on load the platform substitutes String(10)"
 		}
 	}
 
@@ -960,6 +1176,27 @@ $reservedEnRu = @{
 }
 
 $stdForType = $standardAttributesByType[$mdType]
+
+# Колонка ТЧ — стандартные реквизиты строки: «ТабличнаяЧасть.X - Недопустимое имя реквизита -
+# НомерСтроки» (замер 8.3.24). НомерСтроки — у любого объекта, Ссылка — только у ссылочного (у обработки
+# колонка Ссылка законна — замер и ERP); Номер — можно.
+$check7bColOk = $true
+if ($childObjNode) {
+	$tsRowReserved = @{ "linenumber" = $true; "номерстроки" = $true }
+	if ($stdForType -contains "Ref") { $tsRowReserved["ref"] = $true; $tsRowReserved["ссылка"] = $true }
+	foreach ($tsNode in $childObjNode.SelectNodes("md:TabularSection", $ns)) {
+		$tsNameNode = $tsNode.SelectSingleNode("md:Properties/md:Name", $ns)
+		$tsLabel = if ($tsNameNode) { $tsNameNode.InnerText } else { "?" }
+		foreach ($colNode in $tsNode.SelectNodes("md:ChildObjects/md:Attribute", $ns)) {
+			$colName = $colNode.SelectSingleNode("md:Properties/md:Name", $ns)
+			if ($colName -and $tsRowReserved.ContainsKey($colName.InnerText.ToLower())) {
+				Report-Error "7b. TabularSection.${tsLabel}: column '$($colName.InnerText)' conflicts with a standard attribute of a tabular section row"
+				$check7bColOk = $false
+			}
+		}
+	}
+}
+
 if ($childObjNode -and $stdForType) {
 	# Множество зарезервированных имён (EN + RU) в нижнем регистре.
 	$reservedSet = @{}
@@ -969,7 +1206,9 @@ if ($childObjNode -and $stdForType) {
 		if ($ru) { $reservedSet[$ru.ToLower()] = $true }
 	}
 	$check7bOk = $true
-	$attrNodes = $childObjNode.SelectNodes("md:Attribute", $ns)
+	# Измерение и ресурс регистра — те же зарезервированные имена, что у реквизита («Недопустимое имя
+	# измерения - Период», замер 8.3.24)
+	$attrNodes = $childObjNode.SelectNodes("md:Attribute | md:Dimension | md:Resource", $ns)
 	foreach ($attrNode in $attrNodes) {
 		$attrProps = $attrNode.SelectSingleNode("md:Properties", $ns)
 		if ($attrProps) {
@@ -977,16 +1216,16 @@ if ($childObjNode -and $stdForType) {
 			if ($attrNameNode -and $attrNameNode.InnerText) {
 				$an = $attrNameNode.InnerText
 				if ($reservedSet.ContainsKey($an.ToLower())) {
-					Report-Error "7b. Attribute '$an' conflicts with a standard attribute of $mdType"
+					Report-Error "7b. $($attrNode.LocalName) '$an' conflicts with a standard attribute of $mdType"
 					$check7bOk = $false
 				}
 			}
 		}
 	}
-	if ($check7bOk) {
+	if ($check7bOk -and $check7bColOk) {
 		Report-OK "7b. Reserved attribute names: no conflicts"
 	}
-} elseif ($childObjNode) {
+} elseif ($childObjNode -and $check7bColOk) {
 	Report-OK "7b. Reserved attribute names: no conflicts (no standard set for $mdType)"
 }
 
@@ -1070,6 +1309,24 @@ if ($childObjNode) {
 	$ops = $childObjNode.SelectNodes("md:Operation", $ns)
 	if ($ops.Count -gt 0) {
 		if (-not (Check-Uniqueness -nodes $ops -kind "Operation")) { $check8Ok = $false }
+	}
+
+	# Реквизит, ТЧ, измерение, ресурс, реквизит адресации и признак учёта объекта — одно пространство имён
+	# без учёта регистра: платформа отвергает загрузку («Задано одинаковое имя для реквизита и табличной
+	# части / измерения / ресурса / реквизита адресации», замер 8.3.24). Колонке ТЧ имя реквизита объекта
+	# не мешает, признаку учёта субконто — тоже (он колонка ТЧ видов субконто).
+	$crossSeen = @{}
+	foreach ($cn in $childObjNode.ChildNodes) {
+		if ($cn.NodeType -ne 'Element' -or $cn.LocalName -notin @('Attribute','TabularSection','Dimension','Resource','AddressingAttribute','AccountingFlag')) { continue }
+		$cnName = $cn.SelectSingleNode("md:Properties/md:Name", $ns)
+		if (-not $cnName -or -not $cnName.InnerText) { continue }
+		$nm = $cnName.InnerText
+		if ($crossSeen.ContainsKey($nm) -and $crossSeen[$nm] -cne $cn.LocalName) {
+			Report-Error "8. Name '$nm' is used by both $($crossSeen[$nm]) and $($cn.LocalName)"
+			$check8Ok = $false
+		} elseif (-not $crossSeen.ContainsKey($nm)) {
+			$crossSeen[$nm] = $cn.LocalName
+		}
 	}
 
 	if ($check8Ok) {
@@ -1183,6 +1440,21 @@ if ($propsNode) {
 		$check10Issues++
 	}
 
+	# Код/номер нулевой длины во вводе по строке: платформа отвергает загрузку — «Указано неверное
+	# поле для ввода по строке: Код/Номер» (8.3.24, 8.5.1). Бывает после правки длины в 0 без чистки
+	# InputByString (meta-edit так больше не делает, но ручную правку это не страхует).
+	$ibsFields = @($propsNode.SelectNodes("md:InputByString/xr:Field", $ns) | ForEach-Object { $_.InnerText.Trim() })
+	foreach ($pair in @(@("CodeLength", "Code"), @("NumberLength", "Number"))) {
+		$lenNode = $propsNode.SelectSingleNode("md:$($pair[0])", $ns)
+		if (-not $lenNode -or $lenNode.InnerText.Trim() -ne "0") { continue }
+		$hit = $ibsFields | Where-Object { $_ -cmatch "\.StandardAttribute\.$($pair[1])$" } | Select-Object -First 1
+		if ($hit) {
+			Report-Error "10. InputByString contains '$hit' but $($pair[0])=0 — the platform rejects it (invalid input-by-string field)"
+			$check10Ok = $false
+			$check10Issues++
+		}
+	}
+
 	# CommonModule: no context enabled
 	if ($mdType -eq "CommonModule") {
 		$contexts = @("Server","ClientManagedApplication","ClientOrdinaryApplication","ExternalConnection","ServerCall","Global")
@@ -1221,7 +1493,7 @@ if ($propsNode) {
 			if ($sourceTypes.Count -gt 0 -or $sourceTypeSets.Count -gt 0) { $hasSource = $true }
 		}
 		if (-not $hasSource) {
-			Report-Error "10. EventSubscription: источник событий не задан — платформа отвергнет загрузку"
+			Report-Error "10. EventSubscription: event source is not set — the platform rejects the load"
 			$check10Issues++
 		}
 	}
@@ -1293,7 +1565,7 @@ if ($propsNode) {
 			if ($items.Count -gt 0 -or $refItems.Count -gt 0) { $hasRegDocs = $true }
 		}
 		if (-not $hasRegDocs) {
-			Report-Error "10. DocumentJournal: регистрируемые документы не заданы — платформа отвергнет загрузку"
+			Report-Error "10. DocumentJournal: no registered documents — the platform rejects the load"
 			$check10Issues++
 		}
 	}
@@ -1617,6 +1889,8 @@ if ($childObjNode) {
 	$commands = $childObjNode.SelectNodes("md:Command", $ns)
 	$check15Ok = $true
 	$cmdCount = 0
+	$reservedCmd = (Get-ReservedCommandNames)[$mdType]
+	if (-not $reservedCmd) { $reservedCmd = @() }
 	foreach ($cmd in $commands) {
 		if ($script:stopped) { break }
 		$cmdCount++
@@ -1629,18 +1903,20 @@ if ($childObjNode) {
 		}
 		if ($cmdName -eq "(unnamed)") {
 			Report-Error "15. Command (uuid=$cuuid): missing or empty Name"; $check15Ok = $false
+		} elseif ($reservedCmd -contains $cmdName) {
+			Report-Error "15. Command '${cmdName}': name conflicts with a standard command of $mdType"; $check15Ok = $false
 		}
 		$groupNode = if ($cmdProps) { $cmdProps.SelectSingleNode("md:Group", $ns) } else { $null }
 		$groupVal = if ($groupNode) { $groupNode.InnerText.Trim() } else { "" }
 		if (-not $groupVal) {
-			Report-Error "15. Command '$cmdName': не задана группа (Group) — 1С отвергает при загрузке"; $check15Ok = $false
+			Report-Error "15. Command '$cmdName': group (Group) is not set — the platform rejects the load"; $check15Ok = $false
 		} elseif (($validCommandGroups -notcontains $groupVal) -and ($groupVal -notmatch '^CommandGroup\.')) {
-			Report-Error "15. Command '$cmdName': неизвестная группа '$groupVal'. Валидные: $($validCommandGroups -join ', '); либо CommandGroup.<Имя>"; $check15Ok = $false
+			Report-Error "15. Command '$cmdName': unknown group '$groupVal'. Valid: $($validCommandGroups -join ', '); or CommandGroup.<Name>"; $check15Ok = $false
 		} elseif ($sectionCommandGroups -contains $groupVal) {
 			$cptNode = if ($cmdProps) { $cmdProps.SelectSingleNode("md:CommandParameterType", $ns) } else { $null }
 			$hasCpt = $cptNode -and (($cptNode.SelectNodes("v8:Type", $ns).Count -gt 0) -or ($cptNode.SelectNodes("v8:TypeSet", $ns).Count -gt 0))
 			if ($hasCpt) {
-				Report-Error "15. Command '$cmdName': тип параметра (CommandParameterType) недоступен для команд командного интерфейса раздела ('$groupVal')"; $check15Ok = $false
+				Report-Error "15. Command '$cmdName': parameter type (CommandParameterType) is not available for commands of the section command interface ('$groupVal')"; $check15Ok = $false
 			}
 		}
 	}
@@ -1759,17 +2035,17 @@ if ($script:configDir) {
 		}
 		if ($absentRefs.Count -gt 0) {
 			foreach ($ak in ($absentRefs.Keys | Sort-Object)) {
-				Report-Error "16. Ссылочный тип '$ak' — объекта нет в составе конфигурации ($($absentRefs[$ak])/) — «Неизвестное имя типа» при загрузке"
+				Report-Error "16. Reference type '$ak' — the object is not in the configuration ($($absentRefs[$ak])/) — «Неизвестное имя типа» on load"
 			}
 		}
 		if ($missingRefs.Count -gt 0) {
 			foreach ($mk in ($missingRefs.Keys | Sort-Object)) {
-				Report-Warn "16. Ссылочный тип '$mk' — объект есть в составе конфигурации, файла объекта в выгрузке нет ($($missingRefs[$mk])/)"
+				Report-Warn "16. Reference type '$mk' — the object is in the configuration, but its file is not in the dump ($($missingRefs[$mk])/)"
 			}
 		}
 		if ($unknownRefs.Count -gt 0) {
 			foreach ($uk in ($unknownRefs.Keys | Sort-Object)) {
-				Report-Warn "16. Ссылочный тип '$uk' не найден в конфигурации ($($unknownRefs[$uk])/)"
+				Report-Warn "16. Reference type '$uk' not found in the configuration ($($unknownRefs[$uk])/)"
 			}
 		}
 		if ($absentRefs.Count -eq 0 -and $missingRefs.Count -eq 0 -and $unknownRefs.Count -eq 0 -and $checkedRefs.Count -gt 0) {
@@ -1861,17 +2137,17 @@ foreach ($tn in $typeNodes22) {
 
 if ($badGrammar.Count -gt 0) {
 	foreach ($bk in ($badGrammar.Keys | Sort-Object)) {
-		Report-Error "22. Тип '$bk' — не имя типа платформы: нет префикса пространства имён либо неверна форма ссылочного типа. При загрузке — «Неизвестное имя типа»"
+		Report-Error "22. Type '$bk' — not a platform type name: the namespace prefix is missing or the reference type form is wrong. On load: «Неизвестное имя типа»"
 	}
 }
 if ($notStorable.Count -gt 0) {
 	foreach ($nk in ($notStorable.Keys | Sort-Object)) {
-		Report-Warn "22. Тип '$nk' у элемента $($notStorable[$nk]) объекта ${mdType}: такие типы бывают у реквизитов обработок и отчётов, но не у хранимых в базе"
+		Report-Warn "22. Type '$nk' on element $($notStorable[$nk]) of object ${mdType}: such types occur on attributes of data processors and reports, but not of objects stored in the infobase"
 	}
 }
 if ($unknownVocab.Count -gt 0) {
 	foreach ($uk in ($unknownVocab.Keys | Sort-Object)) {
-		Report-Warn "22. Тип '$uk' не в списке известных платформенных типов — проверьте написание (список пополняется с версиями платформы)"
+		Report-Warn "22. Type '$uk' is not in the list of known platform types — check the spelling (the list grows with platform versions)"
 	}
 }
 if ($badGrammar.Count -eq 0 -and $notStorable.Count -eq 0 -and $unknownVocab.Count -eq 0 -and $typesSeen -gt 0) {
@@ -1902,16 +2178,16 @@ foreach ($tb in $typeBlocks23) {
 		$raw = $st.InnerText.Trim() -replace '^(?:cfg|d\d+p\d+):', ''
 		if ($ownerKind -eq "DefinedType") {
 			$dtSetsBad = $true
-			Report-Error "23. Определяемый тип '$objName': в составе тип-множество '$raw' — платформа не загрузит такой файл («Недопустимый тип»). Состав определяемого типа — только конкретные типы"
+			Report-Error "23. Defined type '$objName': contains the type set '$raw' — the platform will not load such a file («Недопустимый тип»). A defined type may contain only concrete types"
 			continue
 		}
 		if ($ownerKind -eq "ChartOfCharacteristicTypes" -and $raw -notmatch '^DefinedType\.') {
 			$dtSetsBad = $true
-			Report-Warn "23. План видов характеристик '$objName': тип значения '$raw' Конфигуратор не предлагает (в дереве выбора это папка без флажка); ЛюбаяСсылка на выгрузке вернётся как ЛюбаяСсылкаИБ"
+			Report-Warn "23. Chart of characteristic types '$objName': value type '$raw' is not offered by Designer (in the type picker it is a folder without a checkbox); AnyRef comes back as AnyIBRef on dump"
 		}
 		if ($members -gt 1 -and $raw -match '^(DefinedType|Characteristic)\.') {
 			$dtSetsBad = $true
-			Report-Warn "23. Составной тип содержит '$raw' — Конфигуратор даёт выбрать определяемый тип и характеристику только единственным; платформа загрузит"
+			Report-Warn "23. Composite type contains '$raw' — Designer allows a defined type or a characteristic only as the sole type; the platform loads it"
 		}
 	}
 }
@@ -1935,7 +2211,7 @@ if ($fileRank -gt 0) {
 	foreach ($vp in ($versionedProps.Keys | Sort-Object)) {
 		$nodes = $xmlDoc.SelectNodes("//md:$vp | //xr:$vp", $ns)
 		if ($nodes -and $nodes.Count -gt 0 -and $fileRank -lt (Get-FormatRank $versionedProps[$vp])) {
-			Report-Error "18. <$vp> появился в формате $($versionedProps[$vp]), а файл объявлен как $version — на платформе этой версии свойство будет отброшено при загрузке"
+			Report-Error "18. <$vp> appeared in format $($versionedProps[$vp]), but the file declares $version — the platform of that version drops the property on load"
 		}
 	}
 }
@@ -1945,11 +2221,26 @@ if ($fileRank -gt 0) {
 foreach ($lnl in @($xmlDoc.SelectNodes("//md:LineNumberLength", $ns))) {
 	$raw = $lnl.InnerText.Trim()
 	if ($raw -notmatch '^\d+$') {
-		Report-Error "19. LineNumberLength='$raw' — должно быть целое число 5..9"
+		Report-Error "19. LineNumberLength='$raw' — must be an integer 5..9"
 	} elseif ([int]$raw -lt 5 -or [int]$raw -gt 9) {
-		Report-Error "19. LineNumberLength=$raw вне допустимого диапазона 5..9"
+		Report-Error "19. LineNumberLength=$raw is out of range 5..9"
 	}
 }
+
+# --- Check 25: многоязычная строка (LocalStringType) — только элементы v8:item, без простого текста ---
+# Простой текст в таком теге платформа не загружает: «Ошибка преобразования данных XDTO … LocalStringType».
+$localStringTags = @('Synonym','ToolTip','Explanation','ObjectPresentation','ExtendedObjectPresentation','ListPresentation',
+	'ExtendedListPresentation','RecordPresentation','ExtendedRecordPresentation','ExtendedPresentation','Format','EditFormat')
+$lsXPath = ($localStringTags | ForEach-Object { "//md:$_|//xr:$_" }) -join '|'
+foreach ($ls in @($xmlDoc.SelectNodes($lsXPath, $ns))) {
+	$plain = (@($ls.ChildNodes | Where-Object { $_.NodeType -eq 'Text' -or $_.NodeType -eq 'CDATA' } | ForEach-Object { $_.Value }) -join '').Trim()
+	if (-not $plain) { continue }
+	$owner = $ls.ParentNode.SelectSingleNode("md:Name|xr:Name", $ns)
+	$where = if ($owner -and $owner.InnerText.Trim() -ne $objName) { " of '$($owner.InnerText.Trim())'" } else { "" }
+	Report-Error "25. <$($ls.LocalName)>$where holds plain text '$plain' — a multilingual string needs <v8:item> elements; the platform rejects the load"
+}
+
+& $check26
 
 # --- Check 17: MDObjectRef form — ссылка должна указывать на ОБЪЕКТ метаданных, а не на тип ссылки ---
 # Owners/BasedOn/RegisterRecords/RegisteredDocuments/References содержат путь вида "Catalog.Валюты".
@@ -1971,10 +2262,10 @@ if ($mdRefNodes -and $mdRefNodes.Count -gt 0) {
 	}
 	foreach ($bk in ($badRefForm.Keys | Sort-Object)) {
 		$fixed = $bk -replace '^([A-Za-z]+)Ref\.', '$1.'
-		Report-Error "17. MDObjectRef '$bk' — ссылка на ТИП, а не на объект метаданных; нужно '$fixed' (иначе «Неизвестный объект метаданных» при загрузке)"
+		Report-Error "17. MDObjectRef '$bk' — refers to a TYPE, not to a metadata object; should be '$fixed' (otherwise «Неизвестный объект метаданных» on load)"
 	}
 	foreach ($uk in ($unknownRoot.Keys | Sort-Object)) {
-		Report-Warn "17. MDObjectRef '$uk' — неизвестный вид метаданных '$($unknownRoot[$uk])' (опечатка?)"
+		Report-Warn "17. MDObjectRef '$uk' — unknown metadata kind '$($unknownRoot[$uk])' (typo?)"
 	}
 	if ($badRefForm.Count -eq 0 -and $unknownRoot.Count -eq 0) {
 		Report-OK "17. MDObjectRef form: $($mdRefNodes.Count) checked"
@@ -2054,9 +2345,9 @@ if (-not $isAdopted) {
 			if (-not $cfOk) {
 				$cfInComposition = Test-InConfigComposition "CommonForm" $parts[1]
 				if ($cfInComposition -eq $true) {
-					Report-Warn "20. $tag '$ref' — общая форма есть в составе конфигурации, файла формы в выгрузке нет (CommonForms/$($parts[1]))"
+					Report-Warn "20. $tag '$ref' — the common form is in the configuration, but the form file is not in the dump (CommonForms/$($parts[1]))"
 				} else {
-					Report-Error "20. $tag '$ref' — общей формы нет в составе конфигурации (CommonForms/$($parts[1])) — «Неизвестный объект метаданных» при загрузке"
+					Report-Error "20. $tag '$ref' — the common form is not in the configuration (CommonForms/$($parts[1])) — «Неизвестный объект метаданных» on load"
 					$formRefBad = $true
 				}
 			}
@@ -2071,7 +2362,7 @@ if (-not $isAdopted) {
 		}
 
 		if ($parts.Count -ne 4 -or $parts[2] -ne "Form") {
-			Report-Warn "20. $tag '$ref' — неожиданный вид ссылки на форму (ожидается 'CommonForm.Имя' или '<Вид>.<Объект>.Form.<Форма>')"
+			Report-Warn "20. $tag '$ref' — unexpected form reference shape (expected 'CommonForm.<Name>' or '<Kind>.<Object>.Form.<Form>')"
 			continue
 		}
 
@@ -2079,8 +2370,8 @@ if (-not $isAdopted) {
 
 		if ($refKind.ToLowerInvariant() -eq $mdType.ToLowerInvariant() -and $refObj.ToLowerInvariant() -eq $objName.ToLowerInvariant()) {
 			if (-not $ownForms.ContainsKey($refForm.ToLowerInvariant())) {
-				$known = if ($ownForms.Count -gt 0) { ($ownForms.Values | Sort-Object) -join ", " } else { "нет форм" }
-				Report-Error "20. $tag '$ref' — форма '$refForm' не зарегистрирована в ChildObjects объекта (есть: $known) — «Неизвестный объект метаданных» при загрузке"
+				$known = if ($ownForms.Count -gt 0) { ($ownForms.Values | Sort-Object) -join ", " } else { "no forms" }
+				Report-Error "20. $tag '$ref' — form '$refForm' is not registered in the object's ChildObjects (present: $known) — «Неизвестный объект метаданных» on load"
 				$formRefBad = $true
 			} elseif ((Test-Path $ownDir) -and -not (Test-FormFile20 $ownDir $refForm)) {
 				# Форма в составе объекта есть, файла нет. Для дерева, претендующего на полноту
@@ -2088,10 +2379,10 @@ if (-not $isAdopted) {
 				# на «Файл объекта не существует». Для фрагмента частичной выгрузки — норма:
 				# такой файл грузится через -listFile слиянием с конфигурацией БД.
 				if ($script:configDir) {
-					Report-Error "20. $tag '$ref' — форма зарегистрирована в ChildObjects, но файл формы отсутствует ($objName/Forms/$refForm)"
+					Report-Error "20. $tag '$ref' — the form is registered in ChildObjects, but the form file is missing ($objName/Forms/$refForm)"
 					$formRefBad = $true
 				} else {
-					Report-Warn "20. $tag '$ref' — форма есть в ChildObjects, файла формы в выгрузке нет ($objName/Forms/$refForm)"
+					Report-Warn "20. $tag '$ref' — the form is in ChildObjects, but the form file is not in the dump ($objName/Forms/$refForm)"
 				}
 			}
 			continue
@@ -2101,24 +2392,24 @@ if (-not $isAdopted) {
 		if ($isExtension20 -or -not $script:configDir) { continue }
 		$refDir20 = $formOwnerDirMap[$refKind]
 		if (-not $refDir20) {
-			Report-Warn "20. $tag '$ref' — неизвестный вид метаданных '$refKind' (опечатка?)"
+			Report-Warn "20. $tag '$ref' — unknown metadata kind '$refKind' (typo?)"
 			continue
 		}
 		$refObjXml = Join-Path (Join-Path $script:configDir $refDir20) "$refObj.xml"
 		if (-not (Test-Path $refObjXml)) {
 			$objInComposition = Test-InConfigComposition $refKind $refObj
 			if ($objInComposition -eq $false) {
-				Report-Error "20. $tag '$ref' — объекта '$refKind.$refObj' нет в составе конфигурации ($refDir20/) — «Неизвестный объект метаданных» при загрузке"
+				Report-Error "20. $tag '$ref' — object '$refKind.$refObj' is not in the configuration ($refDir20/) — «Неизвестный объект метаданных» on load"
 				$formRefBad = $true
 			} elseif ($objInComposition -eq $true) {
-				Report-Warn "20. $tag '$ref' — объект '$refKind.$refObj' есть в составе конфигурации, файла объекта в выгрузке нет ($refDir20/)"
+				Report-Warn "20. $tag '$ref' — object '$refKind.$refObj' is in the configuration, but its file is not in the dump ($refDir20/)"
 			} else {
-				Report-Warn "20. $tag '$ref' — объект '$refKind.$refObj' не найден в конфигурации ($refDir20/)"
+				Report-Warn "20. $tag '$ref' — object '$refKind.$refObj' not found in the configuration ($refDir20/)"
 			}
 			continue
 		}
 		if (-not (Test-FormFile20 (Join-Path (Join-Path $script:configDir $refDir20) $refObj) $refForm)) {
-			Report-Error "20. $tag '$ref' — форма '$refForm' не найдена у объекта '$refKind.$refObj' — «Неизвестный объект метаданных» при загрузке"
+			Report-Error "20. $tag '$ref' — form '$refForm' not found on object '$refKind.$refObj' — «Неизвестный объект метаданных» on load"
 			$formRefBad = $true
 		}
 	}
@@ -2156,18 +2447,18 @@ if ($mdType -eq "Table") {
 			$parts = $ref -split '\.'
 			# Ожидается ExternalDataSource.<Источник>.Table.<Таблица>.Field.<Поле>
 			if ($parts.Count -ne 6 -or $parts[0] -ne "ExternalDataSource" -or $parts[2] -ne "Table" -or $parts[4] -ne "Field") {
-				Report-Error "21. $tag '$ref' — ожидается ExternalDataSource.<Источник>.Table.<Таблица>.Field.<Поле>"
+				Report-Error "21. $tag '$ref' — expected ExternalDataSource.<Source>.Table.<Table>.Field.<Field>"
 				$edsRefsBad = $true
 				continue
 			}
 			if ($parts[3] -ne $objName) {
-				Report-Error "21. $tag '$ref' — ссылка на поле ЧУЖОЙ таблицы (эта: $objName)"
+				Report-Error "21. $tag '$ref' — refers to a field of ANOTHER table (this one: $objName)"
 				$edsRefsBad = $true
 				continue
 			}
 			if (-not $fieldNames.ContainsKey($parts[5])) {
-				$known = if ($fieldNames.Count -gt 0) { ($fieldNames.Keys | Sort-Object) -join ", " } else { "полей нет" }
-				Report-Error "21. $tag '$ref' — поля '$($parts[5])' нет в таблице (есть: $known)"
+				$known = if ($fieldNames.Count -gt 0) { ($fieldNames.Keys | Sort-Object) -join ", " } else { "no fields" }
+				Report-Error "21. $tag '$ref' — field '$($parts[5])' is not in the table (present: $known)"
 				$edsRefsBad = $true
 			}
 		}
@@ -2178,7 +2469,7 @@ if ($mdType -eq "Table") {
 	# интерактивно требует. Отсюда предупреждение, а не ошибка: рабочие конфигурации без ключа есть.
 	$keyNodes = @($propsNode.SelectNodes("md:KeyFields/xr:Field", $ns))
 	if ($keyNodes.Count -eq 0) {
-		Report-Warn "21. KeyFields пуст — платформа такую таблицу загрузит, но форма записи и набор записей будут недоступны"
+		Report-Warn "21. KeyFields is empty — the platform loads such a table, but the record form and the record set will be unavailable"
 	}
 }
 

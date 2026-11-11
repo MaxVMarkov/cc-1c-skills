@@ -87,5 +87,5 @@ powershell.exe -NoProfile -File ".agents/skills/template-add/scripts/add-templat
 
 ## Что модифицируется
 
-- `<SrcDir>/<ObjectName>.xml` — добавляется `<Template>` в конец `ChildObjects`
+- `<SrcDir>/<ObjectName>.xml` — добавляется `<Template>` в `ChildObjects`
 - Для ExternalReport/Report: может обновляться `MainDataCompositionSchema`

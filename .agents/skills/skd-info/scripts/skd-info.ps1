@@ -1,4 +1,4 @@
-﻿# skd-info v1.12 — Analyze 1C DCS structure
+﻿# skd-info v1.15 — Analyze 1C DCS structure
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 [CmdletBinding(PositionalBinding=$false)]
 param(
@@ -47,17 +47,17 @@ if (-not (Test-Path $TemplatePath -PathType Leaf)) {
 		}
 		if ($dcsTemplates.Count -eq 1) {
 			$TemplatePath = $dcsTemplates[0]
-			$resolvedMsg = (Resolve-Path $TemplatePath).Path
-			$cwd = (Get-Location).Path
+			$resolvedMsg = (Resolve-Path $TemplatePath).ProviderPath
+			$cwd = (Get-Location).ProviderPath
 			if ($resolvedMsg.StartsWith($cwd)) {
 				$resolvedMsg = $resolvedMsg.Substring($cwd.Length + 1)
 			}
 			Write-Host "[i] Resolved: $resolvedMsg"
 		} elseif ($dcsTemplates.Count -gt 1) {
 			Write-Host "Multiple DCS templates found in: $originalPath"
-			$cwd = (Get-Location).Path
+			$cwd = (Get-Location).ProviderPath
 			for ($i = 0; $i -lt $dcsTemplates.Count; $i++) {
-				$p = (Resolve-Path $dcsTemplates[$i]).Path
+				$p = (Resolve-Path $dcsTemplates[$i]).ProviderPath
 				if ($p.StartsWith($cwd)) { $p = $p.Substring($cwd.Length + 1) }
 				Write-Host "  $($i+1). $p"
 			}
@@ -75,7 +75,7 @@ if (-not (Test-Path $TemplatePath -PathType Leaf)) {
 	exit 1
 }
 
-$resolvedPath = (Resolve-Path $TemplatePath).Path
+$resolvedPath = (Resolve-Path $TemplatePath).ProviderPath
 
 # --- Load XML ---
 
@@ -126,7 +126,12 @@ function Get-CompactType($valueTypeNode) {
 			"xs:string"   { $types += "String" }
 			"xs:decimal"  { $types += "Number" }
 			"xs:boolean"  { $types += "Boolean" }
-			"xs:dateTime" { $types += "DateTime" }
+			"xs:dateTime" {
+				# Состав даты — из DateFractions; без квалификатора платформа читает DateTime
+				$df = $valueTypeNode.SelectSingleNode("v8:DateQualifiers/v8:DateFractions", $ns)
+				$frac = if ($df) { $df.InnerText.Trim() } else { "" }
+				$types += if ($frac -eq 'Date') { "Date" } elseif ($frac -eq 'Time') { "Time" } else { "DateTime" }
+			}
 			"v8:StandardPeriod" { $types += "StandardPeriod" }
 			"v8:StandardBeginningDate" { $types += "StandardBeginningDate" }
 			"v8:AccountType" { $types += "AccountType" }
@@ -347,7 +352,7 @@ function Test-ExternalObjectRoot([string]$xmlPath) {
 }
 function Get-SupportStatusForPath([string]$targetPath) {
 	try {
-		$rp = (Resolve-Path $targetPath).Path
+		$rp = (Resolve-Path $targetPath).ProviderPath
 		$elemUuid = $null
 		$binPath = $null
 		# Reads the uuid of the first metadata element in an .xml file (or $null).
@@ -1379,14 +1384,21 @@ function Show-Variant {
 		}
 
 		# Data parameters
-		$dataParams = $settings.SelectNodes("dcsset:dataParameters/dcsset:item", $ns)
+		$dataParams = $settings.SelectNodes("dcsset:dataParameters/dcscor:item", $ns)
 		if ($dataParams.Count -gt 0) {
 			$dpStrs = @()
 			foreach ($dp in $dataParams) {
 				$dpParam = $dp.SelectSingleNode("dcscor:parameter", $ns)
-				$dpVal = $dp.SelectSingleNode("dcscor:value", $ns)
-				if ($dpParam -and $dpVal) {
-					$dpStrs += "$($dpParam.InnerText)=`"$($dpVal.InnerText)`""
+				$dpVals = $dp.SelectNodes("dcscor:value", $ns)
+				if ($dpParam -and $dpVals.Count -gt 0) {
+					# Стандартный период — по варианту; список значений — в квадратных скобках
+					$vs = @()
+					foreach ($v in $dpVals) {
+						$var = $v.SelectSingleNode("v8:variant", $ns)
+						$vs += if ($var) { "`"$($var.InnerText)`"" } else { "`"$($v.InnerText)`"" }
+					}
+					$vText = if ($vs.Count -gt 1) { "[" + ($vs -join ", ") + "]" } else { $vs[0] }
+					$dpStrs += "$($dpParam.InnerText)=$vText"
 				}
 			}
 			if ($dpStrs.Count -gt 0) {
@@ -1960,7 +1972,7 @@ if ($OutFile) {
 	if ([System.IO.Path]::IsPathRooted($OutFile)) {
 		$outPath = [System.IO.Path]::GetFullPath($OutFile)
 	} else {
-		$outPath = [System.IO.Path]::GetFullPath((Join-Path (Get-Location).Path $OutFile))
+		$outPath = [System.IO.Path]::GetFullPath((Join-Path (Get-Location).ProviderPath $OutFile))
 	}
 	[System.IO.File]::WriteAllLines($outPath, $result, $utf8Bom)
 	Write-Host "Written $totalLines lines to $OutFile"

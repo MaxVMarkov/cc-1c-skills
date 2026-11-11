@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# epf-validate v1.8 — Validate 1C external data processor / report structure
+# epf-validate v1.12 — Validate 1C external data processor / report structure
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 # Works for both EPF (ExternalDataProcessor) and ERF (ExternalReport) — auto-detects
 
@@ -179,6 +179,8 @@ def main():
             result = f"=== Validation OK: {short_type}.{obj_name} ({checks} checks) ==="
         else:
             out_line("")
+            if stopped and errors >= max_errors:
+                out_line(f"Stopped after {max_errors} errors. Fix and re-run.")
             out_line(f"=== Result: {errors} errors, {warnings} warnings ({checks} checks) ===")
             result = "\n".join(output_lines)
         print(result)
@@ -398,7 +400,7 @@ def main():
             child_tag = localname(child)
 
             if child_tag == "Command":
-                report_error("4. ChildObjects: Command — у внешней обработки/отчёта команд объекта нет, платформа выбросит его при сборке")
+                report_error("4. ChildObjects: Command — external data processors/reports have no object commands; the platform drops it on build")
                 check4_ok = False
                 continue
             if child_tag not in ALLOWED_CHILD_TYPES:
@@ -700,7 +702,7 @@ def main():
     # Модуля менеджера у внешней обработки/отчёта нет: платформа выбрасывает файл без сообщения.
     mgr_module = os.path.join(obj_dir, "Ext", "ManagerModule.bsl")
     if os.path.isfile(mgr_module):
-        report_error("9. Ext/ManagerModule.bsl — у внешней обработки/отчёта нет модуля менеджера, платформа выбросит его молча")
+        report_error("9. Ext/ManagerModule.bsl — external data processors/reports have no manager module; the platform drops it silently")
         check9_ok = False
 
     if check9_ok:

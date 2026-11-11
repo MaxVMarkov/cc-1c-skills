@@ -1,8 +1,8 @@
-// web-test cli/test-runner/reporters v1.0 — Allure/JUnit writers + extras sync
+// web-test cli/test-runner/reporters v1.1 — Allure/JUnit writers + extras sync
 // Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 import { writeFileSync, existsSync, readdirSync, copyFileSync, statSync } from 'fs';
 import { resolve, dirname, basename, relative } from 'path';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import { xmlEscape } from '../util.mjs';
 import { resolveSeverity } from './severity.mjs';
 
@@ -35,8 +35,14 @@ export function writeAllure(results, reportDir, severityIndex) {
     const suite = dirname(tr.file);
     const suiteLabel = (suite && suite !== '.') ? suite : 'root';
     const severity = resolveSeverity(tr, severityIndex);
+    const parameters = allureParameters(tr.param);
+    // Without historyId Allure keeps no history: trends and the per-test History tab stay empty.
+    // Key = file (suite-root relative when a suite root is found) + name + the params row: rows
+    // whose names coincide or carry only a positional [i] stay apart and survive reordering.
+    const historyKey = [`${tr.file}#${tr.name}`, ...(parameters || []).map(p => `${p.name}=${p.value}`)].join('\n');
     const out = {
       uuid,
+      historyId: createHash('md5').update(historyKey).digest('hex'),
       name: tr.name,
       fullName: tr.file,
       status: tr.status,
@@ -48,6 +54,7 @@ export function writeAllure(results, reportDir, severityIndex) {
         { name: 'suite', value: suiteLabel },
         { name: 'severity', value: severity },
       ],
+      ...(parameters && { parameters }),
       steps: (tr.steps || []).map(allureStep),
       attachments: [
         ...(tr.screenshot ? [{ name: 'Screenshot on failure', source: basename(tr.screenshot), type: 'image/png' }] : []),
@@ -66,6 +73,18 @@ export function writeAllure(results, reportDir, severityIndex) {
     }
     writeFileSync(resolve(reportDir, `${uuid}-result.json`), JSON.stringify(out, null, 2));
   }
+}
+
+/** The params row as Allure parameters: object keys, or a single `value` for a scalar row. */
+function allureParameters(param) {
+  if (param === undefined) return null;
+  const show = (v) => {
+    if (v === null || typeof v !== 'object') return String(v);
+    try { return JSON.stringify(v); } catch { return String(v); } // cycle / BigInt inside
+  };
+  return param !== null && typeof param === 'object'
+    ? Object.entries(param).map(([name, v]) => ({ name, value: show(v) }))
+    : [{ name: 'value', value: show(param) }];
 }
 
 function allureStep(s) {

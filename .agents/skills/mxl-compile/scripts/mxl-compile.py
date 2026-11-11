@@ -1,5 +1,5 @@
 ﻿#!/usr/bin/env python3
-# mxl-compile v1.56 — Compile 1C spreadsheet from JSON
+# mxl-compile v1.62 — Compile 1C spreadsheet from JSON
 # Source: https://github.com/Nikolay-Shirokov/cc-1c-skills
 import argparse
 import hashlib
@@ -182,15 +182,19 @@ def _sg_find_v8project(start_dir):
 
 def _sg_get_edit_mode(cfg_dir):
     try:
-        pj = _sg_find_v8project(os.getcwd()) or _sg_find_v8project(cfg_dir)
+        pj = _sg_find_v8project(os.getcwd()) or _sg_find_v8project(os.path.abspath(cfg_dir))
         if not pj:
             return "deny"
         proj = json.loads(open(pj, encoding="utf-8-sig").read())
-        cfg_full = os.path.normcase(os.path.abspath(cfg_dir)).rstrip("\\/")
+        # configSrc — от каталога .v8-project.json, а не от рабочего каталога: иначе из подкаталога
+        # проекта база не сопоставляется и берётся правило проекта. Пути — настоящие (realpath):
+        # на macOS /var — ссылка на /private/var, и getcwd с путём аргумента иначе не совпадут.
+        proj_dir = os.path.dirname(pj)
+        cfg_full = os.path.normcase(os.path.realpath(cfg_dir)).rstrip("\\/")
         for db in proj.get("databases", []):
             src = db.get("configSrc")
             if src:
-                src_full = os.path.normcase(os.path.abspath(src)).rstrip("\\/")
+                src_full = os.path.normcase(os.path.realpath(os.path.join(proj_dir, src))).rstrip("\\/")
                 if cfg_full == src_full or cfg_full.startswith(src_full + os.sep):
                     if db.get("editingAllowedCheck"):
                         return db["editingAllowedCheck"]
@@ -608,6 +612,69 @@ def resolve_type_str(type_str):
     return type_str
 
 
+# Разбор примитивного типа DSL: Number / String / Date / DateTime / Time — с синонимами
+# (decimal, numeric, Число, Строка, Дата …), в любом регистре, с пробелами в скобках.
+# Тело общее у всех навыков-компиляторов (семья в check-inline-drift); умолчание для голого типа
+# зависит от места (хранимый реквизит — 10,0 и 10, СКД — без ограничения) и приходит аргументами.
+# Возврат: None — не примитив (ссылки, Boolean, …); {'error'} — база примитива узнана, а
+# параметры нет (вызывающий сообщает ошибку своим способом); иначе описание квалификаторов.
+def parse_primitive_type(type_str, def_digits, def_fraction, def_length):
+    m = re.match(r'^\s*([^\s(]+)\s*(\(.*)?$', type_str or '')
+    if not m:
+        return None
+    rest = m.group(2) or ''
+    kind = {
+        'number': 'Number', 'decimal': 'Number', 'numeric': 'Number', 'число': 'Number',
+        'string': 'String', 'строка': 'String',
+        'date': 'Date', 'дата': 'Date', 'datetime': 'DateTime', 'датавремя': 'DateTime',
+        'time': 'Time', 'время': 'Time',
+    }.get(m.group(1).lower())
+    if not kind:
+        return None
+    bad = {'error': (f"Invalid type '{type_str}'. Expected Number, Number(D), Number(D,F), Number(D,F,nonneg), "
+                     "String, String(N), String(N,fixed), Date, DateTime, Time")}
+    parts = []
+    if rest:
+        m2 = re.match(r'^\((.*)\)\s*$', rest)
+        if not m2:
+            return bad
+        parts = [p.strip().lower() for p in m2.group(1).split(',')]
+    if kind == 'Number':
+        sign = 'Any'
+        if parts and (parts[-1] == 'nonneg' or parts[-1] == 'any'):
+            if parts[-1] == 'nonneg':
+                sign = 'Nonnegative'
+            parts = parts[:-1]
+        if len(parts) > 2:
+            return bad
+        for p in parts:
+            if not re.match(r'^[0-9]{1,9}$', p):
+                return bad
+        d = int(parts[0]) if len(parts) >= 1 else def_digits
+        f = int(parts[1]) if len(parts) >= 2 else (0 if len(parts) == 1 else def_fraction)
+        # Дробная часть у числа без ограничения (0,F) платформа молча обнуляет — это ошибка ввода
+        if d > 38 or f > d:
+            return bad
+        return {'kind': 'Number', 'digits': d, 'fraction': f, 'sign': sign}
+    if kind == 'String':
+        allowed = 'Variable'
+        if len(parts) == 2:
+            if parts[1] == 'fixed' or parts[1] == 'fix':
+                allowed = 'Fixed'
+            elif parts[1] != 'variable':
+                return bad
+        if len(parts) > 2 or (len(parts) >= 1 and not re.match(r'^[0-9]{1,9}$', parts[0])):
+            return bad
+        length = int(parts[0]) if len(parts) >= 1 else def_length
+        # Фиксированную длину у неограниченной строки платформа молча снимает — это ошибка ввода
+        if allowed == 'Fixed' and length == 0:
+            return bad
+        return {'kind': 'String', 'length': length, 'allowed': allowed}
+    if parts:
+        return bad
+    return {'kind': 'Date', 'fractions': kind}
+
+
 def canon_value_type(type_str, where):
     """Канон типа: развёрнутая запись со всеми умолчаниями. Она же ложится в ключ дедупликации
     палитры, поэтому «Число(15,3)» и «Number(15,3)» обязаны дать ОДНУ запись формата — иначе
@@ -620,21 +687,22 @@ def canon_value_type(type_str, where):
         p = resolve_type_str(raw.strip())
         if not p:
             continue
-        m_str = re.match(r'^String(\((\d+)(\s*,\s*(fixed|variable))?\))?$', p)
-        m_num = re.match(r'^Number(\((\d+)(\s*,\s*(\d+))?(\s*,\s*(nonneg|any))?\))?$', p)
+        prim = parse_primitive_type(p, 0, 0, 0)
         if p == 'Boolean':
             canon, kind = 'Boolean', 'Boolean'
-        elif m_str:
-            length = m_str.group(2) if m_str.group(2) else '0'
-            al = 'fixed' if (m_str.group(4) and m_str.group(4).lower() == 'fixed') else 'variable'
-            canon, kind = f'String({length},{al})', 'String'
-        elif m_num:
-            digits = m_num.group(2) if m_num.group(2) else '0'
-            fraction = m_num.group(4) if m_num.group(4) else '0'
-            sign = 'nonneg' if (m_num.group(6) and m_num.group(6).lower() == 'nonneg') else 'any'
-            canon, kind = f'Number({digits},{fraction},{sign})', 'Number'
-        elif p in ('Date', 'DateTime', 'Time'):
-            canon, kind = p, 'Date'
+        elif prim:
+            # Примитивы: голый тип ячейки — без ограничения (Number 0,0, String 0).
+            if prim.get('error'):
+                print(f"{prim['error']} ({where})", file=sys.stderr)
+                sys.exit(1)
+            if prim['kind'] == 'String':
+                al = 'fixed' if prim['allowed'] == 'Fixed' else 'variable'
+                canon, kind = f"String({prim['length']},{al})", 'String'
+            elif prim['kind'] == 'Number':
+                sign = 'nonneg' if prim['sign'] == 'Nonnegative' else 'any'
+                canon, kind = f"Number({prim['digits']},{prim['fraction']},{sign})", 'Number'
+            else:
+                canon, kind = prim['fractions'], 'Date'
         elif re.match(r'^(DefinedType|Characteristic)\.(.+)$', p):
             canon, kind = p, f'set:{p}'
         elif '.' in p:
@@ -2059,7 +2127,7 @@ def main():
                 lines.append(f'\t\t\t\t\t<f>{cell_info["FormatIdx"]}</f>')
 
                 if cell_info['Param']:
-                    lines.append(f'\t\t\t\t\t<parameter>{cell_info["Param"]}</parameter>')
+                    lines.append(f'\t\t\t\t\t<parameter>{esc_xml_text(str(cell_info["Param"]))}</parameter>')
 
                 # Проверяем НАЛИЧИЕ ключа, а не истинность: пустая строка — это текст,
                 # платформа такие ячейки пишет с пустым <tl>, и по истинности он терялся.
@@ -2089,7 +2157,7 @@ def main():
                 # Пока она стояла внутри ветки параметра, две трети расшифровок терялись молча.
                 # Порядок тегов ячейки снят с корпуса: parameter · текст · detailParameter.
                 if cell_info['Detail']:
-                    lines.append(f'\t\t\t\t\t<detailParameter>{cell_info["Detail"]}</detailParameter>')
+                    lines.append(f'\t\t\t\t\t<detailParameter>{esc_xml_text(str(cell_info["Detail"]))}</detailParameter>')
 
                 # Третий параметр ячейки — имя параметра, которым подставляют картинку. Сама
                 # картинка при этом задаётся оформлением (picIndex), а параметр — тут, последним
@@ -2242,7 +2310,7 @@ def main():
         lines.append(f'\t\t<id>{dr["Id"]}</id>')
         lines.append(f'\t\t<formatIndex>{dr["FormatIdx"]}</formatIndex>')
         if dr['Detail']:
-            lines.append(f'\t\t<detailParameter>{dr["Detail"]}</detailParameter>')
+            lines.append(f'\t\t<detailParameter>{esc_xml_text(str(dr["Detail"]))}</detailParameter>')
         if dr['Text'] is not None:
             value = dr['Text']
             if isinstance(value, dict):
@@ -2422,7 +2490,7 @@ def main():
     for ni in sorted(named_items, key=lambda x: str(x['Name']).lower()):
         if ni.get('DrawingId'):
             lines.append('\t<namedItem xsi:type="NamedItemDrawing">')
-            lines.append(f'\t\t<name>{ni["Name"]}</name>')
+            lines.append(f'\t\t<name>{esc_xml_text(str(ni["Name"]))}</name>')
             lines.append(f'\t\t<drawingID>{ni["DrawingId"]}</drawingID>')
             lines.append('\t</namedItem>')
             continue
@@ -2432,7 +2500,7 @@ def main():
         has_cols = int(ni.get('BeginCol', -1)) >= 0
         area_type = 'Rectangle' if (has_rows and has_cols) else ('Columns' if has_cols else 'Rows')
         lines.append('\t<namedItem xsi:type="NamedItemCells">')
-        lines.append(f'\t\t<name>{ni["Name"]}</name>')
+        lines.append(f'\t\t<name>{esc_xml_text(str(ni["Name"]))}</name>')
         lines.append('\t\t<area>')
         lines.append(f'\t\t\t<type>{area_type}</type>')
         lines.append(f'\t\t\t<beginRow>{ni["BeginRow"]}</beginRow>')
@@ -2463,7 +2531,7 @@ def main():
             else:
                 lines.append(f'	<font ref="{esc_xml(fe["Ref"])}" kind="{fe["Kind"]}"/>')
             continue
-        lines.append(f'\t<font faceName="{fe["Face"]}" height="{fe["Size"]}" bold="{fe["Bold"]}" italic="{fe["Italic"]}" underline="{fe["Underline"]}" strikeout="{fe["Strikeout"]}" kind="Absolute" scale="100"/>')
+        lines.append(f'\t<font faceName="{esc_xml(str(fe["Face"]))}" height="{fe["Size"]}" bold="{fe["Bold"]}" italic="{fe["Italic"]}" underline="{fe["Underline"]}" strikeout="{fe["Strikeout"]}" kind="Absolute" scale="100"/>')
 
     # 7j. Format palette
     for key in format_order:
