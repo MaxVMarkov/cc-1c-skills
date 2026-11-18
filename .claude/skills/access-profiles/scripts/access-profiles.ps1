@@ -398,21 +398,23 @@ function Read-ViaSql([hashtable]$s) {
 }
 
 # --- Выбор источника ----------------------------------------------------------
+# IDispatch коннектора отдаёт методы по-английски (NewObject('Query') / Execute / Choose):
+# кириллические Выполнить/НовыйОбъект в PowerShell 5.1 не резолвятся. SQL-путь короче и
+# детерминированнее, поэтому при наличии dbms-блока начинаем с него, COM — запасной.
 $data = $null
 $errors = @()
-if (-not $NoCom) {
+$sqlSettings = Get-SqlSettings
+if ($sqlSettings) {
+    $data = Read-ViaSql $sqlSettings
+    if ($data.Error) { $errors += ('SQL: ' + $data.Error); $data = $null }
+}
+if (-not $data -and -not $NoCom) {
     $data = Read-ViaCom
     if ($data.Error) { $errors += $data.Error; $data = $null }
 }
 if (-not $data) {
-    $sqlSettings = Get-SqlSettings
     if ($sqlSettings) {
-        $data = Read-ViaSql $sqlSettings
-        if ($data.Error -and $errors.Count -gt 0) {
-            Fail ('COM недоступен (' + ($errors -join '; ') + '), и SQL-путь не сработал: ' + $data.Error)
-        } elseif ($data.Error) {
-            Fail $data.Error
-        }
+        Fail ('Ни один источник не сработал (' + ($errors -join '; ') + ').')
     } else {
         $why = if ($errors.Count -gt 0) { ($errors -join '; ') } else { 'соединение с базой не задано' }
         Fail ($why + '. Прямое чтение из СУБД тоже недоступно: у базы нет dbms-блока MSSQLServer в .v8-project.json или нет пароля SQL (SQL_DB_PASS).')
