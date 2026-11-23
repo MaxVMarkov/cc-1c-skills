@@ -122,3 +122,11 @@ powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/db-dump-xml.ps1" -I
 # Выгрузка расширения
 powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/db-dump-xml.ps1" -InfoBasePath "C:\Bases\MyDB" -UserName "Admin" -ConfigDir "C:\WS\ext_src" -Mode Full -Extension "МоёРасширение"
 ```
+
+## Точечная выгрузка для сверки свойств
+
+Объект из базы можно вытянуть по имени без полного дампа — `-Mode Partial -Objects
+"ОбщийМодуль.Х,Документ.У"`. Так проверяют то, что важнее текста: флаги общего модуля
+(`Server`/`ExternalConnection`/`ServerCall`/`Privileged`), состав ТЧ, права. Копия чужой выгрузки тут
+не годится: у неё свои версии, а база после правок — своя. Выгруженный `ConfigDumpInfo.xml`
+попутно даёт реальные `configVersion` модулей для точек отладки.

@@ -103,3 +103,12 @@ powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/epf-build.ps1" -Inf
 # То же через ibcmd: адреса кластера у него нет, нужны прямые реквизиты СУБД
 powershell.exe -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/epf-build.ps1" -V8Path "C:\Program Files\1cv8\8.5.1.1529\bin\ibcmd.exe" -InfoBaseServer "srv01" -InfoBaseRef "MyDB" -UserName "Admin" -Password "secret" -Dbms MSSQLServer -DbServer "db01" -DbName "MyDB" -DbUser sa -DbPassword "…" -SourceFile "src/МояОбработка.xml" -OutputFile "build/МояОбработка.epf"
 ```
+
+## Грабли клонирования исходников
+
+- Скопировали каталог обработки под новым именем — **правьте и `<Name>` в корневом XML, и имя
+  каталога под `Forms/`**, иначе загрузка падает «Неизвестный объект метаданных
+  DataProcessor.<Старое>.Form…». UUID корня при этом меняйте, а имена формы оставляйте прежними.
+- `-Checks off` глушит и структурные проверки — синтаксическую ошибку в модуле формы сборка с ним
+  пропустит; после сборки обязательно убедитесь, что `-OutputFile` реально создан: `--- End ---` без
+  чисел означает отмену, а не успех.
