@@ -372,6 +372,14 @@ powershell -NoProfile -File tools/build_exe.ps1
 ```
 
 Скрипт кладёт `dist-exe/bsl-deob.exe` и `BUILD.txt` (версия, md5, размер, время).
+Новые сборки **версионируются в git**: `dist-exe/bsl-deob-<версия>.exe` (историческая
+копия), `dist-exe/bsl-deob.exe` (последняя), `BUILD.txt` — коммитятся вместе после
+каждой сборки. Подпись: `build_exe.ps1` вызывает `signtool` (SHA256 + timestamp);
+без `-Thumbprint` берётся первый сертификат code signing из `Cert:\CurrentUser\My`,
+а если его нет — создаётся самоподписанный `CN=bsl-deob (self-signed)` (в доверенные
+корни не ставится: клиент покажет «неизвестный издатель», `Get-AuthenticodeSignature`
+даст `UnknownError` — это ожидаемо). `-NoSign` отключает подпись; в `BUILD.txt`
+пишутся `signer`/`thumbprint`/`sigstatus`/`timestamped`.
 Режимы: `bsl-deob.exe <image> <out.bsl>` и `bsl-deob.exe --manifest <m.txt> [--out-dir <dir>]`
 (строки `<image>|<bsl>`; `BSL_COMMON_MODULES` читается из окружения), а также стадии
 пайплайна: `find <dump> [<report>]`, `extract <dump> <img_dir> <manifest>`,
