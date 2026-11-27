@@ -373,18 +373,22 @@ powershell -NoProfile -File tools/build_exe.ps1
 
 Скрипт кладёт `dist-exe/bsl-deob.exe` и `BUILD.txt` (версия, md5, размер, время).
 Режимы: `bsl-deob.exe <image> <out.bsl>` и `bsl-deob.exe --manifest <m.txt> [--out-dir <dir>]`
-(строки `<image>|<bsl>`; `BSL_COMMON_MODULES` читается из окружения). В пакетном прогоне
-exe подставляется флагом:
+(строки `<image>|<bsl>`; `BSL_COMMON_MODULES` читается из окружения), а также стадии
+пайплайна: `find <dump> [<report>]`, `extract <dump> <img_dir> <manifest>`,
+`sanitize <images.txt> <san_dir>`, `check <bsl_dir>`, `apply <dump> <bsl_dir> [<suffix>]`.
+В пакетном прогоне exe подставляется флагом:
 
 ```powershell
 powershell -File run.ps1 -Config <cfg.json> -Exe [-ExePath <bsl-deob.exe>]
 ```
 
-Шаги `find_closed`/`extract_images`/`sanitize`/`check_bsl` остаются Python-скриптами
-(окружение нужно и для `apply/load`), декомпиляция же идёт одним вызовом exe по
-манифесту `san/*.image → bsl/*.bsl`; гейты и семантика OK/FAIL те же. Код требует
-Python 3.12 (PEP 701 — вложенные кавычки в f-строках); окружение сборки — вне
-системного диска (`uv python install 3.12`, `uv venv`, `uv pip install pyinstaller`).
+При `-Exe` **Python не нужен вообще**: find/extract/sanitize/decompile/check/apply
+исполняет exe (входные/выходные файлы и отчёты те же, что у Python-скриптов навыка);
+PowerShell-обёртка по-прежнему делает `-Build/-Load/-Verify` через `1cv8`/`epf-build`.
+Без `-Exe` работает прежний Python-путь через скрипты навыка — он остаётся запасным и
+служит сверкой (reports/md5 должны совпадать). Код требует Python 3.12 (PEP 701 —
+вложенные кавычки в f-строках); окружение сборки — вне системного диска
+(`uv python install 3.12`, `uv venv`, `uv pip install pyinstaller`).
 Приёмка exe — сравнение md5 с Python-прогоном на контрольных модулях (27.11: два
 модуля SkyLux совпали байт-в-байт) плюс те же гейты `check_bsl`/`/CheckConfig`.
 Один exe — одна версия движка: после правок `src/` пересобрать и обновить `BUILD.txt`.
